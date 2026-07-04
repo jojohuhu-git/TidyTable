@@ -1,0 +1,157 @@
+import Anthropic from "@anthropic-ai/sdk";
+import { PLAN_SCHEMA } from "./schema.js";
+
+export const MODELS = [
+  { id: "claude-opus-4-8", label: "Claude Opus 4.8 — best quality (recommended)" },
+  { id: "claude-sonnet-5", label: "Claude Sonnet 5 — fast, cheaper" },
+  { id: "claude-haiku-4-5", label: "Claude Haiku 4.5 — cheapest, simple requests only" },
+];
+export const DEFAULT_MODEL = "claude-opus-4-8";
+
+const SYSTEM_PROMPT = `You are the data-analyst engine inside TidyTable, a browser tool that cleans and extracts data from Excel workbooks. The user describes what they want in plain English. You return a plan as JSON (schema-enforced) with four deliverables that MUST all produce the same result, so the user can cross-validate them:
+
+1. "summary" — plain English, no jargon. State exactly what will be pulled out, the rules you applied (filters, matching, how ties/missing values are handled), and any assumptions you made about ambiguous wording.
+
+2. "transform_code" — the body of a JavaScript function. It will be executed as: new Function("sheets", transform_code)(sheets)
+   - "sheets" is an object: { [sheetName]: arrayOfRowObjects }. Row object keys are the column header names EXACTLY as listed in the user message. Values are string | number | boolean | null. Dates are strings like "2024-03-15" or "2024-03-15 09:30".
+   - It must RETURN an array of plain objects — the result table. Choose clear column names for the output.
+   - Pure computation only: no imports, no fetch, no DOM, no async.
+   - Be defensive: trim strings, compare text case-insensitively where sensible, tolerate null/missing values, parse numbers that arrive as strings (e.g. "1,204" or "$50"). You only saw a sample of rows; the code runs on the FULL dataset, so handle values you didn't see.
+   - If the request is a summary (counts, averages, group totals), return one row per group.
+
+3. "excel_steps" — a manual recipe the user follows in Excel to reproduce the SAME result and confirm the app got it right. Assume they know nothing about Excel:
+   - Reference exact sheet names, column letters (given in the user message), and cell addresses, including the row range to fill down to (the row counts are given).
+   - One action per step. Give the exact formula text to type. Explain what each formula does in one plain sentence.
+   - Prefer simple, reliable functions available in both Windows and Mac Excel: IF, COUNTIFS, SUMIFS, AVERAGEIFS, FILTER (note if it needs Excel 365), TRIM, VALUE, TEXT, VLOOKUP/XLOOKUP.
+   - End with a verification step: which single number (e.g. a COUNTIFS total or a sum) to compare with the app's result table.
+
+4. "r_script" — a complete RStudio script that reproduces the same result, runnable by someone who has NEVER used R, on both Mac and Windows:
+   - Start with package setup that auto-installs if missing:
+     if (!require("readxl")) install.packages("readxl"); library(readxl)
+     (same pattern for dplyr or other packages you use — keep the package list minimal).
+   - Load the file with file.choose() so the user never edits a file path:
+     data <- read_excel(file.choose(), sheet = "SheetNameHere")
+   - Add a short comment above every block saying in plain English what it does.
+   - End by: printing the number of result rows with message(), showing the table with View(result), and saving it:
+     out_path <- file.path(path.expand("~"), "TidyTable_result.csv")
+     write.csv(result, out_path, row.names = FALSE)
+     message("Saved to: ", out_path)
+   - Use only cross-platform code (no OS-specific paths).
+
+5. "r_run_notes" — 2-5 short bullets (as plain text lines): which packages the script installs, what a successful run looks like, and which number to compare with the app and the Excel check.
+
+Consistency is the whole point: the JavaScript result, the Excel recipe, and the R script must apply identical logic and produce identical rows/numbers. If parts of the request are ambiguous, pick the most reasonable interpretation, apply it identically in all three, and say what you assumed in "summary".
+
+If the user's request cannot be answered from the columns available, still return valid JSON: explain the problem in "summary", return an empty-result transform ("return [];"), and leave excel_steps as a single step explaining what's missing.`;
+
+const SYSTEM = SYSTEM_PROMPT;
+
+// Build the data-description part of the user message.
+export function buildDataContext(workbook, options) {
+  const { excluded, privacyMode } = options; // excluded: Set of "sheet::column"
+  const lines = [];
+  lines.push(`Workbook file: "${workbook.fileName}"`);
+  lines.push("");
+
+  for (const sheet of workbook.sheets) {
+    lines.push(`Sheet "${sheet.name}" — ${sheet.rowCount.toLocaleString()} data rows (data starts in row 2; row 1 is headers). Data rows span row 2 to row ${sheet.rowCount + 1}.`);
+    lines.push("Columns (Excel letter | header name | type | example values):");
+    for (const h of sheet.headers) {
+      const key = `${sheet.name}::${h.name}`;
+      if (excluded.has(key)) {
+        lines.push(`  ${h.letter} | "${h.name}" | [values withheld by the user for privacy — the column exists in the real data; do not use its values in logic unless the user asks, and never echo them]`);
+      } else {
+        const ex = h.samples.length ? h.samples.map((s) => JSON.stringify(s)).join(", ") : "(no examples — column mostly empty)";
+        lines.push(`  ${h.letter} | "${h.name}" | ${h.type} | ${ex}`);
+      }
+    }
+
+    const strip = (row) => {
+      const out = {};
+      for (const h of sheet.headers) {
+        const key = `${sheet.name}::${h.name}`;
+        out[h.name] = excluded.has(key) ? "[withheld]" : row[h.name];
+      }
+      return out;
+    };
+
+    if (privacyMode === "full") {
+      lines.push(`All ${sheet.rowCount} rows (JSON):`);
+      lines.push(JSON.stringify(sheet.rows.map(strip)));
+    } else {
+      const sample = sheet.rows.slice(0, 10).map(strip);
+      lines.push("First 10 rows as a sample (JSON) — the real data has more rows and may contain values not seen here:");
+      lines.push(JSON.stringify(sample, null, 1));
+    }
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
+export function estimateTokens(text) {
+  return Math.ceil(text.length / 3.6);
+}
+
+// Rough input pricing per million tokens, for the pre-flight cost hint.
+const INPUT_PRICE = { "claude-opus-4-8": 5, "claude-sonnet-5": 2, "claude-haiku-4-5": 1 };
+export function estimateCostUSD(model, tokens) {
+  const per = INPUT_PRICE[model] ?? 5;
+  return (tokens / 1_000_000) * per;
+}
+
+export async function requestPlan({ apiKey, model, dataContext, userRequest, onStatus }) {
+  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+
+  const userMessage = [
+    "Here is the user's workbook:",
+    "",
+    dataContext,
+    "---",
+    "The user's request, in their own words:",
+    "",
+    userRequest.trim(),
+  ].join("\n");
+
+  onStatus?.("Claude is reading your data and writing the plan…");
+
+  const stream = client.messages.stream({
+    model,
+    max_tokens: 64000,
+    thinking: { type: "adaptive" },
+    system: SYSTEM,
+    output_config: { format: { type: "json_schema", schema: PLAN_SCHEMA } },
+    messages: [{ role: "user", content: userMessage }],
+  });
+
+  const message = await stream.finalMessage();
+
+  if (message.stop_reason === "refusal") {
+    throw new Error("The AI declined this request. Try rewording it, or remove sensitive content.");
+  }
+  if (message.stop_reason === "max_tokens") {
+    throw new Error("The plan was too long and got cut off. Try a simpler or more specific request.");
+  }
+
+  const text = message.content
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
+    .join("");
+
+  let plan;
+  try {
+    plan = JSON.parse(text);
+  } catch {
+    throw new Error("The AI response could not be read. Please try again.");
+  }
+  return plan;
+}
+
+export function friendlyApiError(err) {
+  const status = err?.status;
+  if (status === 401) return "Your API key was rejected. Check that you pasted the whole key (it starts with sk-ant-).";
+  if (status === 429) return "You hit the rate limit for your API key. Wait a minute and try again.";
+  if (status === 400 && /credit/i.test(err?.message || "")) return "Your Anthropic account is out of credits. Add credits at console.anthropic.com.";
+  if (status === 413) return "Your data is too large to send. Switch to 'Headers + sample rows' mode or exclude columns.";
+  if (status >= 500) return "Anthropic's service is temporarily unavailable. Try again in a moment.";
+  return err?.message || "Something went wrong talking to the AI.";
+}
