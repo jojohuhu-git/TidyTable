@@ -4,6 +4,8 @@ import UploadPanel from "./components/UploadPanel.jsx";
 import CheckupPanel from "./components/CheckupPanel.jsx";
 import PromptPanel from "./components/PromptPanel.jsx";
 import ResultsPanel from "./components/ResultsPanel.jsx";
+import RecipePanel from "./components/RecipePanel.jsx";
+import ReplayPanel from "./components/ReplayPanel.jsx";
 import {
   buildDataContext,
   requestPlan,
@@ -14,6 +16,8 @@ import { runTransform } from "./logic/runTransform.js";
 import { deriveSheet, downloadText } from "./logic/workbook.js";
 import { buildFixPlan } from "./logic/checkup/buildFixPlan.js";
 import { makeLogEvent, formatCleaningLog } from "./logic/checkup/cleaningLog.js";
+import { newRecipe, addStep, checkupStep } from "./logic/recipes/recipe.js";
+import { loadKeyStore } from "./logic/recipes/keyStore.js";
 
 export default function App() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("tidytable_api_key") || "");
@@ -29,6 +33,8 @@ export default function App() {
   const [resultRows, setResultRows] = useState(null);
   const [sessionLog, setSessionLog] = useState([]);
   const [checkupVersion, setCheckupVersion] = useState(0);
+  const [recipe, setRecipe] = useState(() => newRecipe());
+  const [keyStore, setKeyStore] = useState(() => loadKeyStore());
 
   const dataContext = useMemo(() => {
     if (!workbook) return "";
@@ -81,6 +87,7 @@ export default function App() {
     setResultRows(null);
     setError("");
     setSessionLog([]);
+    setRecipe(newRecipe());
     setCheckupVersion((v) => v + 1);
   }
 
@@ -102,6 +109,9 @@ export default function App() {
       const cleaned = deriveSheet(sheet.name, rows);
       setWorkbook({ ...workbook, sheets: workbook.sheets.map((s, i) => (i === 0 ? cleaned : s)) });
       setSessionLog((l) => [...l, makeLogEvent({ fileName: workbook.fileName, sheet: sheet.name, entries: log })]);
+      // Record each applied fix into the monthly recipe so it can be replayed
+      // on next month's file (build prompt §7).
+      setRecipe((r) => fixes.reduce((acc, fix) => addStep(acc, checkupStep(fix)), r));
       setCheckupVersion((v) => v + 1);
       setStatus("");
     } catch (err) {
@@ -237,6 +247,28 @@ export default function App() {
             )}
           </section>
         )}
+
+        {workbook && (
+          <section className="card">
+            <h2><span className="step-label">Step 5</span> — Save a monthly recipe</h2>
+            <p className="section-intro">
+              If this is a file you clean every month, save the steps as a recipe and replay them
+              next month in step 6. The checkup fixes you applied are recorded below. You can also
+              add a step that swaps names for stable codes and a final step that makes report cards.
+            </p>
+            <RecipePanel recipe={recipe} sheet={workbook.sheets[0]} onChange={setRecipe} />
+          </section>
+        )}
+
+        <section className="card">
+          <h2><span className="step-label">Step 6</span> — Replay on next month's file</h2>
+          <p className="section-intro">
+            Pick a saved recipe and next month's file. The recorded steps run again, and you get a
+            plain report of what happened — including anything new the rules did not cover, said
+            plainly rather than guessed. Report cards, if the recipe makes them, show codes only.
+          </p>
+          <ReplayPanel keyStore={keyStore} onKeyStore={setKeyStore} />
+        </section>
       </main>
 
       <footer className="footnote">
