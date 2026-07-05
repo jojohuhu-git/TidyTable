@@ -96,6 +96,25 @@ export async function parseWorkbookFile(file) {
   return { fileName: file.name, sheets };
 }
 
+// Rebuild a sheet object (headers, types, samples, rowCount) from a list of row
+// objects — used after checkup fixes replace a sheet's data with cleaned rows,
+// so later steps see the cleaned version.
+export function deriveSheet(name, rows) {
+  const headerNames = rows.length ? Object.keys(rows[0]) : [];
+  const headers = headerNames.map((h, i) => {
+    const colValues = rows.slice(0, 500).map((row) => row[h]);
+    const samples = [];
+    for (const v of colValues) {
+      if (v == null) continue;
+      const s = typeof v === "string" ? v : String(v);
+      if (!samples.includes(s)) samples.push(s);
+      if (samples.length >= 4) break;
+    }
+    return { letter: colLetter(i), name: h, type: inferType(colValues), samples };
+  });
+  return { name, headers, rows, rowCount: rows.length };
+}
+
 export function downloadRowsAsXlsx(rows, fileName = "TidyTable_result.xlsx") {
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();

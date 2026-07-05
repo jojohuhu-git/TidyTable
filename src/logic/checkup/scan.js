@@ -1,0 +1,396 @@
+// Checkup scan (build prompt §6). Deterministic, no AI. Given one sheet, return
+// a list of findings: what was found, how many rows/cells it affects, a sample of
+// the offending values, and (when we can fix it) which normalizer would do it.
+// Nothing here changes data — fixes only run when the user picks them.
+
+import { coerceNumbers, parseDates, censoredValues, foldKey, splitList } from "./normalizers.js";
+
+const NEVER_NEGATIVE = /\b(age|count|qty|quantity|dose|amount|price|cost|weight|height|duration|days|mg|ml|number|num|total|score)\b/i;
+const AGE_LIKE = /\bage\b/i;
+const DATE_PAIRS = [
+  [/(start|admit|admission|onset|begin|from)/i, /(end|discharge|resolve|resolved|stop|finish|to)/i],
+];
+const UNIT = /\b(kg|g|mg|mcg|ug|ml|l|lb|lbs|oz|cm|mm|in)\b/i;
+
+let counter = 0;
+const nextId = () => `f${++counter}`;
+
+// Small helpers so counts read grammatically for one or many.
+const s = (n) => (n === 1 ? "" : "s");
+const be = (n) => (n === 1 ? "is" : "are");
+
+function distinct(values) {
+  return new Set(values).size;
+}
+
+function isNumericString(v) {
+  return typeof v === "string" && typeof coerceNumbers(v) === "number";
+}
+
+function nonNull(rows, col) {
+  return rows.map((r) => r[col]).filter((v) => v != null && String(v).trim() !== "");
+}
+
+function sample(values, n = 5) {
+  const out = [];
+  for (const v of values) {
+    if (!out.includes(v)) out.push(v);
+    if (out.length >= n) break;
+  }
+  return out;
+}
+
+// --- individual detectors, each returns 0+ findings for one sheet ------------
+
+function findDuplicateRows(sheet) {
+  const seen = new Map();
+  let dupes = 0;
+  const exampleKeys = [];
+  for (const row of sheet.rows) {
+    const key = JSON.stringify(sheet.headers.map((h) => row[h.name]));
+    const count = seen.get(key) || 0;
+    if (count >= 1) {
+      dupes++;
+      if (exampleKeys.length < 3 && !exampleKeys.includes(key)) exampleKeys.push(key);
+    }
+    seen.set(key, count + 1);
+  }
+  if (dupes === 0) return [];
+  return [{
+    id: nextId(),
+    type: "duplicateRows",
+    sheet: sheet.name,
+    column: null,
+    title: "Duplicate rows",
+    detail: `${dupes} row${dupes === 1 ? " is an exact copy" : "s are exact copies"} of an earlier row. Removing them keeps one of each.`,
+    count: dupes,
+    samples: exampleKeys.map((k) => JSON.parse(k).filter((x) => x != null).slice(0, 3).join(" · ")),
+    fixable: true,
+    fix: { normalizer: "dedupeRows" },
+  }];
+}
+
+function findDuplicateIds(sheet) {
+  const out = [];
+  for (const h of sheet.headers) {
+    const vals = nonNull(sheet.rows, h.name);
+    if (vals.length < 4) continue;
+    const d = distinct(vals);
+    // "ID-like" = almost all values are unique.
+    if (d / vals.length < 0.9) continue;
+    const counts = new Map();
+    for (const v of vals) counts.set(v, (counts.get(v) || 0) + 1);
+    const repeats = [...counts.entries()].filter(([, c]) => c > 1);
+    if (repeats.length === 0) continue;
+    out.push({
+      id: nextId(),
+      type: "duplicateIds",
+      sheet: sheet.name,
+      column: h.name,
+      letter: h.letter,
+      title: `Repeated values in the ID-like column "${h.name}"`,
+      detail: `"${h.name}" looks like an identifier (almost every value is unique), but ${repeats.length} value${s(repeats.length)} appear${repeats.length === 1 ? "s" : ""} more than once. That often means duplicated or mismatched records.`,
+      count: repeats.length,
+      samples: sample(repeats.map(([v, c]) => `${v} (${c}×)`)),
+      fixable: false,
+      fix: null,
+    });
+  }
+  return out;
+}
+
+function findMissing(sheet) {
+  const out = [];
+  const SENTINELS = new Set(["n/a", "na", "none", "-", "."]);
+  for (const h of sheet.headers) {
+    let missing = 0;
+    const sentinelForms = new Set();
+    for (const r of sheet.rows) {
+      const v = r[h.name];
+      if (v == null || String(v).trim() === "") { missing++; continue; }
+      const t = String(v).trim().toLowerCase();
+      if (SENTINELS.has(t)) { missing++; sentinelForms.add(String(v).trim()); }
+    }
+    if (missing === 0) continue;
+    const hasSentinels = sentinelForms.size > 0;
+    out.push({
+      id: nextId(),
+      type: "missing",
+      sheet: sheet.name,
+      column: h.name,
+      letter: h.letter,
+      title: `Missing values in "${h.name}"`,
+      detail: hasSentinels
+        ? `${missing} of ${sheet.rows.length} rows have no real value in "${h.name}", including stand-ins like ${[...sentinelForms].map((s) => `"${s}"`).join(", ")}. The fix turns these into truly empty cells so they are not mistaken for data.`
+        : `${missing} of ${sheet.rows.length} rows are empty in "${h.name}". Nothing to fix automatically — just be aware when you count or average this column.`,
+      count: missing,
+      samples: hasSentinels ? [...sentinelForms] : [],
+      fixable: hasSentinels,
+      fix: hasSentinels ? { normalizer: "sentinelBlanks" } : null,
+    });
+  }
+  return out;
+}
+
+function findTextNumbers(sheet) {
+  const out = [];
+  for (const h of sheet.headers) {
+    if (h.type === "number" || h.type === "date") continue;
+    const affected = [];
+    for (const r of sheet.rows) {
+      const v = r[h.name];
+      if (isNumericString(v) && /[\s$,]/.test(v)) affected.push(v);
+      else if (isNumericString(v) && h.type === "mixed (text + numbers)") affected.push(v);
+    }
+    if (affected.length === 0) continue;
+    out.push({
+      id: nextId(),
+      type: "textNumbers",
+      sheet: sheet.name,
+      column: h.name,
+      letter: h.letter,
+      title: `Numbers stored as text in "${h.name}"`,
+      detail: `${affected.length} value${s(affected.length)} in "${h.name}" ${be(affected.length)} written as text (with spaces, "$", or commas), so Excel and R will not add or average them correctly. The fix reads them as plain numbers.`,
+      count: affected.length,
+      samples: sample(affected),
+      fixable: true,
+      fix: { normalizer: "coerceNumbers" },
+    });
+  }
+  return out;
+}
+
+function findTextDates(sheet) {
+  const out = [];
+  for (const h of sheet.headers) {
+    if (h.type === "number") continue;
+    const affected = [];
+    for (const r of sheet.rows) {
+      const v = r[h.name];
+      if (v == null) continue;
+      const changed = parseDates(v);
+      if (changed !== v && /^\d{4}-\d{2}-\d{2}/.test(String(changed))) affected.push(v);
+    }
+    if (affected.length === 0) continue;
+    out.push({
+      id: nextId(),
+      type: "textDates",
+      sheet: sheet.name,
+      column: h.name,
+      letter: h.letter,
+      title: `Dates in a mixed or text format in "${h.name}"`,
+      detail: `${affected.length} date${s(affected.length)} in "${h.name}" ${be(affected.length)} written in a day/month/year style rather than a single sortable format. The fix rewrites them all as YYYY-MM-DD so they sort and compare correctly.`,
+      count: affected.length,
+      samples: sample(affected),
+      fixable: true,
+      fix: { normalizer: "parseDates" },
+    });
+  }
+  return out;
+}
+
+function findCategoryVariants(sheet) {
+  const out = [];
+  for (const h of sheet.headers) {
+    if (h.type === "number" || h.type === "date") continue;
+    const vals = nonNull(sheet.rows, h.name).map(String);
+    if (vals.length === 0) continue;
+    const d = distinct(vals);
+    // Only category-like columns (a small number of distinct values). Free-text
+    // columns have many distinct values and are skipped; ID columns are unique
+    // and produce no fold-collisions below, so they fall out naturally.
+    if (d > 40) continue;
+    const groups = new Map(); // foldKey -> Map(raw -> count)
+    for (const v of vals) {
+      const k = foldKey(v);
+      if (!groups.has(k)) groups.set(k, new Map());
+      const g = groups.get(k);
+      g.set(v, (g.get(v) || 0) + 1);
+    }
+    const map = {};
+    const merges = [];
+    for (const g of groups.values()) {
+      if (g.size <= 1) continue;
+      // Canonical = the most common raw spelling in the group.
+      const canonical = [...g.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      for (const raw of g.keys()) {
+        if (raw !== canonical) { map[raw] = canonical; merges.push(`"${raw}" -> "${canonical}"`); }
+      }
+    }
+    if (merges.length === 0) continue;
+    out.push({
+      id: nextId(),
+      type: "categoryVariants",
+      sheet: sheet.name,
+      column: h.name,
+      letter: h.letter,
+      title: `Different spellings of the same category in "${h.name}"`,
+      detail: `Some values in "${h.name}" are the same category typed differently (upper/lower case or extra spaces). The fix merges each into one chosen spelling, so they group and count together.`,
+      count: merges.length,
+      samples: sample(merges),
+      fixable: true,
+      fix: { normalizer: "trimCase", params: { map } },
+    });
+  }
+  return out;
+}
+
+function findImpossible(sheet) {
+  const out = [];
+  const today = new Date().toISOString().slice(0, 10);
+  for (const h of sheet.headers) {
+    // Negative in a never-negative column.
+    if (NEVER_NEGATIVE.test(h.name)) {
+      const neg = sheet.rows.map((r) => r[h.name]).filter((v) => typeof v === "number" && v < 0);
+      if (neg.length) out.push(flag(sheet, h, "impossible", `Negative values in "${h.name}"`,
+        `${neg.length} row${neg.length === 1 ? " has a negative value" : "s have negative values"} in "${h.name}", which should never be below zero. Check these rows.`, sample(neg)));
+    }
+    // Age over 120.
+    if (AGE_LIKE.test(h.name)) {
+      const big = sheet.rows.map((r) => r[h.name]).filter((v) => typeof v === "number" && v > 120);
+      if (big.length) out.push(flag(sheet, h, "impossible", `Ages over 120 in "${h.name}"`,
+        `${big.length} value${big.length === 1 ? " is" : "s are"} above 120 in "${h.name}". These are likely typos or a different unit.`, sample(big)));
+    }
+    // Future dates.
+    if (h.type === "date") {
+      const future = sheet.rows.map((r) => r[h.name]).filter((v) => typeof v === "string" && v.slice(0, 10) > today);
+      if (future.length) out.push(flag(sheet, h, "impossible", `Dates in the future in "${h.name}"`,
+        `${future.length} date${future.length === 1 ? " is" : "s are"} after today in "${h.name}". Check for typos in the year.`, sample(future)));
+    }
+  }
+  // Paired date columns where end is before start.
+  const dateCols = sheet.headers.filter((h) => h.type === "date");
+  for (const [startRe, endRe] of DATE_PAIRS) {
+    const s = dateCols.find((h) => startRe.test(h.name));
+    const e = dateCols.find((h) => endRe.test(h.name));
+    if (s && e && s.name !== e.name) {
+      const bad = sheet.rows.filter((r) => typeof r[s.name] === "string" && typeof r[e.name] === "string" && r[e.name] < r[s.name]);
+      if (bad.length) out.push({
+        id: nextId(), type: "impossible", sheet: sheet.name, column: e.name, letter: e.letter,
+        title: `"${e.name}" is before "${s.name}"`,
+        detail: `${bad.length} row${bad.length === 1 ? " has" : "s have"} "${e.name}" earlier than "${s.name}", which is impossible for a start/end pair. Check these rows.`,
+        count: bad.length, samples: bad.slice(0, 5).map((r) => `${r[s.name]} -> ${r[e.name]}`), fixable: false, fix: null,
+      });
+    }
+  }
+  return out;
+}
+
+function flag(sheet, h, type, title, detail, samples) {
+  return {
+    id: nextId(), type, sheet: sheet.name, column: h.name, letter: h.letter,
+    title, detail, count: samples.length, samples, fixable: false, fix: null,
+  };
+}
+
+function findCensored(sheet) {
+  const out = [];
+  for (const h of sheet.headers) {
+    if (h.type === "date") continue;
+    const affected = [];
+    let plainNumbers = 0;
+    for (const r of sheet.rows) {
+      const v = r[h.name];
+      if (v == null) continue;
+      if (typeof v === "number") { plainNumbers++; continue; }
+      const s = String(v).trim();
+      if (/^[<>]=?\s*-?\d/.test(s) || /^(pending|tnp|not done|nd)$/i.test(s)) affected.push(v);
+      else if (isNumericString(v)) plainNumbers++;
+    }
+    // Only surface where the column is mostly numeric (a real measurement column).
+    if (affected.length === 0 || plainNumbers < affected.length) continue;
+    out.push({
+      id: nextId(),
+      type: "censored",
+      sheet: sheet.name,
+      column: h.name,
+      letter: h.letter,
+      title: `Below/above-limit results in "${h.name}"`,
+      detail: `${affected.length} value${s(affected.length)} in "${h.name}" ${be(affected.length)} limit results like "<0.5" or ">1000", or notes like "pending". How these should count is a judgment call, so the fix will ask you first.`,
+      count: affected.length,
+      samples: sample(affected),
+      fixable: true,
+      fix: { normalizer: "censoredValues", needsPolicy: true },
+    });
+  }
+  return out;
+}
+
+function findMultiValue(sheet) {
+  const out = [];
+  for (const h of sheet.headers) {
+    if (h.type === "number" || h.type === "date") continue;
+    const affected = [];
+    let lenSum = 0, lenN = 0;
+    for (const r of sheet.rows) {
+      const v = r[h.name];
+      if (v == null) continue;
+      lenSum += String(v).length; lenN++;
+      if (splitList(v).length > 1) affected.push(v);
+    }
+    const avgLen = lenN ? lenSum / lenN : 0;
+    // Avoid free-text/notes columns: only short-ish list-like cells.
+    if (affected.length < 2 || avgLen > 40) continue;
+    out.push({
+      id: nextId(),
+      type: "multiValue",
+      sheet: sheet.name,
+      column: h.name,
+      letter: h.letter,
+      title: `Several values packed into one cell in "${h.name}"`,
+      detail: `${affected.length} cell${s(affected.length)} in "${h.name}" hold${affected.length === 1 ? "s" : ""} more than one value separated by commas. If you group or count by this column, the fix can split them so each value is counted on its own row.`,
+      count: affected.length,
+      samples: sample(affected),
+      fixable: true,
+      fix: { normalizer: "splitList" },
+    });
+  }
+  return out;
+}
+
+function findMixedUnits(sheet) {
+  const out = [];
+  for (const h of sheet.headers) {
+    if (h.type === "number" || h.type === "date") continue;
+    const units = new Set();
+    const affected = [];
+    for (const r of sheet.rows) {
+      const v = r[h.name];
+      if (v == null) continue;
+      const m = String(v).match(UNIT);
+      if (m && /\d/.test(String(v))) { units.add(m[1].toLowerCase()); affected.push(v); }
+    }
+    if (units.size < 2) continue;
+    out.push({
+      id: nextId(),
+      type: "mixedUnits",
+      sheet: sheet.name,
+      column: h.name,
+      letter: h.letter,
+      title: `Mixed units in "${h.name}"`,
+      detail: `"${h.name}" mixes different units (${[...units].join(", ")}). This needs a person to decide how to convert them — the app will not change it automatically. Use the AI mode, or standardize the units by hand.`,
+      count: affected.length,
+      samples: sample(affected),
+      fixable: false,
+      fix: null,
+    });
+  }
+  return out;
+}
+
+// Run every detector against one sheet.
+export function checkupSheet(sheet) {
+  counter = 0;
+  return [
+    ...findDuplicateRows(sheet),
+    ...findDuplicateIds(sheet),
+    ...findMissing(sheet),
+    ...findTextNumbers(sheet),
+    ...findTextDates(sheet),
+    ...findCategoryVariants(sheet),
+    ...findImpossible(sheet),
+    ...findCensored(sheet),
+    ...findMultiValue(sheet),
+    ...findMixedUnits(sheet),
+  ];
+}

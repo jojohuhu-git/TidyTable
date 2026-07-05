@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import ApiKeyPanel from "./components/ApiKeyPanel.jsx";
 import UploadPanel from "./components/UploadPanel.jsx";
+import CheckupPanel from "./components/CheckupPanel.jsx";
 import PromptPanel from "./components/PromptPanel.jsx";
 import ResultsPanel from "./components/ResultsPanel.jsx";
 import {
@@ -10,6 +11,9 @@ import {
   DEFAULT_MODEL,
 } from "./logic/claude.js";
 import { runTransform } from "./logic/runTransform.js";
+import { deriveSheet, downloadText } from "./logic/workbook.js";
+import { buildFixPlan } from "./logic/checkup/buildFixPlan.js";
+import { makeLogEvent, formatCleaningLog } from "./logic/checkup/cleaningLog.js";
 
 export default function App() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("tidytable_api_key") || "");
@@ -23,6 +27,8 @@ export default function App() {
   const [error, setError] = useState("");
   const [plan, setPlan] = useState(null);
   const [resultRows, setResultRows] = useState(null);
+  const [sessionLog, setSessionLog] = useState([]);
+  const [checkupVersion, setCheckupVersion] = useState(0);
 
   const dataContext = useMemo(() => {
     if (!workbook) return "";
@@ -74,6 +80,36 @@ export default function App() {
     setPlan(null);
     setResultRows(null);
     setError("");
+    setSessionLog([]);
+    setCheckupVersion((v) => v + 1);
+  }
+
+  // Apply the checkup fixes the user picked: build an offline plan, run it on the
+  // full data, show the result, replace the sheet with the cleaned rows (so later
+  // steps use them), and append to the cleaning log. Checkup runs on the first
+  // sheet for now.
+  async function handleApplyFixes(fixes) {
+    if (!fixes.length) return;
+    const sheet = workbook.sheets[0];
+    setError("");
+    setBusy(true);
+    setStatus("Applying your fixes on this computer…");
+    try {
+      const { plan: fixPlan, log } = buildFixPlan(sheet, fixes);
+      const rows = await runTransform(fixPlan.transform_code, { [sheet.name]: sheet.rows });
+      setPlan(fixPlan);
+      setResultRows(rows);
+      const cleaned = deriveSheet(sheet.name, rows);
+      setWorkbook({ ...workbook, sheets: workbook.sheets.map((s, i) => (i === 0 ? cleaned : s)) });
+      setSessionLog((l) => [...l, makeLogEvent({ fileName: workbook.fileName, sheet: sheet.name, entries: log })]);
+      setCheckupVersion((v) => v + 1);
+      setStatus("");
+    } catch (err) {
+      setError(friendlyApiError(err));
+      setStatus("");
+    } finally {
+      setBusy(false);
+    }
   }
 
   // Dev-only hook so the pipeline can be exercised without an API key.
@@ -124,7 +160,46 @@ export default function App() {
 
         {workbook && (
           <section className="card">
-            <h2><span className="step-label">Step 2</span> — Describe what you want</h2>
+            <h2><span className="step-label">Step 2</span> — Check your data for problems</h2>
+            <p className="section-intro">
+              Before you do anything else, here is what an automatic check found in your data —
+              duplicates, missing values, numbers stored as text, and more. Tick the ones you
+              want fixed and apply them. Nothing changes until you choose it.
+              {workbook.sheets.length > 1 && (
+                <> Only the first sheet, "{workbook.sheets[0].name}", is checked for now.</>
+              )}
+            </p>
+            <CheckupPanel
+              key={`checkup-${checkupVersion}`}
+              sheet={workbook.sheets[0]}
+              busy={busy}
+              onApply={handleApplyFixes}
+            />
+          </section>
+        )}
+
+        {sessionLog.length > 0 && (
+          <section className="card">
+            <h2>Cleaning log</h2>
+            <p className="section-intro">
+              A plain-English record of every change made in this session, with row counts. Keep
+              it as your trail for reviewers or committees.
+            </p>
+            <div className="log-box">{formatCleaningLog(sessionLog)}</div>
+            <div className="row-end">
+              <button
+                className="btn btn-ghost"
+                onClick={() => downloadText(formatCleaningLog(sessionLog), "TidyTable_cleaning_log.txt")}
+              >
+                Download cleaning log
+              </button>
+            </div>
+          </section>
+        )}
+
+        {workbook && (
+          <section className="card">
+            <h2><span className="step-label">Step 3</span> — Describe what you want</h2>
             <p className="section-intro">
               Ask for what you need the way you'd ask a colleague — no formulas, no jargon.
               You'll get a clear summary of what was done and a result you can download.
@@ -147,17 +222,17 @@ export default function App() {
 
         {workbook && (
           <section className="card">
-            <h2><span className="step-label">Step 3</span> — Your results</h2>
+            <h2><span className="step-label">Step 4</span> — Your results</h2>
             <p className="section-intro">
-              Once you run a request, your cleaned data appears here, along with two ways to
-              check it yourself: an Excel recipe and an RStudio script.
+              When you apply checkup fixes or run a request, your cleaned data appears here,
+              along with two ways to check it yourself: an Excel recipe and an RStudio script.
             </p>
             {plan && resultRows ? (
               <ResultsPanel plan={plan} rows={resultRows} />
             ) : (
               <p className="empty-state">
-                Nothing to show yet. Describe what you want in step 2 and run it — the result,
-                the Excel recipe, and the RStudio script will appear here.
+                Nothing to show yet. Apply a fix in step 2, or describe what you want in step 3
+                and run it — the result and the ways to check it will appear here.
               </p>
             )}
           </section>
