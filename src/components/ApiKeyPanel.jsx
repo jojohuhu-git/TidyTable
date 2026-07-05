@@ -22,7 +22,7 @@ export default function ApiKeyPanel({ apiKey, setApiKey, model, setModel }) {
   return (
     <div className="keypanel">
       <button className="btn btn-ghost" onClick={() => setOpen((o) => !o)}>
-        {apiKey ? "AI settings ✓" : "Set up AI key"}
+        {apiKey ? "AI settings — connected" : "Set up AI key"}
       </button>
       {open && (
         <div className="keypanel-pop">

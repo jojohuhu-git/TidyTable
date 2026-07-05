@@ -34,8 +34,8 @@ body {
 }
 .masthead h1 {
   margin: 0;
-  font-family: Georgia, "Times New Roman", serif;
   font-size: 2.1rem;
+  font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--accent);
 }
@@ -49,12 +49,22 @@ body {
   margin-bottom: 1.25rem;
   box-shadow: 0 1px 3px rgba(31, 42, 46, 0.05);
 }
-.card h2 { margin: 0 0 0.9rem; font-size: 1.2rem; display: flex; align-items: center; gap: 0.6rem; }
-.step-num {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 1.7rem; height: 1.7rem; border-radius: 50%;
-  background: var(--accent); color: var(--accent-ink);
-  font-size: 0.95rem; flex: none;
+.card h2 { margin: 0 0 0.4rem; font-size: 1.2rem; }
+/* Steps are named in words, not numbered badges. */
+.step-label { color: var(--accent); font-weight: 600; }
+/* One or two plain sentences under each card heading telling a first-time user
+   what to do here and what will happen. */
+.section-intro { margin: 0 0 1rem; color: var(--ink-soft); max-width: 46rem; }
+/* Empty-state text: what will appear here once there is something to show. */
+.empty-state {
+  border: 1px dashed var(--line); border-radius: var(--rad);
+  padding: 1rem 1.1rem; color: var(--ink-soft); margin: 0;
+}
+/* Quiet, permanent reassurance that data stays local. */
+.privacy-badge {
+  display: inline-block; font-size: 0.85rem; color: var(--ink-soft);
+  background: var(--accent-soft); border-radius: var(--rad);
+  padding: 0.3rem 0.7rem; margin-top: 0.6rem;
 }
 
 .btn {

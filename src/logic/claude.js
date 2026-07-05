@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { PLAN_SCHEMA } from "./schema.js";
+import { fakeValue, fakeStream } from "./synthetic.js";
 
 export const MODELS = [
   { id: "claude-opus-4-8", label: "Claude Opus 4.8 — best quality (recommended)" },
@@ -47,21 +48,34 @@ If the user's request cannot be answered from the columns available, still retur
 const SYSTEM = SYSTEM_PROMPT;
 
 // Build the data-description part of the user message.
+//
+// Privacy (build prompt §5): in the default "sample" mode we send only column
+// names, letters, and types, with MADE-UP example values that copy the shape of
+// the real data but never its contents. Real cell values are only ever sent in
+// the explicit "full" mode, which the UI marks clearly.
 export function buildDataContext(workbook, options) {
   const { excluded, privacyMode } = options; // excluded: Set of "sheet::column"
   const lines = [];
   lines.push(`Workbook file: "${workbook.fileName}"`);
+  if (privacyMode !== "full") {
+    lines.push("");
+    lines.push("Privacy note: all example values below are made up. They copy the shape and format of the real data (so you can write correct logic) but are not real cell contents.");
+  }
   lines.push("");
 
   for (const sheet of workbook.sheets) {
     lines.push(`Sheet "${sheet.name}" — ${sheet.rowCount.toLocaleString()} data rows (data starts in row 2; row 1 is headers). Data rows span row 2 to row ${sheet.rowCount + 1}.`);
-    lines.push("Columns (Excel letter | header name | type | example values):");
+    const exampleLabel = privacyMode === "full" ? "example values" : "made-up example values";
+    lines.push(`Columns (Excel letter | header name | type | ${exampleLabel}):`);
+    // A single seeded stream per sheet keeps fakes stable and varied.
+    const rng = fakeStream(sheet.name.length + 7);
     for (const h of sheet.headers) {
       const key = `${sheet.name}::${h.name}`;
       if (excluded.has(key)) {
         lines.push(`  ${h.letter} | "${h.name}" | [values withheld by the user for privacy — the column exists in the real data; do not use its values in logic unless the user asks, and never echo them]`);
       } else {
-        const ex = h.samples.length ? h.samples.map((s) => JSON.stringify(s)).join(", ") : "(no examples — column mostly empty)";
+        const samples = privacyMode === "full" ? h.samples : h.samples.map((s) => fakeValue(s, rng));
+        const ex = samples.length ? samples.map((s) => JSON.stringify(s)).join(", ") : "(no examples — column mostly empty)";
         lines.push(`  ${h.letter} | "${h.name}" | ${h.type} | ${ex}`);
       }
     }
@@ -79,8 +93,17 @@ export function buildDataContext(workbook, options) {
       lines.push(`All ${sheet.rowCount} rows (JSON):`);
       lines.push(JSON.stringify(sheet.rows.map(strip)));
     } else {
-      const sample = sheet.rows.slice(0, 10).map(strip);
-      lines.push("First 10 rows as a sample (JSON) — the real data has more rows and may contain values not seen here:");
+      // Made-up sample rows: same columns and shape, fabricated contents.
+      const fake = (row) => {
+        const out = {};
+        for (const h of sheet.headers) {
+          const key = `${sheet.name}::${h.name}`;
+          out[h.name] = excluded.has(key) ? "[withheld]" : fakeValue(row[h.name], rng);
+        }
+        return out;
+      };
+      const sample = sheet.rows.slice(0, 10).map(fake);
+      lines.push("First 10 rows as a made-up sample (JSON) — real data has more rows and other values; these examples are fabricated look-alikes, not real cell contents:");
       lines.push(JSON.stringify(sample, null, 1));
     }
     lines.push("");

@@ -33,6 +33,14 @@ export default function App() {
     setError("");
     setPlan(null);
     setResultRows(null);
+    // Until the offline engine lands, running a request needs the AI, which needs
+    // a key. Say so plainly rather than blocking the whole step.
+    if (!apiKey) {
+      setError(
+        "This request needs the AI for now. Add your key using the button at the top right, then run it again.",
+      );
+      return;
+    }
     setBusy(true);
     try {
       setStatus("Sending your request to Claude…");
@@ -88,16 +96,22 @@ export default function App() {
         <div>
           <h1>TidyTable</h1>
           <p className="tagline">
-            Upload a spreadsheet, ask for what you need in plain English, and get the
+            Upload a spreadsheet, ask for what you need in plain words, and get the
             cleaned data — plus an Excel recipe and an RStudio script to double-check it.
           </p>
+          <p className="privacy-badge">Your data has not left this computer.</p>
         </div>
         <ApiKeyPanel apiKey={apiKey} setApiKey={setApiKey} model={model} setModel={setModel} />
       </header>
 
       <main>
         <section className="card">
-          <h2><span className="step-num">1</span> Upload your spreadsheet</h2>
+          <h2><span className="step-label">Step 1</span> — Upload your spreadsheet</h2>
+          <p className="section-intro">
+            Drop an Excel file here, or click to choose one. Nothing is uploaded anywhere —
+            the file stays on this computer, and you decide later what, if anything, is sent
+            to the AI.
+          </p>
           <UploadPanel
             workbook={workbook}
             onWorkbook={handleWorkbook}
@@ -110,14 +124,18 @@ export default function App() {
 
         {workbook && (
           <section className="card">
-            <h2><span className="step-num">2</span> Describe what you want</h2>
+            <h2><span className="step-label">Step 2</span> — Describe what you want</h2>
+            <p className="section-intro">
+              Ask for what you need the way you'd ask a colleague — no formulas, no jargon.
+              You'll get a clear summary of what was done and a result you can download.
+            </p>
             <PromptPanel
               prompt={prompt}
               setPrompt={setPrompt}
               onRun={handleRun}
               busy={busy}
               status={status}
-              canRun={Boolean(apiKey && prompt.trim())}
+              canRun={Boolean(prompt.trim())}
               needsKey={!apiKey}
               dataContext={dataContext}
               model={model}
@@ -127,18 +145,29 @@ export default function App() {
           </section>
         )}
 
-        {plan && resultRows && (
+        {workbook && (
           <section className="card">
-            <h2><span className="step-num">3</span> Your results — and two ways to verify them</h2>
-            <ResultsPanel plan={plan} rows={resultRows} />
+            <h2><span className="step-label">Step 3</span> — Your results</h2>
+            <p className="section-intro">
+              Once you run a request, your cleaned data appears here, along with two ways to
+              check it yourself: an Excel recipe and an RStudio script.
+            </p>
+            {plan && resultRows ? (
+              <ResultsPanel plan={plan} rows={resultRows} />
+            ) : (
+              <p className="empty-state">
+                Nothing to show yet. Describe what you want in step 2 and run it — the result,
+                the Excel recipe, and the RStudio script will appear here.
+              </p>
+            )}
           </section>
         )}
       </main>
 
       <footer className="footnote">
         Your spreadsheet is processed inside your browser. Only what you choose in the
-        privacy settings is sent to Anthropic's API using your own key. Nothing is stored
-        on any TidyTable server (there isn't one).
+        privacy settings is ever sent to the AI, using your own key. Nothing is stored on
+        any TidyTable server (there isn't one).
       </footer>
     </div>
   );

@@ -25,10 +25,6 @@ export default function PromptPanel({
 
   return (
     <div>
-      <p className="hint">
-        Write it the way you'd ask a data analyst — no formulas, no jargon. Mention column
-        names if you can.
-      </p>
       <textarea
         className="prompt-box"
         rows={4}
@@ -56,12 +52,17 @@ export default function PromptPanel({
           {busy ? "Working…" : "Pull my data"}
         </button>
         <span className="dim">
-          {privacyMode === "full" ? "Sending the whole spreadsheet" : "Sending headers + samples"} · roughly{" "}
-          {tokens.toLocaleString()} tokens (~${cost < 0.005 ? "0.01 or less" : cost.toFixed(2)} of API credit)
+          {privacyMode === "full"
+            ? "This sends every value in your spreadsheet to the AI"
+            : "This sends only column names and made-up examples — never your real cell contents"}
+          {" · "}roughly {tokens.toLocaleString()} tokens (~${cost < 0.005 ? "0.01 or less" : cost.toFixed(2)} of AI credit)
         </span>
       </div>
       {needsKey && (
-        <p className="warn">Add your Anthropic API key first (button at the top right).</p>
+        <p className="hint">
+          Running a request uses the AI, which needs your own key. Add one with the button
+          at the top right — it stays on this computer.
+        </p>
       )}
       {tooBig && (
         <p className="warn">

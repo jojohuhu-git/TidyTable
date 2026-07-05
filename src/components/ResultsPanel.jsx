@@ -14,7 +14,7 @@ function CopyButton({ text, label = "Copy" }) {
         setTimeout(() => setCopied(false), 1500);
       }}
     >
-      {copied ? "Copied ✓" : label}
+      {copied ? "Copied" : label}
     </button>
   );
 }
@@ -25,7 +25,7 @@ export default function ResultsPanel({ plan, rows }) {
   return (
     <div>
       <div className="summary-box">
-        <h3>What the AI did</h3>
+        <h3>{plan.engine === "offline" ? "What was done (answered on this computer)" : "What the AI did"}</h3>
         <p style={{ whiteSpace: "pre-wrap" }}>{plan.summary}</p>
       </div>
 
@@ -69,7 +69,7 @@ export default function ResultsPanel({ plan, rows }) {
             {plan.excel_steps.map((s, i) => (
               <li key={i}>
                 <h4>{s.title}</h4>
-                {s.where && <p className="step-where">📍 {s.where}</p>}
+                {s.where && <p className="step-where">Where: {s.where}</p>}
                 {s.formula && (
                   <div className="formula-row">
                     <code className="formula">{s.formula}</code>
