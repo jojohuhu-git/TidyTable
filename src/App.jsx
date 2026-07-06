@@ -22,6 +22,8 @@ import { runOffline } from "./logic/offline/runOffline.js";
 import ClarifyBox from "./components/ClarifyBox.jsx";
 import StatsPanel from "./components/StatsPanel.jsx";
 import RegressionWizard from "./components/RegressionWizard.jsx";
+import ChartsPanel from "./components/ChartsPanel.jsx";
+import ShelfPanel from "./components/ShelfPanel.jsx";
 
 export default function App() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("tidytable_api_key") || "");
@@ -336,6 +338,29 @@ export default function App() {
               method with an RStudio script, or explains plainly why it would not be trustworthy.
             </p>
             <RegressionWizard sheet={workbook.sheets[0]} />
+          </section>
+        )}
+
+        {workbook && (
+          <section className="card">
+            <h2><span className="step-label">Step 9</span> — Make a chart</h2>
+            <p className="section-intro">
+              Pick what to compare. The app recommends the one chart that fits your data, shows a
+              preview here, and gives numbered steps to build the same chart in Excel.
+            </p>
+            <ChartsPanel sheet={workbook.sheets[0]} />
+          </section>
+        )}
+
+        {workbook && (
+          <section className="card">
+            <h2><span className="step-label">Step 10</span> — Combine and reshape</h2>
+            <p className="section-intro">
+              Common multi-step moves: find rows missing from another sheet, look up a value from a
+              second sheet, split paired list cells, or switch between one row per visit and one row
+              per patient. Nothing is guessed — anything that doesn't line up is shown, not dropped.
+            </p>
+            <ShelfPanel workbook={workbook} />
           </section>
         )}
       </main>
