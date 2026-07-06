@@ -20,6 +20,8 @@ import { newRecipe, addStep, checkupStep } from "./logic/recipes/recipe.js";
 import { loadKeyStore } from "./logic/recipes/keyStore.js";
 import { runOffline } from "./logic/offline/runOffline.js";
 import ClarifyBox from "./components/ClarifyBox.jsx";
+import StatsPanel from "./components/StatsPanel.jsx";
+import RegressionWizard from "./components/RegressionWizard.jsx";
 
 export default function App() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("tidytable_api_key") || "");
@@ -312,6 +314,30 @@ export default function App() {
           </p>
           <ReplayPanel keyStore={keyStore} onKeyStore={setKeyStore} />
         </section>
+
+        {workbook && (
+          <section className="card">
+            <h2><span className="step-label">Step 7</span> — Compare two groups (statistics)</h2>
+            <p className="section-intro">
+              Pick a grouping column and an outcome column. The app builds the table the
+              numbers come from, chooses the right test, and shows every step — so you can
+              see where each number came from and check it yourself. No key needed.
+            </p>
+            <StatsPanel sheet={workbook.sheets[0]} />
+          </section>
+        )}
+
+        {workbook && (
+          <section className="card">
+            <h2><span className="step-label">Step 8</span> — Advanced models (regression)</h2>
+            <p className="section-intro">
+              For models with several variables at once. Answer three questions first; the app
+              checks whether your data can support the model and either recommends the right
+              method with an RStudio script, or explains plainly why it would not be trustworthy.
+            </p>
+            <RegressionWizard sheet={workbook.sheets[0]} />
+          </section>
+        )}
       </main>
 
       <footer className="footnote">

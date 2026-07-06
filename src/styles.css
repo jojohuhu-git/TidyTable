@@ -137,6 +137,29 @@ body {
   font-size: 0.95rem;
 }
 
+/* Statistics (Step 7) and the regression wizard (Step 8). */
+.stats-pickers, .stats-pickers label { display: flex; flex-direction: column; gap: 0.3rem; }
+.stats-pickers { flex-direction: row; flex-wrap: wrap; gap: 1rem; margin-bottom: 0.8rem; }
+.stats-testname { margin: 0.4rem 0; }
+.stats-steps { margin: 0; padding-left: 1.2rem; }
+.stats-step { margin-bottom: 0.9rem; }
+.stats-step h4 { margin: 0 0 0.3rem; font-size: 0.98rem; }
+.stats-table { border-collapse: collapse; margin: 0.3rem 0; font-size: 0.92rem; }
+.stats-table th, .stats-table td { border: 1px solid var(--line); padding: 0.25rem 0.6rem; text-align: right; }
+.stats-table th { background: var(--accent-soft); text-align: left; }
+.stats-tot { font-weight: 600; }
+.stats-effects, .stats-checklist { margin: 0.3rem 0; padding-left: 1.1rem; }
+.stats-conclusion {
+  background: var(--accent-soft); border-left: 3px solid var(--accent);
+  border-radius: var(--rad); padding: 0.6rem 0.9rem; margin: 0.6rem 0; font-size: 0.95rem;
+}
+.stats-r summary, .wizard-script summary { cursor: pointer; font-weight: 600; color: var(--accent); }
+.wizard-q { margin-bottom: 0.8rem; display: flex; flex-direction: column; gap: 0.3rem; }
+.wizard-label { margin: 0; font-weight: 600; font-size: 0.95rem; }
+.wizard select, .wizard input, .stats-pickers select {
+  padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: var(--rad); background: var(--card);
+}
+
 /* The trust panel: what the offline engine understood before it answered. */
 .lookedfor-box {
   border: 1px solid var(--accent); border-radius: var(--rad);
