@@ -174,6 +174,38 @@ describe("scenario 2: record on month 1, replay on month 2", () => {
   });
 });
 
+describe("report cards announce a renamed value/group column instead of silently changing the metric", () => {
+  // Next month renames "Dose" -> "DoseAmount" and "Clinic" -> "Site". A recipe
+  // that compares total Dose and groups by Clinic must SAY the columns are gone,
+  // not quietly fall back to row counts / no grouping.
+  function renamedMonth() {
+    return deriveSheet("Prescriptions", [
+      { Prescriber: "Dr. Smith", Drug: "Amoxicillin", DoseAmount: "500", Site: "North" },
+      { Prescriber: "Dr. Jones", Drug: "amoxicillin", DoseAmount: "250", Site: "North" },
+    ]);
+  }
+  function recipeWithValueAndGroup() {
+    let r = newRecipe("Totals by clinic");
+    r = addStep(r, deidentifyStep("Prescriber"));
+    r = addStep(r, reportCardsStep({ personColumn: "Prescriber", valueColumn: "Dose", groupColumn: "Clinic" }));
+    return r;
+  }
+
+  const run = replayRecipe(recipeWithValueAndGroup(), renamedMonth(), null);
+  const missing = run.surprises.filter((s) => s.type === "missingColumn");
+
+  it("raises a missing-column surprise for the renamed value column", () => {
+    expect(missing.some((s) => s.column === "Dose")).toBe(true);
+  });
+  it("raises a missing-column surprise for the renamed group column", () => {
+    expect(missing.some((s) => s.column === "Clinic")).toBe(true);
+  });
+  it("still makes the cards (falling back to row counts) rather than skipping", () => {
+    expect(run.reportCards).not.toBeNull();
+    expect(run.reportCards.cards.length).toBeGreaterThan(0);
+  });
+});
+
 describe("key store file round-trip keeps codes stable", () => {
   it("re-reads the same mapping", () => {
     const s0 = newKeyStore("Prescriber");

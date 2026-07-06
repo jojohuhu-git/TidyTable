@@ -173,8 +173,31 @@ export function replayRecipe(recipe, sheet, keyStore) {
         record(step.label, before, before, { skipped: true });
         continue;
       }
-      const value = step.valueColumn ? matchColumn(step.valueColumn, headers) : null;
-      const group = step.groupColumn ? matchColumn(step.groupColumn, headers) : null;
+      // A recorded value/group column that no longer matches is a rename, not a
+      // reason to quietly change the metric. Announce it and say what happened
+      // instead (fall back to row counts / no grouping, but never silently).
+      let value = null;
+      if (step.valueColumn) {
+        value = matchColumn(step.valueColumn, headers);
+        if (!value) {
+          surprises.push({
+            type: "missingColumn",
+            column: step.valueColumn,
+            message: `The report cards were set to compare total "${step.valueColumn}", but this file has no column matching it — it may have been renamed or removed. The cards now count rows for each person instead. Rename the column back or update the recipe if you want totals.`,
+          });
+        }
+      }
+      let group = null;
+      if (step.groupColumn) {
+        group = matchColumn(step.groupColumn, headers);
+        if (!group) {
+          surprises.push({
+            type: "missingColumn",
+            column: step.groupColumn,
+            message: `The report cards were set to group people by "${step.groupColumn}", but this file has no column matching it — it may have been renamed or removed. The cards are made without that grouping.`,
+          });
+        }
+      }
       // The key is deliberately NOT passed here — report output cannot hold a name.
       reportCards = buildReportCards(rows, { personColumn: person, valueColumn: value, groupColumn: group });
       for (const w of reportCards.warnings) {
