@@ -24,6 +24,14 @@ export default function ResultsPanel({ plan, rows }) {
 
   return (
     <div>
+      {plan.looked_for && (
+        <div className="lookedfor-box">
+          <h3>What I looked for</h3>
+          <p>{plan.looked_for}</p>
+          <p className="dim">Check this matches your question before trusting the numbers.</p>
+        </div>
+      )}
+
       <div className="summary-box">
         <h3>{plan.engine === "offline" ? "What was done (answered on this computer)" : "What the AI did"}</h3>
         <p style={{ whiteSpace: "pre-wrap" }}>{plan.summary}</p>

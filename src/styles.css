@@ -129,6 +129,23 @@ body {
   border-radius: var(--rad); padding: 0.7rem 0.9rem; margin-top: 0.7rem;
 }
 
+/* A plain, non-error message: e.g. "add this term to the Definitions sheet". */
+.notice-box {
+  background: var(--accent-soft); color: var(--ink);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--rad); padding: 0.7rem 0.9rem; margin-top: 0.7rem;
+  font-size: 0.95rem;
+}
+
+/* The trust panel: what the offline engine understood before it answered. */
+.lookedfor-box {
+  border: 1px solid var(--accent); border-radius: var(--rad);
+  padding: 0.7rem 0.9rem; margin-bottom: 0.7rem;
+}
+.lookedfor-box h3 { margin: 0 0 0.3rem; font-size: 1rem; color: var(--accent); }
+.lookedfor-box p { margin: 0; font-size: 0.95rem; }
+.lookedfor-box .dim { margin-top: 0.3rem; }
+
 .col-privacy { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0 0.8rem; }
 .col-chip {
   display: inline-flex; align-items: center; gap: 0.4rem;

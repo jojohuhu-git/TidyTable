@@ -49,19 +49,23 @@ export default function PromptPanel({
 
       <div className="run-row">
         <button className="btn btn-primary btn-big" onClick={onRun} disabled={!canRun || busy || tooBig}>
-          {busy ? "Working…" : "Pull my data"}
+          {busy ? "Working…" : "Answer my question"}
         </button>
         <span className="dim">
+          Counts and shares are worked out on your computer, with no key.
+          {" "}Only requests the offline engine can't handle are offered to the AI
+          {" — "}
           {privacyMode === "full"
-            ? "This sends every value in your spreadsheet to the AI"
-            : "This sends only column names and made-up examples — never your real cell contents"}
-          {" · "}roughly {tokens.toLocaleString()} tokens (~${cost < 0.005 ? "0.01 or less" : cost.toFixed(2)} of AI credit)
+            ? "which would send every value in your spreadsheet"
+            : "sending only column names and made-up examples, never your real cell contents"}
+          {!needsKey ? ` · roughly ${tokens.toLocaleString()} tokens if it does (~$${cost < 0.005 ? "0.01 or less" : cost.toFixed(2)})` : ""}
         </span>
       </div>
       {needsKey && (
         <p className="hint">
-          Running a request uses the AI, which needs your own key. Add one with the button
-          at the top right — it stays on this computer.
+          You can answer counting questions with no key at all. A key is only needed for
+          requests the offline engine passes to the AI — add one with the button at the top
+          right if you want that option; it stays on this computer.
         </p>
       )}
       {tooBig && (

@@ -18,6 +18,8 @@ import { buildFixPlan } from "./logic/checkup/buildFixPlan.js";
 import { makeLogEvent, formatCleaningLog } from "./logic/checkup/cleaningLog.js";
 import { newRecipe, addStep, checkupStep } from "./logic/recipes/recipe.js";
 import { loadKeyStore } from "./logic/recipes/keyStore.js";
+import { runOffline } from "./logic/offline/runOffline.js";
+import ClarifyBox from "./components/ClarifyBox.jsx";
 
 export default function App() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("tidytable_api_key") || "");
@@ -35,40 +37,50 @@ export default function App() {
   const [checkupVersion, setCheckupVersion] = useState(0);
   const [recipe, setRecipe] = useState(() => newRecipe());
   const [keyStore, setKeyStore] = useState(() => loadKeyStore());
+  const [notice, setNotice] = useState(""); // plain, non-error message (e.g. "add a definition")
+  const [pendingGrain, setPendingGrain] = useState(null); // { grain, request } awaiting a combine-rows answer
 
   const dataContext = useMemo(() => {
     if (!workbook) return "";
     return buildDataContext(workbook, { excluded, privacyMode });
   }, [workbook, excluded, privacyMode]);
 
-  async function handleRun() {
-    setError("");
-    setPlan(null);
-    setResultRows(null);
-    // Until the offline engine lands, running a request needs the AI, which needs
-    // a key. Say so plainly rather than blocking the whole step.
-    if (!apiKey) {
-      setError(
-        "This request needs the AI for now. Add your key using the button at the top right, then run it again.",
-      );
+  // Every request tries the offline engine first (build prompt §3.3). A confident
+  // answer needs no key; an undefined clinical term blocks plainly; a per-patient
+  // question over repeating rows asks before answering; anything out of range
+  // declines and, if a key exists, is offered to Claude.
+  async function runOfflineFlow(request, options) {
+    const res = runOffline(request, workbook, options);
+    if (res.kind === "answer") {
+      setPlan(res.plan);
+      setResultRows(res.resultRows);
       return;
     }
+    if (res.kind === "block") {
+      setNotice(res.message);
+      return;
+    }
+    if (res.kind === "clarify-grain") {
+      setPendingGrain({ grain: res.grain, request });
+      return;
+    }
+    // res.kind === "decline"
+    if (!apiKey) {
+      setNotice(res.message);
+      return;
+    }
+    await runViaClaude(request, res.claudeHint);
+  }
+
+  async function runViaClaude(request, hint) {
     setBusy(true);
     try {
       setStatus("Sending your request to Claude…");
-      const newPlan = await requestPlan({
-        apiKey,
-        model,
-        dataContext,
-        userRequest: prompt,
-        onStatus: setStatus,
-      });
+      const userRequest = hint ? `${request}\n\n(${hint})` : request;
+      const newPlan = await requestPlan({ apiKey, model, dataContext, userRequest, onStatus: setStatus });
       setPlan(newPlan);
-
       setStatus("Running the extraction on your full data (inside your browser)…");
-      const sheetsByName = Object.fromEntries(
-        workbook.sheets.map((s) => [s.name, s.rows]),
-      );
+      const sheetsByName = Object.fromEntries(workbook.sheets.map((s) => [s.name, s.rows]));
       const rows = await runTransform(newPlan.transform_code, sheetsByName);
       setResultRows(rows);
       setStatus("");
@@ -80,12 +92,31 @@ export default function App() {
     }
   }
 
+  async function handleRun() {
+    setError("");
+    setNotice("");
+    setPlan(null);
+    setResultRows(null);
+    setPendingGrain(null);
+    await runOfflineFlow(prompt, {});
+  }
+
+  // The user answered the grain question: "combine" runs per-entity, "rows" keeps
+  // one row at a time. Either way we re-run the same request with that decision.
+  function answerGrain(mode) {
+    const request = pendingGrain?.request;
+    setPendingGrain(null);
+    if (request) runOfflineFlow(request, { grainMode: mode });
+  }
+
   function handleWorkbook(wb) {
     setWorkbook(wb);
     setExcluded(new Set());
     setPlan(null);
     setResultRows(null);
     setError("");
+    setNotice("");
+    setPendingGrain(null);
     setSessionLog([]);
     setRecipe(newRecipe());
     setCheckupVersion((v) => v + 1);
@@ -226,6 +257,18 @@ export default function App() {
               model={model}
               privacyMode={privacyMode}
             />
+            {pendingGrain && (
+              <ClarifyBox
+                question={pendingGrain.grain.question}
+                options={[
+                  { value: "group-then-test", label: `Combine each ${pendingGrain.grain.entity}'s rows first`, detail: `count ${pendingGrain.grain.entity}s` },
+                  { value: "row", label: "Count rows as they are", detail: "one row at a time" },
+                ]}
+                onAnswer={answerGrain}
+                onCancel={() => setPendingGrain(null)}
+              />
+            )}
+            {notice && <div className="notice-box" role="status">{notice}</div>}
             {error && <div className="error-box" role="alert">{error}</div>}
           </section>
         )}

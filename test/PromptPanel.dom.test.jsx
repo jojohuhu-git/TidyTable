@@ -24,14 +24,14 @@ function setup(overrides = {}) {
 describe("PromptPanel — no hard API-key gate", () => {
   it("run button is enabled with a prompt even when no key is set", () => {
     setup({ needsKey: true, canRun: true });
-    const btn = screen.getByRole("button", { name: /pull my data/i });
+    const btn = screen.getByRole("button", { name: /answer my question/i });
     expect(btn).toBeEnabled();
   });
 
   it("shows a plain, non-blocking note about the key rather than an order to add one first", () => {
     setup({ needsKey: true });
     expect(screen.queryByText(/add your anthropic api key first/i)).toBeNull();
-    expect(screen.getByText(/needs your own key/i)).toBeInTheDocument();
+    expect(screen.getByText(/a key is only needed/i)).toBeInTheDocument();
   });
 
   it("states plainly that sample mode never sends real cell contents", () => {
@@ -41,6 +41,6 @@ describe("PromptPanel — no hard API-key gate", () => {
 
   it("warns clearly when full mode would send every value", () => {
     setup({ privacyMode: "full" });
-    expect(screen.getByText(/sends every value/i)).toBeInTheDocument();
+    expect(screen.getByText(/send every value/i)).toBeInTheDocument();
   });
 });
