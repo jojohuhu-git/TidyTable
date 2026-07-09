@@ -73,6 +73,16 @@ function tTestResult(sheet, numCol, grpCol, groups, level) {
   if (a.length < 2 || b.length < 2) {
     return unsupported(`Each group needs at least two numeric values in "${numCol}".`);
   }
+  // P0-5: zero variance in both groups makes the standard error 0, which
+  // turns the t-test into NaN/±Infinity instead of a real result. Refuse in
+  // plain English before running the test rather than showing literal NaNs.
+  const isConstant = (arr) => arr.every((x) => x === arr[0]);
+  if (isConstant(a) && isConstant(b)) {
+    if (a[0] === b[0]) {
+      return unsupported(`Every value in both "${String(groups[0])}" and "${String(groups[1])}" is exactly ${a[0]} — there is no variation to test.`);
+    }
+    return unsupported(`Both groups have no spread — every "${String(groups[0])}" value is ${a[0]} and every "${String(groups[1])}" value is ${b[0]}. A t-test cannot be computed: the difference is exactly ${Math.abs(b[0] - a[0])} with no variability estimate.`);
+  }
   const tt = tTestWelch(a, b);
   const ci = ciMeanDiff(tt, level);
   const steps = [
