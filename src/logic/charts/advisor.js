@@ -5,6 +5,11 @@
 // ChartPreview renders and excelChart.js writes the reproduction steps.
 
 const PIE_MAX_SLICES = 4;
+// P1-6: past this many distinct categories, a bar-per-category chart is
+// unreadable (and, at real scale, thousands of bars). Refuse plainly instead
+// of rendering something nobody can read, and count honestly — this is the
+// dataset's real distinct-group count, not a sampled or capped number.
+const TOO_MANY_CATEGORIES = 30;
 
 // dataset shapes:
 //   { kind: "categorical", points: [{label, value}], labelIsTime: boolean, valueName }
@@ -29,6 +34,16 @@ export function recommendChart(dataset) {
       type: "line",
       reason: "The labels are points in time, so a line shows the change from one to the next.",
       alternatives: [{ type: "bar", reason: "Bars work too if you care about the exact value at each point more than the trend." }],
+    };
+  }
+
+  // P1-6: a bar-per-category chart past this many groups is unreadable (and,
+  // at real scale, thousands of bars) — a line handles a long time series
+  // fine (above), so this only gates the plain-categorical/bar path.
+  if (n > TOO_MANY_CATEGORIES) {
+    return {
+      type: "none",
+      reason: `This would compare ${n} categories, which is too many to read as a chart. Pick a column with fewer groups (a bar-per-category chart works well up to about ${TOO_MANY_CATEGORIES}).`,
     };
   }
 

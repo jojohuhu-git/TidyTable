@@ -4,6 +4,7 @@
 // given, that bar/point is the accent colour and every peer is grey.
 
 import { foldKey } from "../logic/checkup/normalizers.js";
+import { maxOf } from "../logic/charts/aggregate.js";
 
 const W = 480;
 const H = 300;
@@ -33,7 +34,7 @@ function BarChart({ dataset, fill }) {
   const padR = 40;
   const padY = 16;
   const points = dataset.points;
-  const max = niceMax(Math.max(...points.map((p) => p.value)));
+  const max = niceMax(maxOf(points.map((p) => p.value)));
   const rowH = (H - padY * 2) / points.length;
   const barH = Math.min(rowH * 0.62, 34);
   const scale = (W - padL - padR) / max;
@@ -62,7 +63,7 @@ function LineChart({ dataset }) {
   const padB = 34;
   const padT = 16;
   const points = dataset.points;
-  const max = niceMax(Math.max(...points.map((p) => p.value)));
+  const max = niceMax(maxOf(points.map((p) => p.value)));
   const stepX = (W - padL - padR) / Math.max(1, points.length - 1);
   const scaleY = (H - padT - padB) / max;
   const xy = points.map((p, i) => [padL + i * stepX, H - padB - p.value * scaleY]);
@@ -125,8 +126,8 @@ function ScatterChart({ dataset }) {
   const padT = 16;
   const xs = dataset.points.map((p) => p.x);
   const ys = dataset.points.map((p) => p.y);
-  const maxX = niceMax(Math.max(...xs));
-  const maxY = niceMax(Math.max(...ys));
+  const maxX = niceMax(maxOf(xs));
+  const maxY = niceMax(maxOf(ys));
   const sx = (W - padL - padR) / maxX;
   const sy = (H - padT - padB) / maxY;
   return (

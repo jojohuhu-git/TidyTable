@@ -456,6 +456,9 @@ export default function App() {
                 Pick a grouping column and an outcome column. The app builds the table the
                 numbers come from, chooses the right test, and shows every step — so you can
                 see where each number came from and check it yourself. No key needed.
+                {workbook.sheets.length > 1 && (
+                  <> Only the first sheet, "{workbook.sheets[0].name}", is used here.</>
+                )}
               </p>
               <StatsPanel sheet={workbook.sheets[0]} />
             </section>
@@ -465,6 +468,9 @@ export default function App() {
                 For models with several variables at once. Answer three questions first; the app
                 checks whether your data can support the model and either recommends the right
                 method with an RStudio script, or explains plainly why it would not be trustworthy.
+                {workbook.sheets.length > 1 && (
+                  <> Only the first sheet, "{workbook.sheets[0].name}", is used here.</>
+                )}
               </p>
               <RegressionWizard sheet={workbook.sheets[0]} />
             </section>
@@ -473,6 +479,9 @@ export default function App() {
               <p className="section-intro">
                 Pick what to compare. The app recommends the one chart that fits your data, shows a
                 preview here, and gives numbered steps to build the same chart in Excel.
+                {workbook.sheets.length > 1 && (
+                  <> Only the first sheet, "{workbook.sheets[0].name}", is used here.</>
+                )}
               </p>
               <ChartsPanel sheet={workbook.sheets[0]} />
             </section>
@@ -488,6 +497,9 @@ export default function App() {
                 Common multi-step moves: find rows missing from another sheet, look up a value from a
                 second sheet, split paired list cells, or switch between one row per visit and one row
                 per patient. Nothing is guessed — anything that doesn't line up is shown, not dropped.
+                {workbook.sheets.length > 1 && (
+                  <> The first sheet, "{workbook.sheets[0].name}", is always the starting point; pick which other sheet to bring in below.</>
+                )}
               </p>
               <ShelfPanel workbook={workbook} />
             </section>

@@ -1,10 +1,14 @@
+import { maxOf } from "../logic/charts/aggregate.js";
+
 // Renders report cards (build prompt §7/§11): one card per person, the subject's
 // bar in the accent color and every peer bar gray. It is handed the already-coded
 // report-card data — it never sees names.
 export default function ReportCardsView({ reportCards }) {
   if (!reportCards || reportCards.cards.length === 0) return null;
   const { cards, metricLabel } = reportCards;
-  const max = Math.max(1, ...cards.flatMap((c) => c.bars.map((b) => b.value)));
+  // P1-6: a spread (Math.max(1, ...manyValues)) blows the call stack on a
+  // large dataset (many cards × bars). A reduce loop has no such limit.
+  const max = maxOf(cards.flatMap((c) => c.bars.map((b) => b.value)), 1);
 
   return (
     <div className="report-cards">

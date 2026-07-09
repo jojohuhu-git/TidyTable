@@ -75,6 +75,11 @@ export default function ChartsPanel({ sheet }) {
           )}
 
           <ChartPreview chartType={chartType} dataset={dataset} />
+          {dataset.sampled && (
+            <p className="hint">
+              Showing a sample of {dataset.points.length.toLocaleString()} of {dataset.totalPoints.toLocaleString()} points, spread evenly through the data, so the preview stays readable and fast.
+            </p>
+          )}
 
           <h4 className="charts-steps-h">Make this chart in Excel</h4>
           <ol className="excel-steps">

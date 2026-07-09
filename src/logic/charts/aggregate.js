@@ -8,6 +8,27 @@ import { foldKey } from "../checkup/normalizers.js";
 
 const MONTHS = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i;
 
+// P1-6: a spread of a 200k+-element array (Math.max(...arr)) blows the call
+// stack (RangeError). A plain reduce loop has no such limit.
+export function maxOf(values, fallback = 0) {
+  let m = fallback;
+  for (const v of values) if (v > m) m = v;
+  return m;
+}
+
+// P1-6: a scatter with hundreds of thousands of rows is unreadable and slow
+// to render as one SVG circle per row. Sample down to a fixed cap, evenly
+// spaced through the data (not just the first N, which could all be one
+// cluster if the sheet happens to be sorted) so the shape stays honest.
+const SCATTER_POINT_CAP = 2000;
+function samplePoints(points, cap) {
+  if (points.length <= cap) return points;
+  const step = points.length / cap;
+  const sampled = [];
+  for (let i = 0; i < cap; i++) sampled.push(points[Math.floor(i * step)]);
+  return sampled;
+}
+
 function isNumericColumn(sheet, col) {
   const h = sheet.headers.find((x) => x.name === col);
   if (h && (h.type === "number" || h.type === "mixed (text + numbers)")) return true;
@@ -35,13 +56,17 @@ export function buildDataset(sheet, labelCol, valueCol) {
 
   // Two number columns → scatter of raw points.
   if (valueCol && labelNum && valueNum) {
-    const points = [];
+    const raw = [];
     for (const r of sheet.rows) {
       const x = num(r[labelCol]);
       const y = num(r[valueCol]);
-      if (Number.isFinite(x) && Number.isFinite(y)) points.push({ x, y });
+      if (Number.isFinite(x) && Number.isFinite(y)) raw.push({ x, y });
     }
-    return { kind: "xy", points, xName: labelCol, yName: valueCol };
+    const points = samplePoints(raw, SCATTER_POINT_CAP);
+    return {
+      kind: "xy", points, xName: labelCol, yName: valueCol,
+      totalPoints: raw.length, sampled: points.length < raw.length,
+    };
   }
 
   // Otherwise group by the label column.
