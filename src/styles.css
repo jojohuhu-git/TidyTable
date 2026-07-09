@@ -215,12 +215,14 @@ body {
   background: var(--card); color: var(--ink);
 }
 .prompt-box:focus { outline: 2px solid var(--accent); border-color: transparent; }
-.example-row { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0 0.9rem; }
+.example-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin: 0.5rem 0 0.9rem; }
+.example-row-label { font-size: 0.78rem; margin-right: 0.2rem; }
 .example-chip {
   border: 1px solid var(--line); background: var(--bg); border-radius: var(--rad);
   font-size: 0.8rem; padding: 0.25rem 0.6rem; cursor: pointer; color: var(--ink-soft);
 }
 .example-chip:hover { background: var(--accent-soft); color: var(--ink); }
+.example-chip-offline { border-color: var(--accent); color: var(--ink); }
 .run-row { display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap; }
 
 .summary-box {

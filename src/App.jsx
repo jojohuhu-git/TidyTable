@@ -260,6 +260,7 @@ export default function App() {
               dataContext={dataContext}
               model={model}
               privacyMode={privacyMode}
+              workbook={workbook}
             />
             {pendingGrain && (
               <ClarifyBox

@@ -1,5 +1,10 @@
+import { useMemo } from "react";
 import { estimateTokens, estimateCostUSD } from "../logic/claude.js";
+import { buildOfflineExample } from "../logic/offline/exampleQuestion.js";
 
+// A4: these are all things the offline engine cannot compute (a
+// missing-value + threshold filter, a sum-per-group, a duplicate scan, a
+// text-cleanup transform) — every one of them needs the AI, hence the label.
 const EXAMPLES = [
   "Pull out everyone over 65 who is missing a value in the vaccination date column.",
   "Give me total sales per region per month, sorted from highest to lowest.",
@@ -18,10 +23,14 @@ export default function PromptPanel({
   dataContext,
   model,
   privacyMode,
+  workbook,
 }) {
   const tokens = estimateTokens(dataContext + prompt);
   const cost = estimateCostUSD(model, tokens);
   const tooBig = dataContext.length > 2_500_000;
+  // Built from the real uploaded data and verified through the same matcher
+  // the actual run uses, so this one is guaranteed to answer with no key.
+  const offlineExample = useMemo(() => buildOfflineExample(workbook), [workbook]);
 
   return (
     <div>
@@ -33,7 +42,21 @@ export default function PromptPanel({
         onChange={(e) => setPrompt(e.target.value)}
         disabled={busy}
       />
+      {offlineExample && (
+        <div className="example-row">
+          <span className="dim example-row-label">Answered on this computer, no key needed:</span>
+          <button
+            type="button"
+            className="example-chip example-chip-offline"
+            onClick={() => setPrompt(offlineExample)}
+            disabled={busy}
+          >
+            {offlineExample.length > 60 ? offlineExample.slice(0, 57) + "…" : offlineExample}
+          </button>
+        </div>
+      )}
       <div className="example-row">
+        <span className="dim example-row-label">Need the AI:</span>
         {EXAMPLES.map((ex) => (
           <button
             key={ex}
