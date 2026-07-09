@@ -139,8 +139,27 @@ aggregation engine) — each sized like its own session, per the original handof
 ## Resuming
 
 1. `cd ~/Downloads/TidyTable && git checkout fix/2026-07-09-audit-findings`
-2. `npx vitest run` — confirm still 194 passing before starting new work.
-3. Continue in the combined execution order above: A3 Level 1 + A4 + A5 next (small,
-   high-trust-payoff), then B1–B5, then A3 Level 2, then the rest.
-4. Same per-item workflow: reproduce → failing test with a synthetic fixture → fix →
-   full suite green → commit named by finding id. Do not push.
+2. `npx vitest run` — confirm **208 passing (28 files)** before starting new work
+   (this is the count after A3 Level 1 + A4 + A5, commits `5d75bb7`/`71d6336`/`333cb85`/
+   `ea20a30` — see the "Update" section near the top of this file for what each did).
+3. **Open decision, ask the owner before picking one** — the two remaining items are
+   each sized like their own session and pull in different directions:
+   - **B1–B5** (novice UX core) — collapse the 9-card step wall into goal-grouped
+     sections; "Try it with example data" (synthetic only, separate from A4's
+     real-data example chip already shipped); scroll-to-result + small session
+     history; Undo/Start over (keep `originalWorkbook`); `beforeunload` warning +
+     localStorage persistence of the log/recipe. This is a UI redesign pass.
+   - **A3 Level 2** (biggest capability win) — implement offline `sum`/`average`/
+     `distinct` over a resolved numeric column and group-by for `GROUP_WORDS`
+     (`src/logic/offline/synonyms.js` already exports `GROUP_WORDS`, currently
+     unused — see A3 Level 1's commit for how the matcher declines these today),
+     with matching Excel steps (AVERAGEIFS etc.). This is a new offline-engine
+     capability, not a UI change.
+   Do not default to either without checking — they don't block each other, so
+   whichever the owner wants next is fine to start cold.
+4. After B1–B5/A3 Level 2, the rest of the queue (P1-6..P1-12, P2-13..P2-23, B6–B12,
+   A6, the NEW-3/5/7/8/9/10 dataset items) is unchanged from the "What's NOT done"
+   section below — still not started.
+5. Same per-item workflow: reproduce → failing test with a synthetic fixture → fix →
+   full suite green → commit named by finding id. Do not push — branch is local-only,
+   owner reviews before anything hits GitHub.
