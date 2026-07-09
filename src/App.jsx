@@ -122,19 +122,33 @@ export default function App() {
     await runViaClaude(request, res.claudeHint);
   }
 
+  // P2-19: requesting a plan from Claude and running its generated transform
+  // locally are two different failure domains — an API problem (bad key, rate
+  // limit, no credits) vs. a bug in the generated/executed code. Catch them
+  // separately so a transform failure is shown as-is instead of being
+  // funneled through friendlyApiError, which frames everything as an "AI"
+  // problem even when the AI call itself succeeded.
   async function runViaClaude(request, hint) {
     setBusy(true);
+    let newPlan;
     try {
       setStatus("Sending your request to Claude…");
       const userRequest = hint ? `${request}\n\n(${hint})` : request;
-      const newPlan = await requestPlan({ apiKey, model, dataContext, userRequest, onStatus: setStatus });
+      newPlan = await requestPlan({ apiKey, model, dataContext, userRequest, onStatus: setStatus });
+    } catch (err) {
+      setError(friendlyApiError(err));
+      setStatus("");
+      setBusy(false);
+      return;
+    }
+    try {
       setStatus("Running the extraction on your full data (inside your browser)…");
       const sheetsByName = Object.fromEntries(workbook.sheets.map((s) => [s.name, s.rows]));
       const rows = await runTransform(newPlan.transform_code, sheetsByName);
       recordResult(`Result of: your question "${request}"`, newPlan, rows);
       setStatus("");
     } catch (err) {
-      setError(friendlyApiError(err));
+      setError(err?.message || "The extraction step failed.");
       setStatus("");
     } finally {
       setBusy(false);
