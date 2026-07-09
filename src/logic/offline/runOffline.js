@@ -45,10 +45,23 @@ export function runOffline(request, workbook, options = {}) {
     kind: "decline",
     reason: match.reason || "none",
     claudeHint: buildClaudeHint(match),
-    message:
-      "This request needs the AI mode — the offline engine could not answer it with confidence, so it will not guess. " +
-      "Add your key at the top right to send it to Claude, or rephrase it as a count or share of rows.",
+    message: buildDeclineMessage(match),
   };
+}
+
+// A3 Level 1: "average"/"sum"/"per X"/"by X" are a real capability gap (the
+// offline engine only ever counts or shares rows — see fillPlan.js), not an
+// undefined clinical term, so say that plainly instead of the generic decline.
+const UNSUPPORTED_LEAD = {
+  "unsupported-average": "This asks for an average, which the offline engine cannot compute yet — it can only count or share rows.",
+  "unsupported-sum": "This asks for a total/sum, which the offline engine cannot compute yet — it can only count or share rows.",
+  "unsupported-groupby": "This asks for a breakdown per group (\"per\"/\"by\"/\"grouped by\"), which the offline engine cannot compute yet — it can only count or share rows for one cohort at a time.",
+};
+
+function buildDeclineMessage(match) {
+  const lead = UNSUPPORTED_LEAD[match.reason]
+    || "This request needs the AI mode — the offline engine could not answer it with confidence, so it will not guess.";
+  return `${lead} Add your key at the top right to send it to Claude, or rephrase it as a count or share of rows.`;
 }
 
 // Plain block message when a clinical term is undefined (refuse, don't guess).
@@ -81,6 +94,9 @@ function buildPartialMessage(match) {
 function buildClaudeHint(match) {
   if (match.reason === "no-conditions") {
     return "A local pre-check understood a count-type request but could not tell which columns or values to filter on.";
+  }
+  if (match.reason === "unsupported-average" || match.reason === "unsupported-sum" || match.reason === "unsupported-groupby") {
+    return "A local pre-check recognized this asks for an average/sum/group-by breakdown, which the offline engine does not compute.";
   }
   return "A local pre-check did not recognize this as a count or share of rows.";
 }

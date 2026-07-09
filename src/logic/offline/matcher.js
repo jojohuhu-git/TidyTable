@@ -12,7 +12,7 @@ import { columnKey } from "../recipes/recipe.js";
 import { foldKey } from "../checkup/normalizers.js";
 import { lookupDefinition } from "./definitions.js";
 import {
-  detectIntent, detectComparator, splitNestedLevels, COHORT_MARKERS,
+  detectIntent, detectComparator, splitNestedLevels, COHORT_MARKERS, GROUP_WORDS,
 } from "./synonyms.js";
 
 // Words that carry no filter meaning — stripped before a term is resolved.
@@ -153,6 +153,32 @@ function resolveConditions(clause, sheet, headers, index, defs) {
   return [{ kind: "partial", matched: condition, unmatchedText: residue.join(" "), term: clause.trim() }];
 }
 
+// A3 Level 1: the engine only ever counts or shares rows (fillPlan.js has no
+// average/sum/group-by math), but "average"/"sum"/"per X"/"by X" leftover
+// words used to fall through to resolveCondition and get reported as an
+// undefined clinical term ("add a Definitions row for 'average'") — dishonest,
+// since no Definitions row could ever satisfy it. Recognize the residue as an
+// unsupported-capability request instead, so it declines plainly and logs to
+// the miss log (the real signal for what to build next in A3 Level 2).
+// A leftover term counts as such residue when it IS the bare aggregation word
+// (nothing else left to resolve) or opens with a group-by marker ("per
+// diagnosis", "by service", "grouped by clinic") — checked as a prefix so a
+// genuine undefined term that merely contains "by" mid-sentence (e.g.
+// "confirmed by biopsy") is not swept up by mistake.
+function isUnsupportedAggregationResidue(term) {
+  const t = String(term || "").trim();
+  if (!t) return false;
+  const bareIntent = detectIntent(t);
+  if (
+    bareIntent && (bareIntent.intent === "average" || bareIntent.intent === "sum")
+    && words(t).length === words(bareIntent.phrase).length
+  ) {
+    return true;
+  }
+  const lower = t.toLowerCase();
+  return GROUP_WORDS.some((g) => lower === g || lower.startsWith(`${g} `));
+}
+
 // Pull the base cohort clause out ("of patients with pyelonephritis"). Returns
 // { term, start, end } describing the term phrase and where the whole clause sits
 // in the original text, or null.
@@ -234,6 +260,16 @@ export function matchRequest(request, workbook, defs, options = {}) {
   const intent = detectIntent(request);
   const cohort = extractCohort(request);
 
+  // A3 Level 1: "average"/"sum" is the dominant intent word and no count-style
+  // phrase ("how many" etc.) also matched (detectIntent already prefers the
+  // longest phrase, so "how many … average duration" still resolves to
+  // count). The engine cannot compute either, so decline honestly right away
+  // rather than let the "average"/"total" word wash through as an unresolved
+  // filter term and falsely ask for a Definitions row.
+  if (intent && (intent.intent === "average" || intent.intent === "sum")) {
+    return { status: "none", reason: `unsupported-${intent.intent}`, request };
+  }
+
   // A cohort question needs either a counting word ("how many", "what share")
   // or a cohort marker ("of patients with…"). Without one of those this is not
   // our kind of request — decline rather than treat stray words as filters.
@@ -273,6 +309,13 @@ export function matchRequest(request, workbook, defs, options = {}) {
 
   const missing = stages.filter((s) => s.condition.kind === "missing").map((s) => s.condition);
   if (missing.length) {
+    // A3 Level 1: if every unresolved term is a group-by residue ("per
+    // diagnosis", "by service") rather than a genuine undefined clinical
+    // term, this is a capability gap, not a missing definition — decline
+    // honestly instead of asking for a Definitions row that could never help.
+    if (missing.every((m) => m.reason === "unknown" && isUnsupportedAggregationResidue(m.term))) {
+      return { status: "none", reason: "unsupported-groupby", request };
+    }
     return {
       status: "needs_definitions",
       missingTerms: missing,
