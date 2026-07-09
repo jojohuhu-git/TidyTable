@@ -55,7 +55,7 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
       .filter((f) => selected.has(f.id))
       .map((f) => {
         const fix = { normalizer: f.fix.normalizer, column: f.column, params: { ...(f.fix.params || {}) } };
-        if (f.fix.needsPolicy) fix.params.policy = policies[f.id];
+        if (f.fix.needsPolicy) fix.params[f.fix.paramKey || "policy"] = policies[f.id];
         return fix;
       });
     onApply(fixes);
@@ -95,15 +95,15 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
             )}
             {askingPolicy === f.id && (
               <ClarifyBox
-                question={`How should the below/above-limit results in "${f.column}" be counted?`}
-                options={CENSORED_OPTIONS}
+                question={f.fix.policyQuestion || `How should the below/above-limit results in "${f.column}" be counted?`}
+                options={f.fix.policyOptions || CENSORED_OPTIONS}
                 onAnswer={(v) => answerPolicy(f.id, v)}
                 onCancel={() => setAskingPolicy(null)}
               />
             )}
             {policies[f.id] && (
               <p className="dim">
-                Chosen: {CENSORED_OPTIONS.find((o) => o.value === policies[f.id])?.label.toLowerCase()}.
+                Chosen: {(f.fix.policyOptions || CENSORED_OPTIONS).find((o) => o.value === policies[f.id])?.label.toLowerCase()}.
               </p>
             )}
             <button type="button" className="finding-dismiss" onClick={() => dismiss(f)} disabled={busy}>

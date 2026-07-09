@@ -7,13 +7,13 @@
 
 import { colLetter } from "../letters.js";
 import {
-  coerceNumbers, sentinelBlanks, parseDates, trimCase, censoredValues, splitList,
+  coerceNumbers, sentinelBlanks, parseDates, trimCase, censoredValues, splitList, epochSerialToNumber,
   NORMALIZERS, EXCEL_STEPS,
 } from "./normalizers.js";
 
-const CELL_NORMALIZERS = ["coerceNumbers", "sentinelBlanks", "parseDates", "trimCase", "censoredValues"];
+const CELL_NORMALIZERS = ["coerceNumbers", "sentinelBlanks", "parseDates", "trimCase", "censoredValues", "epochSerialToNumber"];
 
-const LIVE = { coerceNumbers, sentinelBlanks, parseDates, trimCase, censoredValues, splitList };
+const LIVE = { coerceNumbers, sentinelBlanks, parseDates, trimCase, censoredValues, splitList, epochSerialToNumber };
 
 // Split the chosen fixes into the order they must run: value fixes, then
 // duplicate removal, then row-splitting.
@@ -27,6 +27,7 @@ function organize(fixes) {
 function applyCell(fix, value) {
   if (fix.normalizer === "trimCase") return LIVE.trimCase(value, fix.params?.map || {});
   if (fix.normalizer === "censoredValues") return LIVE.censoredValues(value, fix.params?.policy || "boundary");
+  if (fix.normalizer === "parseDates") return LIVE.parseDates(value, fix.params?.order || "MDY");
   return LIVE[fix.normalizer](value);
 }
 
@@ -112,6 +113,8 @@ function buildTransformCode(sheet, fixes) {
       lines.push(`for (var i = 0; i < rows.length; i++) { rows[i][${col}] = trimCase(rows[i][${col}], ${JSON.stringify(fix.params?.map || {})}); }`);
     } else if (fix.normalizer === "censoredValues") {
       lines.push(`for (var i = 0; i < rows.length; i++) { rows[i][${col}] = censoredValues(rows[i][${col}], ${JSON.stringify(fix.params?.policy || "boundary")}); }`);
+    } else if (fix.normalizer === "parseDates") {
+      lines.push(`for (var i = 0; i < rows.length; i++) { rows[i][${col}] = parseDates(rows[i][${col}], ${JSON.stringify(fix.params?.order || "MDY")}); }`);
     } else {
       lines.push(`for (var i = 0; i < rows.length; i++) { rows[i][${col}] = ${fix.normalizer}(rows[i][${col}]); }`);
     }

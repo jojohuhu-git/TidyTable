@@ -3,7 +3,14 @@
 // the offending values, and (when we can fix it) which normalizer would do it.
 // Nothing here changes data — fixes only run when the user picks them.
 
-import { coerceNumbers, parseDates, censoredValues, foldKey, splitList } from "./normalizers.js";
+import { coerceNumbers, censoredValues, foldKey, splitList } from "./normalizers.js";
+
+const DATE_CANDIDATE = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/;
+
+function isValidCalendarDate(y, mo, d) {
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+  return d <= new Date(y, mo, 0).getDate();
+}
 
 const NEVER_NEGATIVE = /\b(age|count|qty|quantity|dose|amount|price|cost|weight|height|duration|days|mg|ml|number|num|total|score)\b/i;
 const AGE_LIKE = /\bage\b/i;
@@ -164,14 +171,39 @@ function findTextDates(sheet) {
   const out = [];
   for (const h of sheet.headers) {
     if (h.type === "number") continue;
-    const affected = [];
+    const candidates = [];
     for (const r of sheet.rows) {
       const v = r[h.name];
       if (v == null) continue;
-      const changed = parseDates(v);
-      if (changed !== v && /^\d{4}-\d{2}-\d{2}/.test(String(changed))) affected.push(v);
+      const str = String(v).trim();
+      if (/^\d{4}-\d{2}-\d{2}/.test(str)) continue; // already ISO, nothing to do
+      const m = str.match(DATE_CANDIDATE);
+      if (m) candidates.push({ raw: v, a: parseInt(m[1], 10), b: parseInt(m[2], 10), y: parseInt(m[3], 10) });
     }
-    if (affected.length === 0) continue;
+    if (candidates.length === 0) continue;
+
+    // Decide the column's date order: a first number > 12 can only be a day
+    // (forces D/M/Y); a second number > 12 can only be a day (forces M/D/Y).
+    // If neither is forced, or both are forced by different values, the column
+    // is genuinely ambiguous and must not be silently guessed.
+    const forcesDMY = candidates.some((c) => c.a > 12);
+    const forcesMDY = candidates.some((c) => c.b > 12);
+    const ambiguous = forcesDMY === forcesMDY; // both true (conflict) or both false (all <=12)
+    const order = ambiguous ? "MDY" : (forcesDMY ? "DMY" : "MDY");
+
+    const valid = candidates.filter((c) => {
+      const mo = order === "DMY" ? c.b : c.a;
+      const d = order === "DMY" ? c.a : c.b;
+      return isValidCalendarDate(c.y, mo, d);
+    });
+    const invalidCount = candidates.length - valid.length;
+    if (valid.length === 0) continue; // nothing this fix would actually change
+
+    const orderLabel = order === "DMY" ? "day/month/year" : "month/day/year";
+    const unreadableNote = invalidCount
+      ? ` ${invalidCount} value${s(invalidCount)} could not be read as a valid date and will be left unchanged.`
+      : "";
+
     out.push({
       id: nextId(),
       type: "textDates",
@@ -179,11 +211,63 @@ function findTextDates(sheet) {
       column: h.name,
       letter: h.letter,
       title: `Dates in a mixed or text format in "${h.name}"`,
-      detail: `${affected.length} date${s(affected.length)} in "${h.name}" ${be(affected.length)} written in a day/month/year style rather than a single sortable format. The fix rewrites them all as YYYY-MM-DD so they sort and compare correctly.`,
-      count: affected.length,
-      samples: sample(affected),
+      detail: ambiguous
+        ? `${valid.length} date${s(valid.length)} in "${h.name}" ${be(valid.length)} written in a day/month/year style, but every value could be read either as Month/Day/Year or Day/Month/Year (e.g. "03/04/2024") — the app will not guess which, so it asks you first.${unreadableNote}`
+        : `${valid.length} date${s(valid.length)} in "${h.name}" ${be(valid.length)} written in a ${orderLabel} style rather than a single sortable format. The fix rewrites them as YYYY-MM-DD so they sort and compare correctly.${unreadableNote}`,
+      count: valid.length,
+      samples: sample(valid.map((c) => c.raw)),
       fixable: true,
-      fix: { normalizer: "parseDates" },
+      fix: ambiguous
+        ? {
+          normalizer: "parseDates",
+          needsPolicy: true,
+          paramKey: "order",
+          policyQuestion: `Are the dates in "${h.name}" written as Month/Day/Year or Day/Month/Year?`,
+          policyOptions: [
+            { value: "MDY", label: "Month/Day/Year", detail: "e.g. 03/04/2024 = March 4" },
+            { value: "DMY", label: "Day/Month/Year", detail: "e.g. 03/04/2024 = April 3" },
+          ],
+        }
+        : { normalizer: "parseDates", params: { order } },
+    });
+  }
+  return out;
+}
+
+// NEW-1: a duration/measurement column where Excel auto-formatted a minority of
+// cells as a date/time near its 1899-12-30 epoch, so parseWorkbookFile's
+// Date -> "YYYY-MM-DD" conversion turned plain numbers into fake 1899/1900
+// dates. Only fires when the rest of the column is genuinely numeric, so a real
+// date column (or a column with real 1899/1900-era dates, which clinical data
+// never has) is not mistaken for this pattern.
+function findEpochDates(sheet) {
+  const out = [];
+  for (const h of sheet.headers) {
+    if (h.type === "number" || h.type === "date") continue;
+    let numericCount = 0;
+    const epochCells = [];
+    for (const r of sheet.rows) {
+      const v = r[h.name];
+      if (v == null) continue;
+      if (typeof v === "number") { numericCount++; continue; }
+      if (typeof v === "string") {
+        const m = v.match(/^(1899|1900)-\d{2}-\d{2}$/);
+        if (m) epochCells.push(v);
+      }
+    }
+    if (epochCells.length === 0 || numericCount === 0 || numericCount < epochCells.length) continue;
+    out.push({
+      id: nextId(),
+      type: "epochDates",
+      sheet: sheet.name,
+      column: h.name,
+      letter: h.letter,
+      title: `Numbers that Excel accidentally turned into dates in "${h.name}"`,
+      detail: `${epochCells.length} value${s(epochCells.length)} in "${h.name}" ${be(epochCells.length)} stored as dates from 1899-1900 (Excel's internal date epoch), even though the rest of the column is plain numbers. This usually means Excel auto-formatted a number (like a day-count) as a date by mistake. The fix converts these cells back to the plain number they represent — it never writes a 1899/1900 date into your data.`,
+      count: epochCells.length,
+      samples: sample(epochCells),
+      fixable: true,
+      fix: { normalizer: "epochSerialToNumber" },
     });
   }
   return out;
@@ -387,6 +471,7 @@ export function checkupSheet(sheet) {
     ...findMissing(sheet),
     ...findTextNumbers(sheet),
     ...findTextDates(sheet),
+    ...findEpochDates(sheet),
     ...findCategoryVariants(sheet),
     ...findImpossible(sheet),
     ...findCensored(sheet),

@@ -26,18 +26,40 @@ export function sentinelBlanks(v) {
   return v;
 }
 
-/* ---- 4. Text dates -> ISO. Handles M/D/YYYY and D-M-YYYY; leaves ISO alone ---- */
-export function parseDates(v) {
+/* ---- 4. Text dates -> ISO. order: "MDY" (default) or "DMY". Validates the
+   month/day/calendar before rewriting; an invalid or ambiguous-without-an-order
+   value is left completely unchanged rather than guessed. ---- */
+export function parseDates(v, order) {
   if (v == null) return v;
   var s = String(v).trim();
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s;
   var m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-  if (m) {
-    var mo = ("0" + m[1]).slice(-2);
-    var d = ("0" + m[2]).slice(-2);
-    return m[3] + "-" + mo + "-" + d;
-  }
-  return v;
+  if (!m) return v;
+  var a = parseInt(m[1], 10), b = parseInt(m[2], 10), y = parseInt(m[3], 10);
+  var mo, d;
+  if (order === "DMY") { d = a; mo = b; } else { mo = a; d = b; }
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return v;
+  var daysInMonth = new Date(y, mo, 0).getDate();
+  if (d > daysInMonth) return v;
+  var moS = ("0" + mo).slice(-2);
+  var dS = ("0" + d).slice(-2);
+  return y + "-" + moS + "-" + dS;
+}
+
+/* ---- 9. Numbers Excel mis-typed as dates: a duration/measurement column where
+   Excel auto-formatted some numeric cells as a date/time near its 1899-12-30
+   epoch. Converts those cells back to the plain day-count integer they really
+   are. Only strings shaped like an epoch-window ISO date (year 1899 or 1900,
+   as produced by parseWorkbookFile's Date -> "YYYY-MM-DD" conversion) are
+   touched; everything else, including genuine modern dates, is left alone. ---- */
+export function epochSerialToNumber(v) {
+  if (typeof v !== "string") return v;
+  var m = v.match(/^(1899|1900)-(\d{2})-(\d{2})$/);
+  if (!m) return v;
+  var y = parseInt(m[1], 10), mo = parseInt(m[2], 10), d = parseInt(m[3], 10);
+  var epoch = Date.UTC(1899, 11, 30);
+  var target = Date.UTC(y, mo - 1, d);
+  return Math.round((target - epoch) / 86400000);
 }
 
 /* ---- 5. Category variants: map raw variant -> chosen canonical spelling ---- */
@@ -82,10 +104,11 @@ export function splitList(v) {
 export const NORMALIZERS = {
   coerceNumbers: { fn: coerceNumbers, needsParam: false },
   sentinelBlanks: { fn: sentinelBlanks, needsParam: false },
-  parseDates: { fn: parseDates, needsParam: false },
+  parseDates: { fn: parseDates, needsParam: true },
   trimCase: { fn: trimCase, needsParam: true },
   censoredValues: { fn: censoredValues, needsParam: true },
   splitList: { fn: splitList, needsParam: false },
+  epochSerialToNumber: { fn: epochSerialToNumber, needsParam: false },
 };
 
 // ---------------------------------------------------------------------------
@@ -117,11 +140,13 @@ export const EXCEL_STEPS = {
     }];
   },
   parseDates(ctx) {
+    const order = ctx.params?.order || "MDY";
+    const orderLabel = order === "DMY" ? "Day/Month/Year" : "Month/Day/Year";
     return [{
       title: `Standardize the dates in "${ctx.colName}"`,
       where: `Sheet "${ctx.sheetName}", cell ${helperCell(ctx)}, then fill down to ${ctx.helperLetter}${ctx.lastRow}`,
       formula: `=IFERROR(TEXT(DATEVALUE(${firstCell(ctx)}),"yyyy-mm-dd"),${firstCell(ctx)})`,
-      instruction: `In a new column ${ctx.helperLetter}, this reads each date and writes it back in the single format YYYY-MM-DD so they sort and compare correctly. Fill down over ${fillRange(ctx)}.`,
+      instruction: `In a new column ${ctx.helperLetter}, this reads each date and writes it back in the single format YYYY-MM-DD so they sort and compare correctly. Fill down over ${fillRange(ctx)}. The app read this column as ${orderLabel} order. Excel's DATEVALUE instead follows your computer's regional date setting, not this column's own pattern — before trusting this column, check that your Windows/Mac Region (or Excel language) setting also expects ${orderLabel} order, otherwise DATEVALUE can silently read some of these dates differently from the app.`,
     }];
   },
   trimCase(ctx) {
@@ -154,6 +179,14 @@ export const EXCEL_STEPS = {
       where: `Sheet "${ctx.sheetName}", cell ${helperCell(ctx)}, then fill down to ${ctx.helperLetter}${ctx.lastRow}`,
       formula: `=IFERROR(VALUE(${firstCell(ctx)}),VALUE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(${firstCell(ctx)},"<",""),">",""),"=","")," ","")))`,
       instruction: `In a new column ${ctx.helperLetter}, this reads a plain number as-is, and for a result like "<0.5" it uses the limit number 0.5. Fill down over ${fillRange(ctx)}.`,
+    }];
+  },
+  epochSerialToNumber(ctx) {
+    return [{
+      title: `Fix numbers Excel mis-typed as dates in "${ctx.colName}"`,
+      where: `Sheet "${ctx.sheetName}", column ${ctx.letter}`,
+      formula: "",
+      instruction: `Some cells in "${ctx.colName}" were formatted as a date/time by Excel but are really plain numbers (this happens when a number like a day-count gets auto-formatted). The value stored is already correct — only the display format is wrong. Select the affected cells, then Format Cells > Number (or General), and they will show as plain numbers again. No formula needed.`,
     }];
   },
   splitList(ctx) {

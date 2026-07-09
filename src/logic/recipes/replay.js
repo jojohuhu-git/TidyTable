@@ -12,13 +12,13 @@
 // each stage, then the surprises, loudly.
 
 import {
-  coerceNumbers, sentinelBlanks, parseDates, trimCase, censoredValues, splitList, foldKey,
+  coerceNumbers, sentinelBlanks, parseDates, trimCase, censoredValues, splitList, foldKey, epochSerialToNumber,
 } from "../checkup/normalizers.js";
 import { matchColumn } from "./recipe.js";
 import { applyCodesToColumn } from "./keyStore.js";
 import { buildReportCards } from "./reportCards.js";
 
-const CELL_FNS = { coerceNumbers, sentinelBlanks, parseDates };
+const CELL_FNS = { coerceNumbers, sentinelBlanks, parseDates, epochSerialToNumber };
 
 function rowSignature(row, names) {
   return JSON.stringify(names.map((n) => row[n]));
@@ -126,7 +126,8 @@ export function replayRecipe(recipe, sheet, keyStore) {
         const b = r[col];
         const a = fix.normalizer === "censoredValues" ? censoredValues(b, policy)
           : fix.normalizer === "sentinelBlanks" ? sentinelBlanks(b)
-            : fn ? fn(b) : b;
+            : fix.normalizer === "parseDates" ? parseDates(b, fix.params?.order || "MDY")
+              : fn ? fn(b) : b;
         if (a !== b) { r[col] = a; changed++; }
       }
       record(step.label, before, before, { note: `${changed} cell${changed === 1 ? "" : "s"} changed` });
