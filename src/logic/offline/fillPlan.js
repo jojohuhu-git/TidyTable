@@ -11,6 +11,13 @@ const RESULT_KEYS = { checked: "What was checked", matched: "Matched", out: "Out
 const AGG_LABEL = { sum: "Sum", average: "Average", distinct: "Distinct count" };
 const AGG_FORMULA = { sum: "SUMIFS", average: "AVERAGEIFS" };
 
+// P2-16: *, ?, ~ are wildcards in a COUNTIFS/SUMIFS/AVERAGEIFS criterion —
+// a cell value that literally contains one of them would otherwise be
+// wildcard-matched by Excel while the app matched it exactly. Escape with ~.
+function escapeCriteria(value) {
+  return String(value).replace(/[~*?]/g, "~$&");
+}
+
 // P1-9: prepend the sheet's real-extent honesty note to the first step,
 // whenever the sheet isn't perfectly tidy (see excelRowExtent/workbook.js).
 function withExtentNote(steps, extent) {
@@ -46,7 +53,7 @@ function buildExcelSteps(match, exec, sheet) {
   const extent = excelRowExtent(sheet);
   const lastRow = extent.lastRow;
   const range = (col) => `'${sheet.name}'!${letterFor(sheet, col)}2:${letterFor(sheet, col)}${lastRow}`;
-  const crit = (op, value) => (op === "=" ? `"${value}"` : `"${op}${value}"`);
+  const crit = (op, value) => (op === "=" ? `"${escapeCriteria(value)}"` : `"${op}${escapeCriteria(value)}"`);
 
   const steps = [];
   const upto = [];
@@ -68,7 +75,7 @@ function buildExcelSteps(match, exec, sheet) {
     const pairs = [];
     for (const c of upto) {
       pairs.push(`${range(c.column)}, ${crit(c.op, c.value)}`);
-      if (c.when) pairs.push(`${range(c.when.column)}, "${c.when.value}"`);
+      if (c.when) pairs.push(`${range(c.when.column)}, "${escapeCriteria(c.when.value)}"`);
     }
     const step = {
       title: `Level ${i + 1}: ${stage.condition.term}`,
@@ -141,7 +148,7 @@ function buildGroupCountExcelSteps(match, exec, sheet) {
   const extent = excelRowExtent(sheet);
   const lastRow = extent.lastRow;
   const range = (col) => `'${sheet.name}'!${letterFor(sheet, col)}2:${letterFor(sheet, col)}${lastRow}`;
-  const crit = (op, value) => (op === "=" ? `"${value}"` : `"${op}${value}"`);
+  const crit = (op, value) => (op === "=" ? `"${escapeCriteria(value)}"` : `"${op}${escapeCriteria(value)}"`);
   const hasSet = match.stages.some((s) => s.condition.kind === "set");
 
   if (hasSet) {
@@ -160,7 +167,7 @@ function buildGroupCountExcelSteps(match, exec, sheet) {
   for (const stage of match.stages) {
     const c = stage.condition;
     filterPairs.push(`${range(c.column)}, ${crit(c.op, c.value)}`);
-    if (c.when) filterPairs.push(`${range(c.when.column)}, "${c.when.value}"`);
+    if (c.when) filterPairs.push(`${range(c.when.column)}, "${escapeCriteria(c.when.value)}"`);
   }
   const steps = exec.groupResults.map((g, i) => {
     const pairs = [`${range(exec.groupColumn)}, ${crit("=", g.label)}`, ...filterPairs];
@@ -268,13 +275,13 @@ function buildAggregationExcelSteps(match, exec, sheet, label) {
   const extent = excelRowExtent(sheet);
   const lastRow = extent.lastRow;
   const range = (col) => `'${sheet.name}'!${letterFor(sheet, col)}2:${letterFor(sheet, col)}${lastRow}`;
-  const crit = (op, value) => (op === "=" ? `"${value}"` : `"${op}${value}"`);
+  const crit = (op, value) => (op === "=" ? `"${escapeCriteria(value)}"` : `"${op}${escapeCriteria(value)}"`);
   const filterPairs = [];
   for (const stage of match.stages) {
     const c = stage.condition;
     if (c.kind === "set") continue;
     filterPairs.push(`${range(c.column)}, ${crit(c.op, c.value)}`);
-    if (c.when) filterPairs.push(`${range(c.when.column)}, "${c.when.value}"`);
+    if (c.when) filterPairs.push(`${range(c.when.column)}, "${escapeCriteria(c.when.value)}"`);
   }
   const hasSet = match.stages.some((s) => s.condition.kind === "set");
   const targetRange = range(exec.targetColumn);
