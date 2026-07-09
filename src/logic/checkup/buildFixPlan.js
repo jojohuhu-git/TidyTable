@@ -7,13 +7,13 @@
 
 import { colLetter } from "../letters.js";
 import {
-  coerceNumbers, sentinelBlanks, parseDates, trimCase, censoredValues, splitList, epochSerialToNumber,
+  coerceNumbers, sentinelBlanks, parseDates, trimCase, censoredValues, splitList, epochSerialToNumber, stripUnitSuffix,
   NORMALIZERS, EXCEL_STEPS,
 } from "./normalizers.js";
 
-const CELL_NORMALIZERS = ["coerceNumbers", "sentinelBlanks", "parseDates", "trimCase", "censoredValues", "epochSerialToNumber"];
+const CELL_NORMALIZERS = ["coerceNumbers", "sentinelBlanks", "parseDates", "trimCase", "censoredValues", "epochSerialToNumber", "stripUnitSuffix"];
 
-const LIVE = { coerceNumbers, sentinelBlanks, parseDates, trimCase, censoredValues, splitList, epochSerialToNumber };
+const LIVE = { coerceNumbers, sentinelBlanks, parseDates, trimCase, censoredValues, splitList, epochSerialToNumber, stripUnitSuffix };
 
 // Split the chosen fixes into the order they must run: value fixes, then
 // duplicate removal, then row-splitting.

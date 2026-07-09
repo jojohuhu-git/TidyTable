@@ -8,10 +8,22 @@
 import { foldKey } from "../checkup/normalizers.js";
 import { conditionPhrase } from "./matcher.js";
 
-function toNumber(v) {
+// Self-contained (no closures) so fillPlan.js can inline this exact source via
+// toString() into the worker transform — the two copies must never drift.
+// Returns null (not 0) for anything that isn't a clean number: genuinely
+// non-numeric text ("N/A", "pending"), a censored marker ("<5", ">100"), or a
+// range ("12-14"). A trailing unit word ("5 Days") is stripped before the
+// numeric check, so a legitimate unit-suffixed duration still counts.
+export function toNumber(v) {
   if (v == null) return null;
   if (typeof v === "number") return v;
-  const n = Number(String(v).replace(/[^0-9.\-]/g, ""));
+  var s = String(v).trim();
+  if (s === "") return null;
+  var unitMatch = s.match(/^(-?\d+(?:\.\d+)?)\s*[A-Za-z]+\.?\s*$/);
+  if (unitMatch) s = unitMatch[1];
+  var cleaned = s.replace(/[$,\s]/g, "");
+  if (!/^-?\d+(?:\.\d+)?$/.test(cleaned)) return null;
+  var n = Number(cleaned);
   return Number.isFinite(n) ? n : null;
 }
 
@@ -52,6 +64,23 @@ export function predicate(cond) {
 
 const pct = (num, den) => (den ? Math.round((num / den) * 1000) / 10 : 0);
 
+// How many rows in the given population had no readable number for a
+// threshold condition's column (honoring its "when" guard), so the summary
+// can say plainly that they were not counted rather than silently treating
+// them as 0.
+function countUnreadable(cond, rows) {
+  if (cond.kind !== "threshold") return 0;
+  let n = 0;
+  for (const r of rows) {
+    if (cond.when) {
+      const wv = r[cond.when.column];
+      if (wv == null || foldKey(wv) !== foldKey(cond.when.value)) continue;
+    }
+    if (toNumber(r[cond.column]) == null) n++;
+  }
+  return n;
+}
+
 // match: a "confident" result from matchRequest. Returns per-stage counts plus a
 // small result table describing each level.
 export function executeCohort(match, workbook) {
@@ -75,11 +104,13 @@ export function executeCohort(match, workbook) {
     let prev = total;
     for (const stage of match.stages) {
       const pred = predicate(stage.condition);
+      const skippedCount = countUnreadable(stage.condition, entities.flatMap((g) => g));
       entities = entities.filter((rowsOf) => rowsOf.some(pred));
       const count = entities.length;
       levels.push({
         description: conditionPhrase(stage.condition),
         count, denominator: prev, proportion: pct(count, prev), unit: `${match.grain.entity}s`,
+        skippedCount, skippedColumn: skippedCount ? stage.condition.column : null,
       });
       prev = count;
     }
@@ -91,11 +122,13 @@ export function executeCohort(match, workbook) {
   let prev = total;
   for (const stage of match.stages) {
     const pred = predicate(stage.condition);
+    const skippedCount = countUnreadable(stage.condition, current);
     current = current.filter(pred);
     const count = current.length;
     levels.push({
       description: conditionPhrase(stage.condition),
       count, denominator: prev, proportion: pct(count, prev), unit: "rows",
+      skippedCount, skippedColumn: skippedCount ? stage.condition.column : null,
     });
     prev = count;
   }

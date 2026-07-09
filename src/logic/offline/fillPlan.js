@@ -4,7 +4,7 @@
 // is visible before anyone trusts the number. The transform recomputes the same
 // counts so re-running on new data stays honest.
 
-import { executeCohort } from "./cohort.js";
+import { executeCohort, toNumber } from "./cohort.js";
 
 const RESULT_KEYS = { checked: "What was checked", matched: "Matched", out: "Out of", share: "Share" };
 
@@ -20,6 +20,9 @@ function buildSummary(match, exec) {
   lines.push(`Starting from ${exec.total} ${unit} in "${match.sheetName}":`);
   for (const lvl of exec.levels) {
     lines.push(`- ${lvl.description}: ${lvl.count} of ${lvl.denominator} ${unit} (${lvl.proportion}%).`);
+    if (lvl.skippedCount) {
+      lines.push(`  (${lvl.skippedCount} row${lvl.skippedCount === 1 ? "" : "s"} had no readable number in "${lvl.skippedColumn}" and were not counted.)`);
+    }
   }
   lines.push("");
   lines.push("This was answered on your computer, with no data sent anywhere. The Excel steps reproduce the same counts by hand.");
@@ -80,7 +83,7 @@ function buildTransformCode(match) {
     : null;
   return `
 var foldKey = function (v) { return String(v).trim().toLowerCase().replace(/\\s+/g, " "); };
-var toNumber = function (v) { if (v == null) return null; if (typeof v === "number") return v; var n = Number(String(v).replace(/[^0-9.\\-]/g, "")); return isFinite(n) ? n : null; };
+${toNumber.toString()}
 var cmp = function (n, op, t) { switch (op) { case ">": return n > t; case ">=": return n >= t; case "<": return n < t; case "<=": return n <= t; case "<>": return n !== t; default: return n === t; } };
 var STAGES = ${JSON.stringify(stages)};
 var GRAIN = ${JSON.stringify(grain)};

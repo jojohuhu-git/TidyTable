@@ -92,6 +92,13 @@ export function censoredValues(v, policy) {
   return v;
 }
 
+/* ---- 10. Number-with-unit-word: "5 Days" -> 5, "365 Days" -> 365 ---- */
+export function stripUnitSuffix(v) {
+  if (typeof v !== "string") return v;
+  var m = v.trim().match(/^(-?\d+(?:\.\d+)?)\s+[A-Za-z]+\.?$/);
+  return m ? Number(m[1]) : v;
+}
+
 /* ---- 8. Multi-value cells: "red, blue" -> ["red","blue"] (row explode) ---- */
 export function splitList(v) {
   if (v == null) return [null];
@@ -109,6 +116,7 @@ export const NORMALIZERS = {
   censoredValues: { fn: censoredValues, needsParam: true },
   splitList: { fn: splitList, needsParam: false },
   epochSerialToNumber: { fn: epochSerialToNumber, needsParam: false },
+  stripUnitSuffix: { fn: stripUnitSuffix, needsParam: false },
 };
 
 // ---------------------------------------------------------------------------
@@ -187,6 +195,14 @@ export const EXCEL_STEPS = {
       where: `Sheet "${ctx.sheetName}", column ${ctx.letter}`,
       formula: "",
       instruction: `Some cells in "${ctx.colName}" were formatted as a date/time by Excel but are really plain numbers (this happens when a number like a day-count gets auto-formatted). The value stored is already correct — only the display format is wrong. Select the affected cells, then Format Cells > Number (or General), and they will show as plain numbers again. No formula needed.`,
+    }];
+  },
+  stripUnitSuffix(ctx) {
+    return [{
+      title: `Read the number in "${ctx.colName}", ignoring the unit word`,
+      where: `Sheet "${ctx.sheetName}", cell ${helperCell(ctx)}, then fill down to ${ctx.helperLetter}${ctx.lastRow}`,
+      formula: `=IFERROR(VALUE(TRIM(LEFT(${firstCell(ctx)},FIND(" ",${firstCell(ctx)}&" ")-1))),${firstCell(ctx)})`,
+      instruction: `In a new column ${ctx.helperLetter}, this reads the number at the start of the cell and drops the unit word after it (like "Days"). Anything that isn't a number followed by a word (like "N/A") is left exactly as it was. Fill down over ${fillRange(ctx)}.`,
     }];
   },
   splitList(ctx) {

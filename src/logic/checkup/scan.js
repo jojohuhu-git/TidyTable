@@ -273,6 +273,42 @@ function findEpochDates(sheet) {
   return out;
 }
 
+// NEW-2: a duration-like column where most text values are a number followed
+// by a consistent unit word ("5 Days"). Offered as its own cleaning fix so the
+// exported/cleaned data holds plain numbers; genuinely non-numeric text like
+// "N/A" is left untouched.
+function findUnitSuffixNumbers(sheet) {
+  const out = [];
+  for (const h of sheet.headers) {
+    if (h.type === "number" || h.type === "date") continue;
+    const matches = [];
+    const units = new Map();
+    for (const r of sheet.rows) {
+      const v = r[h.name];
+      if (typeof v !== "string") continue;
+      const m = v.trim().match(/^(-?\d+(?:\.\d+)?)\s+([A-Za-z]+)\.?$/);
+      if (m) { matches.push(v); const u = m[2].toLowerCase(); units.set(u, (units.get(u) || 0) + 1); }
+    }
+    if (matches.length < 2) continue;
+    const [dominantUnit, dominantCount] = [...units.entries()].sort((a, b) => b[1] - a[1])[0];
+    if (dominantCount / matches.length < 0.6) continue; // not a consistent unit word
+    out.push({
+      id: nextId(),
+      type: "unitSuffixNumbers",
+      sheet: sheet.name,
+      column: h.name,
+      letter: h.letter,
+      title: `Numbers written with a unit word in "${h.name}"`,
+      detail: `${matches.length} value${s(matches.length)} in "${h.name}" ${be(matches.length)} written as a number followed by a word like "${dominantUnit}" (for example "5 ${dominantUnit}"). The fix reads just the number, so it can be added, averaged, or compared. Anything that isn't a number-plus-word, like "N/A", is left as-is.`,
+      count: matches.length,
+      samples: sample(matches),
+      fixable: true,
+      fix: { normalizer: "stripUnitSuffix" },
+    });
+  }
+  return out;
+}
+
 function findCategoryVariants(sheet) {
   const out = [];
   for (const h of sheet.headers) {
@@ -472,6 +508,7 @@ export function checkupSheet(sheet) {
     ...findTextNumbers(sheet),
     ...findTextDates(sheet),
     ...findEpochDates(sheet),
+    ...findUnitSuffixNumbers(sheet),
     ...findCategoryVariants(sheet),
     ...findImpossible(sheet),
     ...findCensored(sheet),

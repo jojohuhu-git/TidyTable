@@ -12,13 +12,13 @@
 // each stage, then the surprises, loudly.
 
 import {
-  coerceNumbers, sentinelBlanks, parseDates, trimCase, censoredValues, splitList, foldKey, epochSerialToNumber,
+  coerceNumbers, sentinelBlanks, parseDates, trimCase, censoredValues, splitList, foldKey, epochSerialToNumber, stripUnitSuffix,
 } from "../checkup/normalizers.js";
 import { matchColumn } from "./recipe.js";
 import { applyCodesToColumn } from "./keyStore.js";
 import { buildReportCards } from "./reportCards.js";
 
-const CELL_FNS = { coerceNumbers, sentinelBlanks, parseDates, epochSerialToNumber };
+const CELL_FNS = { coerceNumbers, sentinelBlanks, parseDates, epochSerialToNumber, stripUnitSuffix };
 
 function rowSignature(row, names) {
   return JSON.stringify(names.map((n) => row[n]));
