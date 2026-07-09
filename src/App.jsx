@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ApiKeyPanel from "./components/ApiKeyPanel.jsx";
 import UploadPanel from "./components/UploadPanel.jsx";
 import CheckupPanel from "./components/CheckupPanel.jsx";
@@ -19,16 +19,21 @@ import { makeLogEvent, formatCleaningLog } from "./logic/checkup/cleaningLog.js"
 import { newRecipe, addStep, checkupStep } from "./logic/recipes/recipe.js";
 import { loadKeyStore } from "./logic/recipes/keyStore.js";
 import { runOffline } from "./logic/offline/runOffline.js";
+import { buildExampleWorkbook } from "./logic/exampleWorkbook.js";
+import { saveSession, loadSession } from "./logic/sessionPersistence.js";
 import ClarifyBox from "./components/ClarifyBox.jsx";
 import StatsPanel from "./components/StatsPanel.jsx";
 import RegressionWizard from "./components/RegressionWizard.jsx";
 import ChartsPanel from "./components/ChartsPanel.jsx";
 import ShelfPanel from "./components/ShelfPanel.jsx";
 
+const MAX_RUN_HISTORY = 8;
+
 export default function App() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("tidytable_api_key") || "");
   const [model, setModel] = useState(() => localStorage.getItem("tidytable_model") || DEFAULT_MODEL);
   const [workbook, setWorkbook] = useState(null);
+  const [originalWorkbook, setOriginalWorkbook] = useState(null); // B4: "start over" target
   const [excluded, setExcluded] = useState(() => new Set()); // "sheet::column"
   const [privacyMode, setPrivacyMode] = useState("sample"); // "sample" | "full"
   const [prompt, setPrompt] = useState("");
@@ -37,17 +42,59 @@ export default function App() {
   const [error, setError] = useState("");
   const [plan, setPlan] = useState(null);
   const [resultRows, setResultRows] = useState(null);
-  const [sessionLog, setSessionLog] = useState([]);
+  const [resultLabel, setResultLabel] = useState(""); // B3: "Result of: ..."
+  const [runHistory, setRunHistory] = useState([]); // B3: this session's past runs
+  const [activeHistoryId, setActiveHistoryId] = useState(null); // B3: which run history chip is showing
+  const [undoSnapshot, setUndoSnapshot] = useState(null); // B4: state just before the last apply
+  // B5: the workbook itself is not restored (it may be large or sensitive), but
+  // the small, JSON-safe log/recipe trail survives a refresh.
+  const savedSession = useMemo(() => loadSession(), []);
+  const [sessionLog, setSessionLog] = useState(() => savedSession?.sessionLog || []);
   const [checkupVersion, setCheckupVersion] = useState(0);
-  const [recipe, setRecipe] = useState(() => newRecipe());
+  const [recipe, setRecipe] = useState(() => savedSession?.recipe || newRecipe());
   const [keyStore, setKeyStore] = useState(() => loadKeyStore());
   const [notice, setNotice] = useState(""); // plain, non-error message (e.g. "add a definition")
   const [pendingGrain, setPendingGrain] = useState(null); // { grain, request } awaiting a combine-rows answer
+  const resultsRef = useRef(null);
 
   const dataContext = useMemo(() => {
     if (!workbook) return "";
     return buildDataContext(workbook, { excluded, privacyMode });
   }, [workbook, excluded, privacyMode]);
+
+  // B5: persist the log/recipe trail (small JSON) so an accidental refresh
+  // doesn't erase the record of what happened this session.
+  useEffect(() => {
+    saveSession({ sessionLog, recipe });
+  }, [sessionLog, recipe]);
+
+  // B5: warn before an accidental refresh/close loses the loaded workbook.
+  useEffect(() => {
+    if (!workbook) return undefined;
+    const handler = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [workbook]);
+
+  // B3: a fresh result should be easy to find on a long page, and labeled with
+  // what produced it so an earlier answer isn't mistaken for the new one.
+  function recordResult(label, newPlan, newResultRows) {
+    const id = `${Date.now()}-${Math.random()}`;
+    setPlan(newPlan);
+    setResultRows(newResultRows);
+    setResultLabel(label);
+    setActiveHistoryId(id);
+    setRunHistory((h) => [...h, { id, label, plan: newPlan, resultRows: newResultRows }].slice(-MAX_RUN_HISTORY));
+    requestAnimationFrame(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
+
+  function selectHistoryEntry(entry) {
+    setPlan(entry.plan);
+    setResultRows(entry.resultRows);
+    setResultLabel(entry.label);
+    setActiveHistoryId(entry.id);
+    resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   // Every request tries the offline engine first (build prompt §3.3). A confident
   // answer needs no key; an undefined clinical term blocks plainly; a per-patient
@@ -56,8 +103,7 @@ export default function App() {
   async function runOfflineFlow(request, options) {
     const res = runOffline(request, workbook, options);
     if (res.kind === "answer") {
-      setPlan(res.plan);
-      setResultRows(res.resultRows);
+      recordResult(`Result of: your question "${request}"`, res.plan, res.resultRows);
       return;
     }
     if (res.kind === "block") {
@@ -82,11 +128,10 @@ export default function App() {
       setStatus("Sending your request to Claude…");
       const userRequest = hint ? `${request}\n\n(${hint})` : request;
       const newPlan = await requestPlan({ apiKey, model, dataContext, userRequest, onStatus: setStatus });
-      setPlan(newPlan);
       setStatus("Running the extraction on your full data (inside your browser)…");
       const sheetsByName = Object.fromEntries(workbook.sheets.map((s) => [s.name, s.rows]));
       const rows = await runTransform(newPlan.transform_code, sheetsByName);
-      setResultRows(rows);
+      recordResult(`Result of: your question "${request}"`, newPlan, rows);
       setStatus("");
     } catch (err) {
       setError(friendlyApiError(err));
@@ -99,8 +144,6 @@ export default function App() {
   async function handleRun() {
     setError("");
     setNotice("");
-    setPlan(null);
-    setResultRows(null);
     setPendingGrain(null);
     await runOfflineFlow(prompt, {});
   }
@@ -115,14 +158,48 @@ export default function App() {
 
   function handleWorkbook(wb) {
     setWorkbook(wb);
+    setOriginalWorkbook(wb);
     setExcluded(new Set());
     setPlan(null);
     setResultRows(null);
+    setResultLabel("");
+    setRunHistory([]);
+    setActiveHistoryId(null);
+    setUndoSnapshot(null);
     setError("");
     setNotice("");
     setPendingGrain(null);
     setSessionLog([]);
     setRecipe(newRecipe());
+    setCheckupVersion((v) => v + 1);
+  }
+
+  // B2: a synthetic, clearly-fake workbook so a novice (or anyone with real PHI
+  // they're not ready to drop in yet) can try the whole app risk-free.
+  function handleTryExample() {
+    handleWorkbook(buildExampleWorkbook());
+  }
+
+  // B4: "Start over" drops every change and goes back to the file as uploaded.
+  function handleStartOver() {
+    if (!originalWorkbook) return;
+    handleWorkbook(originalWorkbook);
+  }
+
+  // B4: "Undo last apply" restores the single snapshot taken just before the
+  // most recent checkup apply — the sheet, the log event it added, and the
+  // recipe steps it recorded all revert together.
+  function handleUndo() {
+    if (!undoSnapshot) return;
+    setWorkbook(undoSnapshot.workbook);
+    setSessionLog(undoSnapshot.sessionLog);
+    setRecipe(undoSnapshot.recipe);
+    setUndoSnapshot(null);
+    setPlan(null);
+    setResultRows(null);
+    setResultLabel("");
+    setActiveHistoryId(null);
+    setRunHistory((h) => h.slice(0, -1)); // the undone apply's result no longer applies
     setCheckupVersion((v) => v + 1);
   }
 
@@ -136,20 +213,22 @@ export default function App() {
     setError("");
     setBusy(true);
     setStatus("Applying your fixes on this computer…");
+    setUndoSnapshot({ workbook, sessionLog, recipe });
     try {
       const { plan: fixPlan, log } = buildFixPlan(sheet, fixes);
       const rows = await runTransform(fixPlan.transform_code, { [sheet.name]: sheet.rows });
-      setPlan(fixPlan);
-      setResultRows(rows);
       const cleaned = deriveSheet(sheet.name, rows);
-      setWorkbook({ ...workbook, sheets: workbook.sheets.map((s, i) => (i === 0 ? cleaned : s)) });
+      const nextWorkbook = { ...workbook, sheets: workbook.sheets.map((s, i) => (i === 0 ? cleaned : s)) };
+      setWorkbook(nextWorkbook);
       setSessionLog((l) => [...l, makeLogEvent({ fileName: workbook.fileName, sheet: sheet.name, entries: log })]);
       // Record each applied fix into the monthly recipe so it can be replayed
       // on next month's file (build prompt §7).
       setRecipe((r) => fixes.reduce((acc, fix) => addStep(acc, checkupStep(fix)), r));
       setCheckupVersion((v) => v + 1);
+      recordResult(`Result of: ${fixes.length} checkup fix${fixes.length === 1 ? "" : "es"}`, fixPlan, rows);
       setStatus("");
     } catch (err) {
+      setUndoSnapshot(null);
       setError(friendlyApiError(err));
       setStatus("");
     } finally {
@@ -201,6 +280,14 @@ export default function App() {
             privacyMode={privacyMode}
             setPrivacyMode={setPrivacyMode}
           />
+          {!workbook && (
+            <p className="try-example-row">
+              <button className="btn btn-ghost" onClick={handleTryExample}>
+                Try it with example data
+              </button>
+              <span className="dim"> — synthetic, fake data, safe to explore. Nothing real.</span>
+            </p>
+          )}
         </section>
 
         {workbook && (
@@ -220,6 +307,14 @@ export default function App() {
               busy={busy}
               onApply={handleApplyFixes}
             />
+            <div className="workbook-actions">
+              <button className="btn btn-ghost" onClick={handleUndo} disabled={!undoSnapshot || busy}>
+                Undo last apply
+              </button>
+              <button className="btn btn-ghost" onClick={handleStartOver} disabled={busy}>
+                Start over from the uploaded file
+              </button>
+            </div>
           </section>
         )}
 
@@ -279,14 +374,31 @@ export default function App() {
         )}
 
         {workbook && (
-          <section className="card">
+          <section className="card" ref={resultsRef}>
             <h2><span className="step-label">Step 4</span> — Your results</h2>
             <p className="section-intro">
               When you apply checkup fixes or run a request, your cleaned data appears here,
               along with two ways to check it yourself: an Excel recipe and an RStudio script.
             </p>
+            {runHistory.length > 1 && (
+              <div className="run-history">
+                <span className="dim">This session: </span>
+                {runHistory.map((entry) => (
+                  <button
+                    key={entry.id}
+                    className={`history-chip ${entry.id === activeHistoryId ? "history-chip-active" : ""}`}
+                    onClick={() => selectHistoryEntry(entry)}
+                  >
+                    {entry.label.replace(/^Result of: /, "")}
+                  </button>
+                ))}
+              </div>
+            )}
             {plan && resultRows ? (
-              <ResultsPanel plan={plan} rows={resultRows} />
+              <>
+                {resultLabel && <p className="result-label">{resultLabel}</p>}
+                <ResultsPanel plan={plan} rows={resultRows} />
+              </>
             ) : (
               <p className="empty-state">
                 Nothing to show yet. Apply a fix in step 2, or describe what you want in step 3
@@ -296,73 +408,90 @@ export default function App() {
           </section>
         )}
 
+        {/* B1: optional, goal-grouped sections. Collapsed by default so a novice
+            with one question isn't forced to scroll past everything else to
+            find it. Pre-upload, the replay tool has nothing to number against
+            yet, so it's offered separately below without step numbering. */}
         {workbook && (
-          <section className="card">
-            <h2><span className="step-label">Step 5</span> — Save a monthly recipe</h2>
-            <p className="section-intro">
-              If this is a file you clean every month, save the steps as a recipe and replay them
-              next month in step 6. The checkup fixes you applied are recorded below. You can also
-              add a step that swaps names for stable codes and a final step that makes report cards.
-            </p>
-            <RecipePanel recipe={recipe} sheet={workbook.sheets[0]} onChange={setRecipe} />
-          </section>
+          <details className="step-group">
+            <summary>Monthly routine — save this cleanup as a recipe, replay it next month</summary>
+            <section className="card">
+              <h2><span className="step-label">Step 5</span> — Save a monthly recipe</h2>
+              <p className="section-intro">
+                If this is a file you clean every month, save the steps as a recipe and replay them
+                next month in step 6. The checkup fixes you applied are recorded below. You can also
+                add a step that swaps names for stable codes and a final step that makes report cards.
+              </p>
+              <RecipePanel recipe={recipe} sheet={workbook.sheets[0]} onChange={setRecipe} />
+            </section>
+            <section className="card">
+              <h2><span className="step-label">Step 6</span> — Replay on next month's file</h2>
+              <p className="section-intro">
+                Pick a saved recipe and next month's file. The recorded steps run again, and you get a
+                plain report of what happened — including anything new the rules did not cover, said
+                plainly rather than guessed. Report cards, if the recipe makes them, show codes only.
+              </p>
+              <ReplayPanel keyStore={keyStore} onKeyStore={setKeyStore} />
+            </section>
+          </details>
         )}
 
-        <section className="card">
-          <h2><span className="step-label">Step 6</span> — Replay on next month's file</h2>
-          <p className="section-intro">
-            Pick a saved recipe and next month's file. The recorded steps run again, and you get a
-            plain report of what happened — including anything new the rules did not cover, said
-            plainly rather than guessed. Report cards, if the recipe makes them, show codes only.
-          </p>
-          <ReplayPanel keyStore={keyStore} onKeyStore={setKeyStore} />
-        </section>
-
-        {workbook && (
+        {!workbook && (
           <section className="card">
-            <h2><span className="step-label">Step 7</span> — Compare two groups (statistics)</h2>
+            <h2>Already have a saved recipe?</h2>
             <p className="section-intro">
-              Pick a grouping column and an outcome column. The app builds the table the
-              numbers come from, chooses the right test, and shows every step — so you can
-              see where each number came from and check it yourself. No key needed.
+              Pick a saved recipe and a file to replay it on. The recorded steps run again, and you
+              get a plain report of what happened — including anything new the rules did not cover.
             </p>
-            <StatsPanel sheet={workbook.sheets[0]} />
-          </section>
-        )}
-
-        {workbook && (
-          <section className="card">
-            <h2><span className="step-label">Step 8</span> — Advanced models (regression)</h2>
-            <p className="section-intro">
-              For models with several variables at once. Answer three questions first; the app
-              checks whether your data can support the model and either recommends the right
-              method with an RStudio script, or explains plainly why it would not be trustworthy.
-            </p>
-            <RegressionWizard sheet={workbook.sheets[0]} />
+            <ReplayPanel keyStore={keyStore} onKeyStore={setKeyStore} />
           </section>
         )}
 
         {workbook && (
-          <section className="card">
-            <h2><span className="step-label">Step 9</span> — Make a chart</h2>
-            <p className="section-intro">
-              Pick what to compare. The app recommends the one chart that fits your data, shows a
-              preview here, and gives numbered steps to build the same chart in Excel.
-            </p>
-            <ChartsPanel sheet={workbook.sheets[0]} />
-          </section>
+          <details className="step-group">
+            <summary>Analyze &amp; chart — compare groups, run models, make a chart</summary>
+            <section className="card">
+              <h2><span className="step-label">Step 7</span> — Compare two groups (statistics)</h2>
+              <p className="section-intro">
+                Pick a grouping column and an outcome column. The app builds the table the
+                numbers come from, chooses the right test, and shows every step — so you can
+                see where each number came from and check it yourself. No key needed.
+              </p>
+              <StatsPanel sheet={workbook.sheets[0]} />
+            </section>
+            <section className="card">
+              <h2><span className="step-label">Step 8</span> — Advanced models (regression)</h2>
+              <p className="section-intro">
+                For models with several variables at once. Answer three questions first; the app
+                checks whether your data can support the model and either recommends the right
+                method with an RStudio script, or explains plainly why it would not be trustworthy.
+              </p>
+              <RegressionWizard sheet={workbook.sheets[0]} />
+            </section>
+            <section className="card">
+              <h2><span className="step-label">Step 9</span> — Make a chart</h2>
+              <p className="section-intro">
+                Pick what to compare. The app recommends the one chart that fits your data, shows a
+                preview here, and gives numbered steps to build the same chart in Excel.
+              </p>
+              <ChartsPanel sheet={workbook.sheets[0]} />
+            </section>
+          </details>
         )}
 
         {workbook && (
-          <section className="card">
-            <h2><span className="step-label">Step 10</span> — Combine and reshape</h2>
-            <p className="section-intro">
-              Common multi-step moves: find rows missing from another sheet, look up a value from a
-              second sheet, split paired list cells, or switch between one row per visit and one row
-              per patient. Nothing is guessed — anything that doesn't line up is shown, not dropped.
-            </p>
-            <ShelfPanel workbook={workbook} />
-          </section>
+          <details className="step-group">
+            <summary>Reshape — combine sheets, split cells, switch row grain</summary>
+            <section className="card">
+              <h2><span className="step-label">Step 10</span> — Combine and reshape</h2>
+              <p className="section-intro">
+                Common multi-step moves: find rows missing from another sheet, look up a value from a
+                second sheet, split paired list cells, or switch between one row per visit and one row
+                per patient. Nothing is guessed — anything that doesn't line up is shown, not dropped.
+              </p>
+              <ShelfPanel workbook={workbook} />
+            </section>
+          </details>
         )}
       </main>
 

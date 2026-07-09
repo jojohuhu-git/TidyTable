@@ -355,6 +355,36 @@ body {
   margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line);
 }
 
+/* B1: goal-grouped, collapsible step sections (Steps 5-10). */
+.step-group { margin-bottom: 1.25rem; }
+.step-group > summary {
+  cursor: pointer; font-weight: 600; color: var(--accent);
+  padding: 0.7rem 1rem; border: 1px solid var(--line); border-radius: var(--rad);
+  background: var(--card); list-style: none;
+}
+.step-group > summary::-webkit-details-marker { display: none; }
+.step-group > summary::before { content: "▸ "; }
+.step-group[open] > summary::before { content: "▾ "; }
+.step-group[open] > summary { border-radius: var(--rad) var(--rad) 0 0; margin-bottom: 0; }
+.step-group .card { border-top: none; border-radius: 0; margin-bottom: 0; }
+.step-group .card:last-child { border-radius: 0 0 var(--rad) var(--rad); margin-bottom: 1.25rem; }
+
+/* B2: try-it-with-example-data next to the dropzone. */
+.try-example-row { margin: 0.7rem 0 0; }
+
+/* B3: session history chips and the result label above Step 4's result. */
+.run-history { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-bottom: 0.8rem; }
+.history-chip {
+  border: 1px solid var(--line); background: var(--bg); border-radius: var(--rad);
+  font-size: 0.8rem; padding: 0.25rem 0.6rem; cursor: pointer; color: var(--ink-soft);
+}
+.history-chip:hover { background: var(--accent-soft); color: var(--ink); }
+.history-chip-active { border-color: var(--accent); color: var(--ink); font-weight: 600; }
+.result-label { margin: 0 0 0.6rem; font-weight: 600; color: var(--ink-soft); font-size: 0.92rem; }
+
+/* B4: undo / start-over controls for the checkup step. */
+.workbook-actions { display: flex; gap: 0.6rem; margin-top: 1rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+
 @media (max-width: 640px) {
   .masthead { flex-direction: column; }
   .keypanel-pop { right: auto; left: 0; }
