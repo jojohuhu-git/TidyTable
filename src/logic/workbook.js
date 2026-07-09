@@ -70,6 +70,16 @@ export async function parseWorkbookFile(file) {
     const matrix = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
     if (matrix.length === 0) continue;
 
+    // P1-9: `sheet_to_json` starts at the sheet's used range, which may not be
+    // row 1 (leading blank rows, or content that doesn't start at A1). Record
+    // the real physical row numbers so Excel-step ranges and the AI context
+    // can reference the sheet's actual extent instead of always assuming
+    // "row 2 to rows.length+1".
+    const range = ws["!ref"] ? XLSX.utils.decode_range(ws["!ref"]) : { s: { r: 0 }, e: { r: matrix.length - 1 } };
+    const excelHeaderRow = range.s.r + 1; // 1-indexed, matches Excel's own row numbers
+    const excelFirstDataRow = excelHeaderRow + 1;
+    const excelLastRow = range.e.r + 1;
+
     // Build unique header names from the first row.
     const rawHeader = matrix[0] || [];
     const width = Math.max(rawHeader.length, ...matrix.map((r) => r.length));
@@ -84,6 +94,7 @@ export async function parseWorkbookFile(file) {
     }
 
     const rows = [];
+    let droppedBlankRows = 0;
     for (let r = 1; r < matrix.length; r++) {
       const src = matrix[r] || [];
       let allNull = true;
@@ -94,6 +105,7 @@ export async function parseWorkbookFile(file) {
         if (val != null) allNull = false;
       }
       if (!allNull) rows.push(obj);
+      else droppedBlankRows++;
     }
 
     const headers = headerNames.map((h, i) => {
@@ -109,7 +121,10 @@ export async function parseWorkbookFile(file) {
     });
 
     if (rows.length > 0) {
-      sheets.push({ name, headers, rows, rowCount: rows.length });
+      sheets.push({
+        name, headers, rows, rowCount: rows.length,
+        excelFirstDataRow, excelLastRow, droppedBlankRows,
+      });
     }
   }
 
@@ -117,6 +132,34 @@ export async function parseWorkbookFile(file) {
     throw new Error("No data found in this file. Make sure the first row of each sheet contains column headers.");
   }
   return { fileName: file.name, sheets };
+}
+
+// P1-9: every Excel-step generator needs the sheet's real physical row
+// extent, not just "row 2 to rows.length+1" — that assumption breaks
+// whenever the sheet has leading rows before the header or blank rows
+// dropped from inside the data. parseWorkbookFile records the real numbers;
+// a sheet rebuilt by deriveSheet (e.g. after checkup fixes) has no leftover
+// physical file to reference, so it falls back to the tidy default.
+export function excelRowExtent(sheet) {
+  const firstDataRow = sheet.excelFirstDataRow ?? 2;
+  const lastRow = sheet.excelLastRow ?? sheet.rows.length + 1;
+  const droppedBlankRows = sheet.droppedBlankRows ?? 0;
+  const needsNote = droppedBlankRows > 0 || firstDataRow !== 2;
+  return { firstDataRow, lastRow, droppedBlankRows, needsNote };
+}
+
+// The one-sentence honesty note (P1-9) prepended to the first Excel step
+// whenever the sheet isn't perfectly tidy, so "fill down to row N" ranges are
+// visibly trustworthy rather than silently short or shifted.
+export function excelRowExtentNote(extent) {
+  const parts = [];
+  if (extent.firstDataRow !== 2) {
+    parts.push(`this sheet's header is in row ${extent.firstDataRow - 1}, not row 1`);
+  }
+  if (extent.droppedBlankRows > 0) {
+    parts.push(`${extent.droppedBlankRows} blank row${extent.droppedBlankRows === 1 ? "" : "s"} inside the data were skipped`);
+  }
+  return `Your file isn't perfectly tidy: ${parts.join(", and ")}. The ranges below go to row ${extent.lastRow} to cover the sheet's real extent.`;
 }
 
 // Rebuild a sheet object (headers, types, samples, rowCount) from a list of row

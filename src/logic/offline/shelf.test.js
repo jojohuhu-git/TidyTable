@@ -67,4 +67,25 @@ describe("reshape", () => {
     const long = reshapeWideToLong([{ pid: "P1", Na: 140, K: null }], "pid", ["Na", "K"]);
     expect(long).toEqual([{ pid: "P1", measure: "Na", value: 140 }]);
   });
+
+  // P1-12: long2wide silently let the same id+measure pair overwrite each
+  // other with no way to know it happened, and a measure literally named the
+  // same as the id column overwrote the id itself.
+  it("counts collisions when the same id has the same measure twice", () => {
+    const rows = [
+      { pid: "P1", test: "Na", val: 140 },
+      { pid: "P1", test: "Na", val: 145 }, // same patient, same measure again
+    ];
+    const { rows: wide, collisions } = reshapeLongToWide(rows, "pid", "test", "val");
+    expect(collisions).toBe(1);
+    expect(wide[0].Na).toBe(145); // the later value won, as documented
+  });
+
+  it("a measure named the same as the id column does not overwrite the id", () => {
+    const rows = [{ pid: "P1", test: "pid", val: "duplicate-id-value" }];
+    const { rows: wide, columns } = reshapeLongToWide(rows, "pid", "test", "val");
+    expect(wide[0].pid).toBe("P1"); // the real id survives
+    expect(wide[0]["pid (value)"]).toBe("duplicate-id-value");
+    expect(columns).toContain("pid (value)");
+  });
 });

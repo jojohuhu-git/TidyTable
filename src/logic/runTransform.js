@@ -1,7 +1,18 @@
-// Runs AI-generated transform code in a Web Worker (no DOM/network access there),
-// with a timeout, on the FULL local dataset. The data never leaves the browser here.
-
-const WORKER_SOURCE = `
+// Runs AI-generated transform code in a Web Worker, with a timeout, on the FULL
+// local dataset. The data never leaves the browser here. A worker has no DOM,
+// but it is NOT a security sandbox: it still has fetch/XMLHttpRequest/WebSocket,
+// so generated (or pasted) code could otherwise exfiltrate data over the
+// network. Shadowing those globals before running user code is hardening
+// against a buggy/misbehaving transform, not a real security boundary — a
+// worker's own JS engine can't be walled off from itself.
+// Exported so a test can run this exact source against a fake `self` without
+// needing a real Worker thread (jsdom/happy-dom don't implement one).
+export const WORKER_SOURCE = `
+self.fetch = undefined;
+self.XMLHttpRequest = undefined;
+self.WebSocket = undefined;
+self.EventSource = undefined;
+self.importScripts = undefined;
 self.onmessage = (e) => {
   const { code, sheets } = e.data;
   try {

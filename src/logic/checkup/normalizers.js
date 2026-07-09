@@ -170,16 +170,22 @@ export const EXCEL_STEPS = {
   },
   trimCase(ctx) {
     // params.map: { rawVariant: canonical }. Build a two-column lookup table the
-    // user pastes, then look each value up.
+    // user pastes, then look each value up. The two lookup columns are
+    // allocated from the same helper-column sequence as every other fix (see
+    // buildFixPlan.js), not hardcoded to Y/Z, so they can't collide with real
+    // data on a wide sheet or with another fix's own helper column.
     const pairs = Object.entries(ctx.params?.map || {});
-    const fromRange = `$Y$2:$Y$${pairs.length + 1}`;
-    const toRange = `$Z$2:$Z$${pairs.length + 1}`;
+    const fromLetter = ctx.lookupFromLetter;
+    const toLetter = ctx.lookupToLetter;
+    const fromRange = `$${fromLetter}$2:$${fromLetter}$${pairs.length + 1}`;
+    const toRange = `$${toLetter}$2:$${toLetter}$${pairs.length + 1}`;
+    const lookupRange = `$${fromLetter}$2:$${toLetter}$${pairs.length + 1}`;
     const table = pairs.map(([from, to]) => `  ${from}  ->  ${to}`).join("\n");
     return [{
       title: `Merge the spellings in "${ctx.colName}"`,
-      where: `Sheet "${ctx.sheetName}": in columns Y and Z put a small lookup table (each old spelling in Y, the chosen spelling in Z), then use cell ${helperCell(ctx)} and fill down to ${ctx.helperLetter}${ctx.lastRow}`,
+      where: `Sheet "${ctx.sheetName}": in columns ${fromLetter} and ${toLetter} put a small lookup table (each old spelling in ${fromLetter}, the chosen spelling in ${toLetter}), then use cell ${helperCell(ctx)} and fill down to ${ctx.helperLetter}${ctx.lastRow}`,
       formula: `=IFERROR(XLOOKUP(${firstCell(ctx)},${fromRange},${toRange}),${firstCell(ctx)})`,
-      instruction: `Paste this mapping into columns Y and Z:\n${table}\nThen column ${ctx.helperLetter} replaces each value in ${ctx.letter} with its chosen spelling (and leaves anything not listed unchanged). Fill down over ${fillRange(ctx)}. (Older Excel without XLOOKUP: use =IFERROR(VLOOKUP(${firstCell(ctx)},${fromRange.replace("$Y", "$Y").replace("$Z$", "$Z$")},1,FALSE),${firstCell(ctx)}) against a two-column table.)`,
+      instruction: `Paste this mapping into columns ${fromLetter} and ${toLetter}:\n${table}\nThen column ${ctx.helperLetter} replaces each value in ${ctx.letter} with its chosen spelling (and leaves anything not listed unchanged). Fill down over ${fillRange(ctx)}. (Older Excel without XLOOKUP: use =IFERROR(VLOOKUP(${firstCell(ctx)},${lookupRange},2,FALSE),${firstCell(ctx)}) against the two-column table above — the range must cover both columns and the index must be 2 to return the chosen spelling, not the old one.)`,
     }];
   },
   censoredValues(ctx) {
@@ -190,6 +196,18 @@ export const EXCEL_STEPS = {
         where: `Sheet "${ctx.sheetName}", cell ${helperCell(ctx)}, then fill down to ${ctx.helperLetter}${ctx.lastRow}`,
         formula: `=IF(ISNUMBER(VALUE(${firstCell(ctx)})),VALUE(${firstCell(ctx)}),"")`,
         instruction: `In a new column ${ctx.helperLetter}, this keeps plain numbers and leaves everything else (like "<0.5" or "pending") blank, so they are not counted as a value. Fill down over ${fillRange(ctx)}.`,
+      }];
+    }
+    // P1-7: "exclude" is a no-op in the app (the text is left exactly as it
+    // was) — the Excel step must say that plainly instead of emitting the
+    // boundary formula, which would convert "<0.5" to 0.5 in Excel while the
+    // app left it as text. No formula, no helper column: nothing to fill down.
+    if (policy === "exclude") {
+      return [{
+        title: `Leave "below/above limit" results in "${ctx.colName}" as-is`,
+        where: `Sheet "${ctx.sheetName}", column "${ctx.colName}"`,
+        formula: "",
+        instruction: `You chose to leave these values exactly as they are — no cells change here, and there is no formula to add. When you count or average "${ctx.colName}" in Excel, filter out or exclude cells like "<0.5" or ">100" first, since Excel would otherwise treat them as text (ignored by SUM/AVERAGE) or as an error if forced into a formula.`,
       }];
     }
     // boundary

@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { PLAN_SCHEMA } from "./schema.js";
 import { fakeValue, fakeStream } from "./synthetic.js";
+import { excelRowExtent } from "./workbook.js";
 
 export const MODELS = [
   { id: "claude-opus-4-8", label: "Claude Opus 4.8 — best quality (recommended)", supportsAdaptiveThinking: true },
@@ -64,7 +65,11 @@ export function buildDataContext(workbook, options) {
   lines.push("");
 
   for (const sheet of workbook.sheets) {
-    lines.push(`Sheet "${sheet.name}" — ${sheet.rowCount.toLocaleString()} data rows (data starts in row 2; row 1 is headers). Data rows span row 2 to row ${sheet.rowCount + 1}.`);
+    const extent = excelRowExtent(sheet);
+    const rowNote = extent.needsNote
+      ? ` Header is in row ${extent.firstDataRow - 1}; data rows run from row ${extent.firstDataRow} to row ${extent.lastRow} (this sheet has ${extent.droppedBlankRows} blank row${extent.droppedBlankRows === 1 ? "" : "s"} inside that range that were skipped, so the physical range is longer than the ${sheet.rowCount.toLocaleString()} data rows).`
+      : ` Data rows span row ${extent.firstDataRow} to row ${extent.lastRow}.`;
+    lines.push(`Sheet "${sheet.name}" — ${sheet.rowCount.toLocaleString()} data rows (data starts in row ${extent.firstDataRow}; row ${extent.firstDataRow - 1} is headers).${rowNote}`);
     const exampleLabel = privacyMode === "full" ? "example values" : "made-up example values";
     lines.push(`Columns (Excel letter | header name | type | ${exampleLabel}):`);
     // A single seeded stream per sheet keeps fakes stable and varied.

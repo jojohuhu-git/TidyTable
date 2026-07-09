@@ -6,6 +6,7 @@
 // with the data.
 
 import { colLetter } from "../letters.js";
+import { excelRowExtent, excelRowExtentNote } from "../workbook.js";
 import {
   coerceNumbers, sentinelBlanks, parseDates, trimCase, censoredValues, splitList, epochSerialToNumber, stripUnitSuffix,
   isValidCalendarDate, NORMALIZERS, EXCEL_STEPS,
@@ -143,7 +144,8 @@ function buildTransformCode(sheet, fixes) {
 // Excel helper-column steps: one (or more) per fix, using fresh helper columns.
 function buildExcelSteps(sheet, fixes) {
   const { cell, dedupe, split } = organize(fixes);
-  const lastRow = sheet.rows.length + 1;
+  const extent = excelRowExtent(sheet);
+  const lastRow = extent.lastRow;
   let helperIndex = sheet.headers.length; // first free column after the data
   const steps = [];
 
@@ -153,6 +155,14 @@ function buildExcelSteps(sheet, fixes) {
       sheetName: sheet.name, colName: fix.column, letter: header?.letter || "A",
       helperLetter: colLetter(helperIndex++), lastRow, params: fix.params,
     };
+    // P1-8: trimCase's pasted lookup table needs two more columns. Allocate
+    // them from the same helperIndex sequence (instead of hardcoding Y/Z) so
+    // they can't collide with real data on a wide sheet or with another
+    // fix's own helper column.
+    if (fix.normalizer === "trimCase") {
+      ctx.lookupFromLetter = colLetter(helperIndex++);
+      ctx.lookupToLetter = colLetter(helperIndex++);
+    }
     steps.push(...EXCEL_STEPS[fix.normalizer](ctx));
   }
 
@@ -168,6 +178,13 @@ function buildExcelSteps(sheet, fixes) {
   for (const fix of split) {
     const header = sheet.headers.find((h) => h.name === fix.column);
     steps.push(...EXCEL_STEPS.splitList({ sheetName: sheet.name, colName: fix.column, letter: header?.letter || "A" }));
+  }
+
+  // P1-9: a sheet with leading rows before the header, or blank rows dropped
+  // from inside the data, needs the reader to know the ranges above cover
+  // the sheet's real extent, not just "row 2 to rows.length+1".
+  if (extent.needsNote && steps.length) {
+    steps[0] = { ...steps[0], instruction: `${excelRowExtentNote(extent)} ${steps[0].instruction}` };
   }
 
   return steps;

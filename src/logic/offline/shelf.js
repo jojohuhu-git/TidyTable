@@ -106,7 +106,11 @@ export function reshapeLongToWide(rows, idCol, keyCol, valueCol) {
     const idk = foldKey(id);
     if (!byId.has(idk)) byId.set(idk, { [idCol]: id });
     const rec = byId.get(idk);
-    const key = String(r[keyCol]);
+    let key = String(r[keyCol]);
+    // P1-12: a measure literally named the same as the id column would
+    // otherwise silently overwrite the id value itself the first time it's
+    // seen (rec[idCol] is already set from initialization above).
+    if (key === idCol) key = `${key} (value)`;
     if (!keys.includes(key)) keys.push(key);
     if (rec[key] !== undefined) collisions++;
     rec[key] = r[valueCol];

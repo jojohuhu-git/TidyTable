@@ -40,7 +40,10 @@ export default function ShelfPanel({ workbook }) {
       if (op === "lookup" && B && key && bring.length) return withFlag(leftJoinLookup(A.rows, B.rows, key, bring), "unmatched", "had no match");
       if (op === "asof" && B && key && time && bring.length) return withFlag(asOfJoin(A.rows, B.rows, key, time, bring), "unmatched", "had no earlier record");
       if (op === "explode" && colX && colY) return withFlag(explodePairedLists(A.rows, colX, colY), "mismatched", "had lists of different lengths (left for you to fix)");
-      if (op === "long2wide" && key && colX && colY) { const r = reshapeLongToWide(A.rows, key, colX, colY); return single(r.rows); }
+      if (op === "long2wide" && key && colX && colY) {
+        const r = reshapeLongToWide(A.rows, key, colX, colY);
+        return { ...single(r.rows), collisionCount: r.collisions };
+      }
       if (op === "wide2long" && key && bring.length) return single(reshapeWideToLong(A.rows, key, bring));
       return null;
     } catch (err) {
@@ -154,6 +157,11 @@ export default function ShelfPanel({ workbook }) {
           {result.flagRows?.length > 0 && (
             <div className="notice-box" role="status">
               {result.flagRows.length} row{result.flagRows.length === 1 ? "" : "s"} {result.flagLabel} — decide what to do with them. Nothing was dropped or guessed.
+            </div>
+          )}
+          {result.collisionCount > 0 && (
+            <div className="notice-box" role="status">
+              {result.collisionCount} value{result.collisionCount === 1 ? " was" : "s were"} overwritten because the same "{key}" had the same measure more than once — the last one won; check these before trusting the table.
             </div>
           )}
           {result.rows.length > 0 && <DataTable rows={result.rows} maxRows={100} />}

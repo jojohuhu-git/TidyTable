@@ -5,10 +5,18 @@
 // counts so re-running on new data stays honest.
 
 import { executeCohort, executeAggregation, toNumber } from "./cohort.js";
+import { excelRowExtent, excelRowExtentNote } from "../workbook.js";
 
 const RESULT_KEYS = { checked: "What was checked", matched: "Matched", out: "Out of", share: "Share" };
 const AGG_LABEL = { sum: "Sum", average: "Average", distinct: "Distinct count" };
 const AGG_FORMULA = { sum: "SUMIFS", average: "AVERAGEIFS" };
+
+// P1-9: prepend the sheet's real-extent honesty note to the first step,
+// whenever the sheet isn't perfectly tidy (see excelRowExtent/workbook.js).
+function withExtentNote(steps, extent) {
+  if (!extent.needsNote || !steps.length) return steps;
+  return [{ ...steps[0], instruction: `${excelRowExtentNote(extent)} ${steps[0].instruction}` }, ...steps.slice(1)];
+}
 
 function letterFor(sheet, colName) {
   const h = sheet.headers.find((x) => x.name === colName);
@@ -35,7 +43,8 @@ function buildSummary(match, exec) {
 // to that level. Set ("one of") conditions can't be a single COUNTIFS, so those
 // get an honest AutoFilter instruction instead of a misleading formula.
 function buildExcelSteps(match, exec, sheet) {
-  const lastRow = sheet.rows.length + 1;
+  const extent = excelRowExtent(sheet);
+  const lastRow = extent.lastRow;
   const range = (col) => `'${sheet.name}'!${letterFor(sheet, col)}2:${letterFor(sheet, col)}${lastRow}`;
   const crit = (op, value) => (op === "=" ? `"${value}"` : `"${op}${value}"`);
 
@@ -73,7 +82,7 @@ function buildExcelSteps(match, exec, sheet) {
     }
     steps.push(step);
   });
-  return steps;
+  return withExtentNote(steps, extent);
 }
 
 // The transform body the worker can re-run: it rebuilds the same counts table
@@ -129,13 +138,14 @@ function buildGroupCountSummary(match, exec) {
 }
 
 function buildGroupCountExcelSteps(match, exec, sheet) {
-  const lastRow = sheet.rows.length + 1;
+  const extent = excelRowExtent(sheet);
+  const lastRow = extent.lastRow;
   const range = (col) => `'${sheet.name}'!${letterFor(sheet, col)}2:${letterFor(sheet, col)}${lastRow}`;
   const crit = (op, value) => (op === "=" ? `"${value}"` : `"${op}${value}"`);
   const hasSet = match.stages.some((s) => s.condition.kind === "set");
 
   if (hasSet) {
-    return [{
+    return withExtentNote([{
       title: `Breakdown by "${exec.groupColumn}"`,
       where: `Sheet "${sheet.name}"`,
       formula: "",
@@ -143,7 +153,7 @@ function buildGroupCountExcelSteps(match, exec, sheet) {
         `Turn on Data > Filter and filter each column to the values that count for the conditions above. Then build a ` +
         `PivotTable with "${exec.groupColumn}" in Rows and Count of any column in Values to see the breakdown per group. ` +
         `A single COUNTIFS cannot list several accepted values, so filtering first is the honest way here.`,
-    }];
+    }], extent);
   }
 
   const filterPairs = [];
@@ -152,7 +162,7 @@ function buildGroupCountExcelSteps(match, exec, sheet) {
     filterPairs.push(`${range(c.column)}, ${crit(c.op, c.value)}`);
     if (c.when) filterPairs.push(`${range(c.when.column)}, "${c.when.value}"`);
   }
-  return exec.groupResults.map((g, i) => {
+  const steps = exec.groupResults.map((g, i) => {
     const pairs = [`${range(exec.groupColumn)}, ${crit("=", g.label)}`, ...filterPairs];
     const step = {
       title: `${g.label}`,
@@ -163,6 +173,7 @@ function buildGroupCountExcelSteps(match, exec, sheet) {
     if (i === 0) step.teaches = "COUNTIFS counts rows that meet several conditions at once — each pair is a column to look in and what to look for.";
     return step;
   });
+  return withExtentNote(steps, extent);
 }
 
 function buildGroupCountTransformCode(match) {
@@ -254,7 +265,8 @@ function buildAggregationSummary(match, exec, label) {
 }
 
 function buildAggregationExcelSteps(match, exec, sheet, label) {
-  const lastRow = sheet.rows.length + 1;
+  const extent = excelRowExtent(sheet);
+  const lastRow = extent.lastRow;
   const range = (col) => `'${sheet.name}'!${letterFor(sheet, col)}2:${letterFor(sheet, col)}${lastRow}`;
   const crit = (op, value) => (op === "=" ? `"${value}"` : `"${op}${value}"`);
   const filterPairs = [];
@@ -270,7 +282,7 @@ function buildAggregationExcelSteps(match, exec, sheet, label) {
 
   if (exec.aggIntent === "distinct" || hasSet) {
     const groupNote = exec.mode === "group" ? ` for each value of "${exec.groupColumn}"` : "";
-    return [{
+    return withExtentNote([{
       title: label,
       where: `Sheet "${sheet.name}"`,
       formula: "",
@@ -281,11 +293,11 @@ function buildAggregationExcelSteps(match, exec, sheet, label) {
         `Then, to get a distinct count${groupNote}, copy the "${exec.targetColumn}" column for the filtered rows to a new area, ` +
         "use Data > Remove Duplicates, and the remaining row count is the distinct count. It should equal " +
         (exec.mode === "group" ? "the numbers in the result table." : `${exec.value}.`),
-    }];
+    }], extent);
   }
 
   if (exec.mode === "group") {
-    return exec.results.map((g, i) => {
+    const steps = exec.results.map((g, i) => {
       const pairs = [`${range(exec.groupColumn)}, ${crit("=", g.label)}`, ...filterPairs];
       const step = {
         title: `${g.label}`,
@@ -300,9 +312,10 @@ function buildAggregationExcelSteps(match, exec, sheet, label) {
       }
       return step;
     });
+    return withExtentNote(steps, extent);
   }
 
-  return [{
+  return withExtentNote([{
     title: label,
     where: "An empty cell",
     formula: filterPairs.length
@@ -312,7 +325,7 @@ function buildAggregationExcelSteps(match, exec, sheet, label) {
     teaches: exec.aggIntent === "sum"
       ? "SUMIFS/SUM add up a numeric column, optionally only counting rows that meet given conditions."
       : "AVERAGEIFS/AVERAGE compute the mean of a numeric column, optionally only over rows that meet given conditions.",
-  }];
+  }], extent);
 }
 
 function buildAggregationTransformCode(match, label) {
