@@ -117,6 +117,25 @@ export function executeCohort(match, workbook) {
     return { unit: `${match.grain.entity}s`, total, levels, mode: "group-then-test" };
   }
 
+  // A3 Level 2: "how many patients per diagnosis" — a plain count/share broken
+  // down one row per group value, instead of (or on top of) any filter stages.
+  if (match.groupColumn) {
+    let filtered = rows;
+    for (const stage of match.stages) filtered = filtered.filter(predicate(stage.condition));
+    const total = filtered.length;
+    const groups = new Map(); // folded value -> { label, count }
+    for (const r of filtered) {
+      const v = r[match.groupColumn];
+      if (v == null || String(v).trim() === "") continue;
+      const k = foldKey(v);
+      const entry = groups.get(k) || { label: v, count: 0 };
+      entry.count += 1;
+      groups.set(k, entry);
+    }
+    const groupResults = [...groups.values()].map((g) => ({ ...g, proportion: pct(g.count, total) }));
+    return { unit: "rows", total, groupColumn: match.groupColumn, groupResults, mode: "group-by" };
+  }
+
   let current = rows;
   const total = rows.length;
   let prev = total;
@@ -133,4 +152,63 @@ export function executeCohort(match, workbook) {
     prev = count;
   }
   return { unit: "rows", total, levels, mode: "row", matchedRows: current };
+}
+
+// A3 Level 2: compute one number per group (or one overall) for an average,
+// sum, or distinct-count aggregation. Any filter stages run first — same
+// predicate() machinery as a plain count — then the aggregate is taken over
+// the resolved target column, per group when a group-by column was resolved.
+// A row that has no readable number in the target column is not counted as 0;
+// it is tallied separately so the summary can say plainly it was skipped.
+export function aggregateOne(rowsIn, targetColumn, aggIntent) {
+  if (aggIntent === "distinct") {
+    const seen = new Set();
+    for (const r of rowsIn) {
+      const v = r[targetColumn];
+      if (v == null || String(v).trim() === "") continue;
+      seen.add(foldKey(v));
+    }
+    return { value: seen.size, skipped: 0, n: rowsIn.length };
+  }
+  let sum = 0;
+  let n = 0;
+  let skipped = 0;
+  for (const r of rowsIn) {
+    const num = toNumber(r[targetColumn]);
+    if (num == null) { skipped++; continue; }
+    sum += num;
+    n++;
+  }
+  const value = aggIntent === "sum" ? sum : (n ? Math.round((sum / n) * 100) / 100 : null);
+  return { value, skipped, n };
+}
+
+// match: a "confident" match with match.aggregation set (see matcher.js).
+export function executeAggregation(match, workbook) {
+  const sheet = workbook.sheets.find((s) => s.name === match.sheetName) || workbook.sheets[0];
+  let rows = sheet.rows;
+  for (const stage of match.stages) rows = rows.filter(predicate(stage.condition));
+
+  const { targetColumn, groupColumn } = match.aggregation;
+  const aggIntent = match.intent;
+
+  if (groupColumn) {
+    const groups = new Map(); // folded value -> { label, rows: [] }
+    for (const r of rows) {
+      const v = r[groupColumn];
+      if (v == null || String(v).trim() === "") continue;
+      const k = foldKey(v);
+      if (!groups.has(k)) groups.set(k, { label: v, rows: [] });
+      groups.get(k).rows.push(r);
+    }
+    const results = [...groups.values()].map((g) => ({
+      label: g.label,
+      rowCount: g.rows.length,
+      ...aggregateOne(g.rows, targetColumn, aggIntent),
+    }));
+    return { mode: "group", groupColumn, targetColumn, aggIntent, total: rows.length, results };
+  }
+
+  const one = aggregateOne(rows, targetColumn, aggIntent);
+  return { mode: "single", targetColumn, aggIntent, total: rows.length, ...one };
 }

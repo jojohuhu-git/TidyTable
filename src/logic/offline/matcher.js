@@ -63,6 +63,62 @@ function termWords(clause) {
   return words(clause).filter((w) => !STOP.has(w));
 }
 
+// A3 Level 2: pull a "per X"/"by X"/"grouped by X" grouping column out of a
+// request. Only fires when the phrase after the marker resolves to a real
+// header name — otherwise the marker word almost always belongs to an
+// ordinary filter clause ("treated by cephalexin" is a Drug value, not a
+// grouping column) and is left for resolveCondition to handle as before.
+// Longest marker first so "grouped by"/"broken down by" win over a bare "by"
+// inside them.
+function resolveGroupBy(text, headers) {
+  const markers = [...GROUP_WORDS].sort((a, b) => b.length - a.length);
+  for (const marker of markers) {
+    const re = new RegExp(`(^|[^a-z])${marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`, "i");
+    const m = re.exec(text);
+    if (!m) continue;
+    const start = m.index + m[1].length;
+    const end = start + marker.length;
+    const rest = text.slice(end);
+    const stop = rest.search(/,|\bhow many\b|\bhow much\b/i);
+    const phraseText = stop === -1 ? rest : rest.slice(0, stop);
+    const phrase = termWords(phraseText).join(" ");
+    if (!phrase) continue;
+    const column = fuzzyColumn(phrase, headers);
+    if (column) return { column, start, end: end + (stop === -1 ? rest.length : stop) };
+  }
+  return null;
+}
+
+// A light plural -> singular fallback so "how many different diagnoses"
+// matches a "Diagnosis" header. Not a real stemmer — just enough for common
+// clinical/business nouns (diagnoses, drugs, prescribers, categories).
+function singularize(word) {
+  if (/oses$/i.test(word)) return word.slice(0, -4) + "osis"; // diagnoses -> diagnosis
+  if (/(ches|shes|xes|sses)$/i.test(word)) return word.slice(0, -2);
+  if (/ies$/i.test(word)) return word.slice(0, -3) + "y"; // categories -> category
+  if (/s$/i.test(word) && !/ss$/i.test(word)) return word.slice(0, -1);
+  return word;
+}
+
+// A3 Level 2: pull the column to sum/average/distinct-count out of a request
+// — "average duration_days" -> "Duration_days", "total cost" -> "Cost", "how
+// many different diagnoses" -> "Diagnosis". Looks at the words right after the
+// matched intent phrase first (the common order), then the words before it.
+function resolveAggregationTarget(text, intentPhrase, headers) {
+  const lower = text.toLowerCase();
+  const idx = lower.indexOf(intentPhrase);
+  if (idx === -1) return null;
+  const after = text.slice(idx + intentPhrase.length);
+  const before = text.slice(0, idx);
+  for (const candidate of [after, before]) {
+    const tw = termWords(candidate);
+    if (!tw.length) continue;
+    const column = fuzzyColumn(tw.join(" "), headers) || fuzzyColumn(tw.map(singularize).join(" "), headers);
+    if (column) return column;
+  }
+  return null;
+}
+
 // Resolve a single filter phrase into a condition, trying (in order): a threshold
 // ("... over 7"), a value present in the data (value scan), then the Definitions
 // sheet. Anything left over is a missing term the app must refuse to guess.
@@ -258,16 +314,32 @@ export function matchRequest(request, workbook, defs, options = {}) {
   const index = valueIndex(sheet);
 
   const intent = detectIntent(request);
-  const cohort = extractCohort(request);
 
-  // A3 Level 1: "average"/"sum" is the dominant intent word and no count-style
-  // phrase ("how many" etc.) also matched (detectIntent already prefers the
-  // longest phrase, so "how many … average duration" still resolves to
-  // count). The engine cannot compute either, so decline honestly right away
-  // rather than let the "average"/"total" word wash through as an unresolved
-  // filter term and falsely ask for a Definitions row.
-  if (intent && (intent.intent === "average" || intent.intent === "sum")) {
-    return { status: "none", reason: `unsupported-${intent.intent}`, request };
+  // A3 Level 2: resolve a "per X"/"by X"/"grouped by X" breakdown column
+  // first, against the raw request, and strip its clause out before looking
+  // for a cohort clause. A cohort clause is greedy (everything up to a comma
+  // or "how many"), so resolving it first would swallow a trailing group-by
+  // phrase as if it were part of the filter term (e.g. "of patients with UTI
+  // per drug" would otherwise read "UTI per drug" as one filter phrase).
+  const groupBy = resolveGroupBy(request, headers);
+  const preCohortText = groupBy ? (request.slice(0, groupBy.start) + " " + request.slice(groupBy.end)).trim() : request;
+  const cohort = extractCohort(preCohortText);
+
+  // A3 Level 2: average/sum/distinct try to resolve a real numeric/target
+  // column before anything else. Only decline outright (as Level 1 did) when
+  // no column can be pinned down — a genuinely unresolvable aggregation
+  // request still gets the honest capability message, but "average
+  // duration_days [for patients with X] [per Y]" now actually computes.
+  if (intent && (intent.intent === "average" || intent.intent === "sum" || intent.intent === "distinct")) {
+    // Search for the target column with any cohort clause ("for patients with
+    // UTI") stripped out too, so its words don't get glued onto the target
+    // phrase and break the fuzzy column match.
+    const targetSearchText = cohort ? (preCohortText.slice(0, cohort.start) + " " + preCohortText.slice(cohort.end)).trim() : preCohortText;
+    const targetColumn = resolveAggregationTarget(targetSearchText, intent.phrase, headers);
+    if (!targetColumn) {
+      return { status: "none", reason: `unsupported-${intent.intent}`, request };
+    }
+    return matchAggregation(request, intent, targetColumn, cohort, groupBy, sheet, headers, index, defs);
   }
 
   // A cohort question needs either a counting word ("how many", "what share")
@@ -278,8 +350,9 @@ export function matchRequest(request, workbook, defs, options = {}) {
   }
 
   // Build the remainder after removing the cohort clause, then split into levels.
-  let remainder = request;
-  if (cohort) remainder = (request.slice(0, cohort.start) + " " + request.slice(cohort.end)).trim();
+  let remainder = preCohortText;
+  if (cohort) remainder = (preCohortText.slice(0, cohort.start) + " " + preCohortText.slice(cohort.end)).trim();
+
   const levelTexts = splitNestedLevels(remainder).filter((t) => termWords(t).length > 0);
 
   // Assemble the ordered filter stages: cohort base first, then each level.
@@ -287,8 +360,8 @@ export function matchRequest(request, workbook, defs, options = {}) {
   if (cohort) rawStages.push({ text: cohort.termText, role: "cohort" });
   for (const t of levelTexts) rawStages.push({ text: t, role: "level" });
 
-  // With no intent and no cohort and no stages, this is not our kind of request.
-  if (!intent && !cohort && rawStages.length === 0) {
+  // With no intent, no cohort, no group-by and no stages, this is not our kind of request.
+  if (!intent && !cohort && !groupBy && rawStages.length === 0) {
     return { status: "none", reason: "unrecognized", request };
   }
 
@@ -324,12 +397,15 @@ export function matchRequest(request, workbook, defs, options = {}) {
     };
   }
 
-  if (stages.length === 0) {
+  if (stages.length === 0 && !groupBy) {
     // We caught an intent word but could not pin down what to filter on.
     return { status: "none", reason: "no-conditions", request };
   }
 
-  const grain = detectGrain(request, sheet, headers);
+  // A group-by breakdown counts rows per group directly; the per-patient grain
+  // question ("combine each patient's rows first?") is about a plain count,
+  // not a breakdown, so skip it once a group-by has already been resolved.
+  const grain = groupBy ? null : detectGrain(request, sheet, headers);
   const grainMode = options.grainMode || null;
   if (grain && !grainMode) {
     return { status: "grain", grain, request };
@@ -339,9 +415,54 @@ export function matchRequest(request, workbook, defs, options = {}) {
     status: "confident",
     intent: intent?.intent || "count",
     stages,
+    groupColumn: groupBy?.column || null,
     grain: grainMode === "group-then-test" ? grain : null,
     grainMode: grainMode || "row",
-    lookedFor: describeLookedFor(stages, intent, grainMode, grain),
+    lookedFor: describeLookedFor(stages, intent, grainMode, grain, groupBy),
+    sheetName: sheet.name,
+  };
+}
+
+// A3 Level 2: resolve an average/sum/distinct request once a target column is
+// pinned down. Reuses the same cohort/filter machinery a plain count uses —
+// nested "of those" nesting is out of scope for an aggregation, so only the
+// cohort clause (if any) becomes a filter stage.
+function matchAggregation(request, intent, targetColumn, cohort, groupBy, sheet, headers, index, defs) {
+  const rawStages = [];
+  if (cohort) rawStages.push({ text: cohort.termText, role: "cohort" });
+
+  const stages = rawStages
+    .flatMap((s) => resolveConditions(s.text, sheet, headers, index, defs).map((condition) => ({ ...s, condition })))
+    .filter((s) => s.condition);
+
+  const partial = stages.find((s) => s.condition.kind === "partial");
+  if (partial) {
+    return {
+      status: "partial",
+      understood: partial.condition.matched,
+      unmatchedText: partial.condition.unmatchedText,
+      clause: partial.condition.term,
+      request,
+    };
+  }
+
+  const missing = stages.filter((s) => s.condition.kind === "missing").map((s) => s.condition);
+  if (missing.length) {
+    return {
+      status: "needs_definitions",
+      missingTerms: missing,
+      definitionsPresent: Boolean(defs?.present),
+      request,
+    };
+  }
+
+  return {
+    status: "confident",
+    intent: intent.intent,
+    aggregation: { targetColumn, groupColumn: groupBy?.column || null },
+    stages,
+    grainMode: "row",
+    lookedFor: describeLookedForAggregation(intent.intent, targetColumn, stages, groupBy),
     sheetName: sheet.name,
   };
 }
@@ -358,9 +479,20 @@ function opWord(op) {
 
 // The trust panel line (build prompt §8, §12): spell the filters back so a wrong
 // guess is visible before anyone trusts the number.
-export function describeLookedFor(stages, intent, grainMode, grain) {
+export function describeLookedFor(stages, intent, grainMode, grain, groupBy) {
   const who = grainMode === "group-then-test" && grain ? `${grain.entity}s (combining each one's rows first)` : "rows";
   const lead = intent?.intent === "proportion" ? `Finding the share of ${who}` : `Counting ${who}`;
   const parts = stages.map((s) => conditionPhrase(s.condition));
-  return `${lead} where ${parts.join(", then ")}.`;
+  const where = parts.length ? ` where ${parts.join(", then ")}` : "";
+  const brokenDown = groupBy ? `, broken down by "${groupBy.column}"` : "";
+  return `${lead}${where}${brokenDown}.`;
+}
+
+// A3 Level 2: the trust panel line for an average/sum/distinct request.
+export function describeLookedForAggregation(aggIntent, targetColumn, stages, groupBy) {
+  const verb = { sum: "Adding up", average: "Averaging", distinct: "Counting the distinct values of" }[aggIntent] || "Computing";
+  const parts = stages.map((s) => conditionPhrase(s.condition));
+  const where = parts.length ? ` where ${parts.join(", then ")}` : "";
+  const brokenDown = groupBy ? `, broken down by "${groupBy.column}"` : "";
+  return `${verb} "${targetColumn}"${where}${brokenDown}.`;
 }
