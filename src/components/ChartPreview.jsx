@@ -29,27 +29,44 @@ function niceMax(v) {
   return Math.ceil(v / mag) * mag;
 }
 
+// P2-15: a negative value has no natural "start at zero, grow right" bar —
+// draw it growing left from a zero axis instead of clamping/misreading it.
 function BarChart({ dataset, fill }) {
   const padL = 130;
   const padR = 40;
   const padY = 16;
   const points = dataset.points;
-  const max = niceMax(maxOf(points.map((p) => p.value)));
+  const values = points.map((p) => p.value);
+  const posMax = niceMax(maxOf(values, 0));
+  const negMax = niceMax(maxOf(values.map((v) => -v), 0));
+  const totalRange = posMax + negMax || 1;
+  const scale = (W - padL - padR) / totalRange;
+  const zeroX = padL + negMax * scale;
   const rowH = (H - padY * 2) / points.length;
   const barH = Math.min(rowH * 0.62, 34);
-  const scale = (W - padL - padR) / max;
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="chart-svg" role="img" aria-label="Bar chart">
+      {negMax > 0 && <line x1={zeroX} y1={padY} x2={zeroX} y2={H - padY} stroke="var(--line)" />}
       {points.map((p, i) => {
         const y = padY + i * rowH + (rowH - barH) / 2;
-        const w = Math.max(1, p.value * scale);
+        const w = Math.max(1, Math.abs(p.value) * scale);
+        const negative = p.value < 0;
+        const x = negative ? zeroX - w : zeroX;
         return (
           <g key={i}>
             <text x={padL - 8} y={y + barH / 2} textAnchor="end" dominantBaseline="middle" className="chart-label">
               {p.label.length > 18 ? p.label.slice(0, 17) + "…" : p.label}
             </text>
-            <rect x={padL} y={y} width={w} height={barH} fill={fill(p.label)} rx="2" />
-            <text x={padL + w + 5} y={y + barH / 2} dominantBaseline="middle" className="chart-value">{p.value}</text>
+            <rect x={x} y={y} width={w} height={barH} fill={fill(p.label)} rx="2" />
+            <text
+              x={negative ? x - 5 : x + w + 5}
+              y={y + barH / 2}
+              textAnchor={negative ? "end" : "start"}
+              dominantBaseline="middle"
+              className="chart-value"
+            >
+              {p.value}
+            </text>
           </g>
         );
       })}
@@ -96,6 +113,21 @@ function PieChart({ dataset, fill }) {
     <svg viewBox={`0 0 ${W} ${H}`} className="chart-svg" role="img" aria-label="Pie chart">
       {dataset.points.map((p, i) => {
         const frac = p.value / total;
+        const color = dataset.points.length <= 4 ? greys[i % greys.length] : "var(--accent)";
+        // P2-15: a 100% slice is a full circle — the arc's start and end
+        // point coincide, so an SVG "A" path draws nothing. Draw a <circle>
+        // instead whenever a single slice accounts for (essentially) the
+        // whole pie.
+        if (frac >= 1 - 1e-9) {
+          return (
+            <g key={i}>
+              <circle cx={cx} cy={cy} r={r} fill={fill ? fill(p.label) : color} stroke="var(--card)" strokeWidth="1.5" />
+              <text x={cx} y={cy + r + 18} textAnchor="middle" dominantBaseline="middle" className="chart-label">
+                {p.label} ({Math.round(frac * 100)}%)
+              </text>
+            </g>
+          );
+        }
         const end = angle + frac * 2 * Math.PI;
         const large = frac > 0.5 ? 1 : 0;
         const x1 = cx + r * Math.cos(angle);
@@ -105,7 +137,6 @@ function PieChart({ dataset, fill }) {
         const mid = (angle + end) / 2;
         const d = `M${cx},${cy} L${x1.toFixed(1)},${y1.toFixed(1)} A${r},${r} 0 ${large} 1 ${x2.toFixed(1)},${y2.toFixed(1)} Z`;
         angle = end;
-        const color = dataset.points.length <= 4 ? greys[i % greys.length] : "var(--accent)";
         return (
           <g key={i}>
             <path d={d} fill={fill ? fill(p.label) : color} stroke="var(--card)" strokeWidth="1.5" />

@@ -50,7 +50,12 @@ export function recommendChart(dataset) {
   // Plain categories → bars are the safe, always-readable default.
   const alternatives = [];
   let noPieReason = null;
-  if (n <= PIE_MAX_SLICES) {
+  const hasNegative = dataset.points.some((p) => p.value < 0);
+  if (hasNegative) {
+    // P2-15: a negative value isn't a share of a whole — a pie slice can't
+    // represent it honestly, so never offer one, regardless of slice count.
+    noPieReason = "Some values are negative, and a pie can't show a negative share of a whole.";
+  } else if (n <= PIE_MAX_SLICES) {
     alternatives.push({ type: "pie", reason: `Only ${n} parts, so a pie is readable if these add up to a whole.` });
   } else {
     noPieReason = `A ${n}-slice pie is hard to read; bars compare ${n} categories clearly.`;

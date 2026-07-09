@@ -68,6 +68,12 @@ describe("advisor is opinionated", () => {
     expect(rec.alternatives.some((a) => a.type === "pie")).toBe(false);
     expect(rec.noPieReason).toMatch(/9-slice pie/);
   });
+  it("P2-15: refuses to offer a pie when a value is negative, even under the slice cap", () => {
+    const rec = recommendChart({ kind: "categorical", points: [{ label: "a", value: 3 }, { label: "b", value: -1 }] });
+    expect(rec.type).toBe("bar");
+    expect(rec.alternatives.some((a) => a.type === "pie")).toBe(false);
+    expect(rec.noPieReason).toMatch(/negative/i);
+  });
   it("recommends a line for time labels", () => {
     expect(recommendChart({ kind: "categorical", labelIsTime: true, points: [{ label: "Jan", value: 1 }] }).type).toBe("line");
   });
