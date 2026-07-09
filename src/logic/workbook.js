@@ -1,9 +1,29 @@
 import * as XLSX from "xlsx";
 import { colLetter } from "./letters.js";
+import { coerceNumbers } from "./checkup/normalizers.js";
+
+// CSV/TSV field-type guessing (SheetJS's own date/number inference on raw text)
+// happens before the checkup layer ever sees a cell, and disagrees with it: it
+// silently decided "3/6/2024" means March 6, and turned "<0.5" into a date
+// entirely. For delimited text files we read every cell as a literal string
+// instead (raw: true), then coerce only unambiguous, clean numeric strings
+// ourselves with the same normalizer the cleaning step uses — so a censored
+// value or an ambiguous date reaches the checkup/normalizer layer untouched,
+// which shows its work and asks, rather than guessing silently.
+function isDelimitedText(file) {
+  const name = (file.name || "").toLowerCase();
+  return name.endsWith(".csv") || name.endsWith(".tsv")
+    || file.type === "text/csv" || file.type === "text/tab-separated-values";
+}
 
 // Convert a raw cell to a JSON-friendly value.
 // Dates become ISO strings ("YYYY-MM-DD" or full ISO if there's a time part).
-function normalizeCell(v) {
+// coerceNumericText: for CSV/TSV cells (which arrive as literal strings, see
+// isDelimitedText above), also read an unambiguous clean numeric string as a
+// real number, exactly like the cleaning step's coerceNumbers would — but
+// anything not a clean number (a censored value, a date, plain text) stays a
+// string for the checkup layer to interpret, never guessed here.
+function normalizeCell(v, coerceNumericText) {
   if (v == null) return null;
   if (v instanceof Date) {
     if (isNaN(v.getTime())) return null;
@@ -15,7 +35,8 @@ function normalizeCell(v) {
   }
   if (typeof v === "string") {
     const t = v.trim();
-    return t === "" ? null : t;
+    if (t === "") return null;
+    return coerceNumericText ? coerceNumbers(t) : t;
   }
   return v;
 }
@@ -38,8 +59,10 @@ function inferType(values) {
 // Parse an uploaded .xlsx/.xls/.csv File into:
 // { fileName, sheets: [{ name, headers: [{letter, name, type, samples}], rows, rowCount }] }
 export async function parseWorkbookFile(file) {
-  const buf = await file.arrayBuffer();
-  const wb = XLSX.read(buf, { cellDates: true });
+  const delimited = isDelimitedText(file);
+  const wb = delimited
+    ? XLSX.read(await file.text(), { type: "string", raw: true })
+    : XLSX.read(await file.arrayBuffer(), { cellDates: true });
   const sheets = [];
 
   for (const name of wb.SheetNames) {
@@ -66,7 +89,7 @@ export async function parseWorkbookFile(file) {
       let allNull = true;
       const obj = {};
       for (let i = 0; i < width; i++) {
-        const val = normalizeCell(src[i]);
+        const val = normalizeCell(src[i], delimited);
         obj[headerNames[i]] = val;
         if (val != null) allNull = false;
       }

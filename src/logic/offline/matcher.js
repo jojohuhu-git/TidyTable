@@ -149,7 +149,24 @@ function detectGrain(request, sheet, headers) {
   const asked = entities.find((e) => w.has(e));
   if (!asked) return null;
   const singular = asked.replace(/s$/, "");
-  const col = headers.find((h) => columnKey(h.name).includes(singular) || columnKey(h.name).includes(singular + "id"));
+  let col = headers.find((h) => columnKey(h.name).includes(singular) || columnKey(h.name).includes(singular + "id"));
+
+  // NEW-4: the file's per-entity key is often not named after the entity at
+  // all (e.g. an encounter ID "CSN" when the question asks about patients).
+  // Fall back to any ID-like column (almost every value unique) that still
+  // has at least one repeat — the same "ID-like" heuristic scan.js uses for
+  // findDuplicateIds — rather than silently assuming the row grain is right.
+  if (!col) {
+    for (const h of headers) {
+      const vals = sheet.rows.map((r) => r[h.name]).filter((v) => v != null && String(v).trim() !== "");
+      if (vals.length < 4) continue;
+      const distinctCount = new Set(vals.map(foldKey)).size;
+      if (distinctCount / vals.length < 0.9) continue; // not ID-like enough
+      if (distinctCount === vals.length) continue; // no repeats — no grain issue
+      col = h;
+      break;
+    }
+  }
   if (!col) return null;
   const seen = new Set();
   let repeats = false;
