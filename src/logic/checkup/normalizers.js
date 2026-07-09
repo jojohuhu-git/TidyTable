@@ -155,7 +155,7 @@ export const EXCEL_STEPS = {
       title: `Blank out "not available" markers in "${ctx.colName}"`,
       where: `Sheet "${ctx.sheetName}", cell ${helperCell(ctx)}, then fill down to ${ctx.helperLetter}${ctx.lastRow}`,
       formula: `=IF(OR(TRIM(${firstCell(ctx)})="",LOWER(TRIM(${firstCell(ctx)}))="n/a",LOWER(TRIM(${firstCell(ctx)}))="na",LOWER(TRIM(${firstCell(ctx)}))="none",TRIM(${firstCell(ctx)})="-",TRIM(${firstCell(ctx)})="."),"",${firstCell(ctx)})`,
-      instruction: `In a new column ${ctx.helperLetter}, this leaves a truly empty cell wherever ${ctx.letter} holds a stand-in for "no value", so counts and averages ignore them. Fill down over ${fillRange(ctx)}.`,
+      instruction: `In a new column ${ctx.helperLetter}, this writes "" wherever ${ctx.letter} holds a stand-in for "no value" — AVERAGE and SUM ignore these, but COUNTA still counts them since a formula result of "" is still text, not a truly empty cell. Use COUNTIF(${fillRange(ctx)},"<>") if you need a count of real values, or paste-special "Values only" over ${ctx.helperLetter} first. Fill down over ${fillRange(ctx)}.`,
     }];
   },
   parseDates(ctx) {

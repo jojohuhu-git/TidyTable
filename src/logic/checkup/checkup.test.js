@@ -129,3 +129,18 @@ describe("buildFixPlan applies three fixes correctly", () => {
     expect(text).toMatch(/Result: 4 rows/);
   });
 });
+
+describe("P2-13: sentinelBlanks Excel instruction doesn't overclaim COUNTA", () => {
+  const sheet = messySheet();
+  const { plan } = buildFixPlan(sheet, [{ normalizer: "sentinelBlanks", column: "Result" }]);
+  const step = plan.excel_steps.find((s) => /not available/i.test(s.title));
+
+  it("does not claim counts ignore the formula-blanked cells", () => {
+    expect(step.instruction).not.toMatch(/counts and averages ignore them/i);
+  });
+
+  it("warns that COUNTA still counts the \"\" result and offers a fix", () => {
+    expect(step.instruction).toMatch(/COUNTA still counts/i);
+    expect(step.instruction).toMatch(/COUNTIF\(.*"<>"\)/);
+  });
+});
