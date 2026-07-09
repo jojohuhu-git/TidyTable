@@ -80,17 +80,22 @@ export async function parseWorkbookFile(file) {
     const excelFirstDataRow = excelHeaderRow + 1;
     const excelLastRow = range.e.r + 1;
 
-    // Build unique header names from the first row.
+    // Build unique header names from the first row. P2-17: renaming a repeat
+    // of "Name" to "Name (2)" can collide with a real column already named
+    // "Name (2)", silently overwriting one of them — keep incrementing until
+    // the candidate is actually free, checked against every name used so far.
     const rawHeader = matrix[0] || [];
     const width = Math.max(rawHeader.length, ...matrix.map((r) => r.length));
-    const seen = new Map();
+    const usedNames = new Set();
     const headerNames = [];
     for (let i = 0; i < width; i++) {
       let h = rawHeader[i];
       h = h == null || String(h).trim() === "" ? `Column ${colLetter(i)}` : String(h).trim();
-      const count = seen.get(h) || 0;
-      seen.set(h, count + 1);
-      headerNames.push(count === 0 ? h : `${h} (${count + 1})`);
+      let candidate = h;
+      let n = 2;
+      while (usedNames.has(candidate)) candidate = `${h} (${n++})`;
+      usedNames.add(candidate);
+      headerNames.push(candidate);
     }
 
     const rows = [];
