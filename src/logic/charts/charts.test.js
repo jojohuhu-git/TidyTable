@@ -25,6 +25,35 @@ describe("aggregate", () => {
     const ds = buildDataset(sheet([{ Month: "2024-01", N: 1 }, { Month: "2024-02", N: 2 }]), "Month", "N");
     expect(ds.labelIsTime).toBe(true);
   });
+  it("P2-14: sorts time-like labels chronologically even if rows arrive scrambled", () => {
+    const ds = buildDataset(
+      sheet([{ Month: "2024-03", N: 3 }, { Month: "2024-01", N: 1 }, { Month: "2024-02", N: 2 }]),
+      "Month", "N",
+    );
+    expect(ds.points.map((p) => p.label)).toEqual(["2024-01", "2024-02", "2024-03"]);
+  });
+  it("P2-14: sorts month-name labels chronologically", () => {
+    const ds = buildDataset(
+      sheet([{ Month: "Mar 2024", N: 3 }, { Month: "Jan 2024", N: 1 }, { Month: "Feb 2024", N: 2 }]),
+      "Month", "N",
+    );
+    expect(ds.points.map((p) => p.label)).toEqual(["Jan 2024", "Feb 2024", "Mar 2024"]);
+  });
+  it("P2-14: falls back to first-appearance order when a time label doesn't resolve to a sortable date (e.g. a bare quarter with no year)", () => {
+    const ds = buildDataset(
+      sheet([{ Q: "Q3", N: 3 }, { Q: "Q1", N: 1 }, { Q: "Q2", N: 2 }]),
+      "Q", "N",
+    );
+    expect(ds.labelIsTime).toBe(true);
+    expect(ds.points.map((p) => p.label)).toEqual(["Q3", "Q1", "Q2"]);
+  });
+  it("P2-14: sorts quarter labels with a year", () => {
+    const ds = buildDataset(
+      sheet([{ Q: "Q3 2024", N: 3 }, { Q: "Q1 2024", N: 1 }, { Q: "Q2 2024", N: 2 }]),
+      "Q", "N",
+    );
+    expect(ds.points.map((p) => p.label)).toEqual(["Q1 2024", "Q2 2024", "Q3 2024"]);
+  });
 });
 
 describe("advisor is opinionated", () => {
