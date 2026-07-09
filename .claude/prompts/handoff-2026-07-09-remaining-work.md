@@ -1,8 +1,40 @@
 # TidyTable — Handoff after the 2026-07-09 P0/A1/A2 pass
 
-Branch: `fix/2026-07-09-audit-findings`, off `phase/5-charts`. **Not pushed** — 7 commits,
+Branch: `fix/2026-07-09-audit-findings`, off `phase/5-charts`. **Not pushed** — 10 commits,
 all local, owner reviews before anything hits GitHub. Baseline was 141 passing tests;
-now 194 passing (25 files), all green.
+then 194 (25 files) after the P0/A1/A2 pass; now **208 passing (28 files)** after
+A3 Level 1 + A4 + A5 below, all green.
+
+## Update (same day, later pass): A3 Level 1 + A4 + A5 done
+
+8. **A3 Level 1** (`5d75bb7`) — "average"/"sum"/"per X"/"by X" used to fall through to
+   the offline matcher and come back as a fake "add a Definitions row" prompt (they'd
+   survive STOP-word filtering and get treated as an undefined clinical term). Now
+   `matchRequest` recognizes a bare average/sum intent, or a group-by-shaped residue
+   ("per diagnosis", "by service", "grouped by X"), and declines honestly with a
+   capability-specific message routed through the normal miss log — verified this
+   doesn't regress requests that merely contain the word "by" incidentally (e.g.
+   "treated by cephalexin" still resolves confidently).
+9. **A4** (`71d6336`) — the four fixed example chips are all worded as things the
+   offline engine can't compute, so every one "failed without a key." Added
+   `buildOfflineExample()` (`src/logic/offline/exampleQuestion.js`) which builds a
+   "how many rows have `<real value>`" question from the user's actual uploaded data
+   and *verifies it through matchRequest before showing it*, rendered as its own
+   labeled "Answered on this computer, no key needed" group above the AI-only
+   examples in `PromptPanel.jsx`. Manually verified in the browser with a real CSV
+   upload — chip appears, click → run → answers offline, no console errors.
+10. **A5** (`333cb85`) — the checkup scan (`scan.js`) had its own duplicate copy of
+    the calendar-validity check used to justify "N dates in X are fixable," separate
+    from `parseDates`'s own validity logic (P0-1). They happened to agree but nothing
+    guaranteed it. Extracted the check into one exported `isValidCalendarDate` in
+    `normalizers.js` that both `parseDates` and `scan.js` call; `buildFixPlan.js`'s
+    worker-transform builder now always inlines it alongside `parseDates` (function
+    declarations hoist, so inclusion order doesn't matter). Manually verified in the
+    browser: a column with a Feb-30 value correctly reports "1 value could not be
+    read as a valid date and will be left unchanged."
+
+Remaining queue below is unchanged by this pass except that A3 Level 1, A4, and A5
+are now crossed off their respective sections.
 
 ## What's done (by finding id) — see commit log for full detail on each
 
