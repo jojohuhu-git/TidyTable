@@ -3,14 +3,9 @@
 // the offending values, and (when we can fix it) which normalizer would do it.
 // Nothing here changes data — fixes only run when the user picks them.
 
-import { coerceNumbers, censoredValues, foldKey, splitList } from "./normalizers.js";
+import { coerceNumbers, censoredValues, foldKey, splitList, isValidCalendarDate } from "./normalizers.js";
 
 const DATE_CANDIDATE = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/;
-
-function isValidCalendarDate(y, mo, d) {
-  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
-  return d <= new Date(y, mo, 0).getDate();
-}
 
 const NEVER_NEGATIVE = /\b(age|count|qty|quantity|dose|amount|price|cost|weight|height|duration|days|mg|ml|number|num|total|score)\b/i;
 const AGE_LIKE = /\bage\b/i;

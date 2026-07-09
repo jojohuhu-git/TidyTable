@@ -26,6 +26,19 @@ export function sentinelBlanks(v) {
   return v;
 }
 
+// A5: the single source of truth for "is (y, mo, d) a real calendar date" —
+// parseDates (below) and the checkup scan's date finding both call this, so
+// the log can never vouch for a date as valid/fixable when parseDates would
+// actually refuse to rewrite it (or vice versa). Pure and self-contained
+// (ES5 style, no closures) like the cell normalizers, since buildFixPlan
+// inlines it into the worker transform alongside parseDates — see
+// buildFixPlan.js's buildTransformCode, which always includes this
+// function's source whenever parseDates is used.
+export function isValidCalendarDate(y, mo, d) {
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+  return d <= new Date(y, mo, 0).getDate();
+}
+
 /* ---- 4. Text dates -> ISO. order: "MDY" (default) or "DMY". Validates the
    month/day/calendar before rewriting; an invalid or ambiguous-without-an-order
    value is left completely unchanged rather than guessed. ---- */
@@ -38,9 +51,7 @@ export function parseDates(v, order) {
   var a = parseInt(m[1], 10), b = parseInt(m[2], 10), y = parseInt(m[3], 10);
   var mo, d;
   if (order === "DMY") { d = a; mo = b; } else { mo = a; d = b; }
-  if (mo < 1 || mo > 12 || d < 1 || d > 31) return v;
-  var daysInMonth = new Date(y, mo, 0).getDate();
-  if (d > daysInMonth) return v;
+  if (!isValidCalendarDate(y, mo, d)) return v;
   var moS = ("0" + mo).slice(-2);
   var dS = ("0" + d).slice(-2);
   return y + "-" + moS + "-" + dS;

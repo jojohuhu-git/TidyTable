@@ -8,7 +8,7 @@
 import { colLetter } from "../letters.js";
 import {
   coerceNumbers, sentinelBlanks, parseDates, trimCase, censoredValues, splitList, epochSerialToNumber, stripUnitSuffix,
-  NORMALIZERS, EXCEL_STEPS,
+  isValidCalendarDate, NORMALIZERS, EXCEL_STEPS,
 } from "./normalizers.js";
 
 const CELL_NORMALIZERS = ["coerceNumbers", "sentinelBlanks", "parseDates", "trimCase", "censoredValues", "epochSerialToNumber", "stripUnitSuffix"];
@@ -103,6 +103,10 @@ function buildTransformCode(sheet, fixes) {
   if (split.length) usedIds.add("splitList");
 
   const sources = [...usedIds].map((id) => NORMALIZERS[id].fn.toString());
+  // parseDates calls isValidCalendarDate (see normalizers.js) so its source
+  // must ride along whenever parseDates does — function declarations hoist,
+  // so the order here doesn't matter, only that it's present.
+  if (usedIds.has("parseDates")) sources.push(isValidCalendarDate.toString());
   const lines = [];
   lines.push(...sources);
   lines.push(`var rows = (sheets[${JSON.stringify(sheet.name)}] || []).map(function (r) { return Object.assign({}, r); });`);
