@@ -1,165 +1,165 @@
-# TidyTable — Handoff after the 2026-07-09 P0/A1/A2 pass
+# TidyTable — Handoff after the 2026-07-09 P0/A1/A2/A3/B/P1 pass
 
-Branch: `fix/2026-07-09-audit-findings`, off `phase/5-charts`. **Not pushed** — 10 commits,
+Branch: `fix/2026-07-09-audit-findings`, off `phase/5-charts`. **Not pushed** — 16 commits,
 all local, owner reviews before anything hits GitHub. Baseline was 141 passing tests;
-then 194 (25 files) after the P0/A1/A2 pass; now **208 passing (28 files)** after
-A3 Level 1 + A4 + A5 below, all green.
-
-## Update (same day, later pass): A3 Level 1 + A4 + A5 done
-
-8. **A3 Level 1** (`5d75bb7`) — "average"/"sum"/"per X"/"by X" used to fall through to
-   the offline matcher and come back as a fake "add a Definitions row" prompt (they'd
-   survive STOP-word filtering and get treated as an undefined clinical term). Now
-   `matchRequest` recognizes a bare average/sum intent, or a group-by-shaped residue
-   ("per diagnosis", "by service", "grouped by X"), and declines honestly with a
-   capability-specific message routed through the normal miss log — verified this
-   doesn't regress requests that merely contain the word "by" incidentally (e.g.
-   "treated by cephalexin" still resolves confidently).
-9. **A4** (`71d6336`) — the four fixed example chips are all worded as things the
-   offline engine can't compute, so every one "failed without a key." Added
-   `buildOfflineExample()` (`src/logic/offline/exampleQuestion.js`) which builds a
-   "how many rows have `<real value>`" question from the user's actual uploaded data
-   and *verifies it through matchRequest before showing it*, rendered as its own
-   labeled "Answered on this computer, no key needed" group above the AI-only
-   examples in `PromptPanel.jsx`. Manually verified in the browser with a real CSV
-   upload — chip appears, click → run → answers offline, no console errors.
-10. **A5** (`333cb85`) — the checkup scan (`scan.js`) had its own duplicate copy of
-    the calendar-validity check used to justify "N dates in X are fixable," separate
-    from `parseDates`'s own validity logic (P0-1). They happened to agree but nothing
-    guaranteed it. Extracted the check into one exported `isValidCalendarDate` in
-    `normalizers.js` that both `parseDates` and `scan.js` call; `buildFixPlan.js`'s
-    worker-transform builder now always inlines it alongside `parseDates` (function
-    declarations hoist, so inclusion order doesn't matter). Manually verified in the
-    browser: a column with a Feb-30 value correctly reports "1 value could not be
-    read as a valid date and will be left unchanged."
-
-Remaining queue below is unchanged by this pass except that A3 Level 1, A4, and A5
-are now crossed off their respective sections.
+now **270 passing (39 files)**, all green, working tree clean at commit `65de628`.
 
 ## What's done (by finding id) — see commit log for full detail on each
 
-1. **P0-1 + NEW-1** (`78791d8`) — `parseDates` now validates month/day/calendar before
-   rewriting (rejects `25/03/2024` as MDY, rejects Feb 30, etc.); date order (M/D/Y vs D/M/Y)
-   is decided per column, asking the user via a generalized `ClarifyBox`/`needsPolicy` flow
-   when genuinely ambiguous. Values that don't form a valid date are left unchanged and
-   counted as "could not be read." Recorded order flows through `fix.params.order` to
-   `buildFixPlan`'s transform, Excel step text, and `replay.js` — nothing re-guesses.
-   New `epochSerialToNumber` normalizer + `findEpochDates` checkup finding recovers real
-   `.xlsx` columns where Excel auto-formatted a numeric duration as a date near its
-   1899-12-30 epoch (verified empirically with a real SheetJS round-trip — see the probe
-   script pattern in the commit if you need to re-derive the epoch math).
-2. **P0-2 + NEW-2** (`11be239`) — `toNumber` in the offline cohort engine returns `null`
-   (not 0) for non-numeric text, censored markers (`<5`), and ranges (`12-14`); strips a
-   trailing unit suffix (`"5 Days"` → `5`) before the numeric check so legitimate
-   unit-suffixed durations aren't dropped by the stricter check. `executeCohort` now
-   reports `skippedCount`/`skippedColumn` per threshold stage; `fillPlan`'s summary states
-   it in plain English. The worker's `transform_code` inlines the real `toNumber` via
-   `.toString()` instead of a hand-duplicated copy that could drift. Also added a
-   `stripUnitSuffix` checkup normalizer/finding for the cleaning workflow.
-3. **A1 + NEW-4** (`a993f40`) — `parseWorkbookFile` detects CSV/TSV and reads with SheetJS
-   type-guessing disabled (`raw: true`, text-mode read), so `<0.5` and `3/6/2024` arrive as
-   literal strings instead of being silently guessed into dates; clean numeric text is still
-   coerced via `coerceNumbers`. `detectGrain` (the "did you mean per-patient?" check) now
-   falls back to any ID-like column with repeats (not just one literally named after the
-   entity), so a file keyed on `CSN` or similar still triggers the grain question.
-4. **A2** (`3cadb9e`) — compound questions like "how many patients with UTI had
-   duration_days over 7" no longer silently drop the duration clause. New
-   `resolveConditions()` tries to resolve leftover words as a second AND-ed condition;
-   when that fails it returns a `"partial"` status with a message naming exactly what was
-   and wasn't understood, instead of answering with a truncated understanding.
-5. **P0-3** (`c273a0e`) — `buildRequestParams(model, {...})` omits the `thinking` param
-   entirely for models that don't support adaptive thinking (Haiku 4.5), instead of always
-   sending it and getting a 400.
-6. **P0-4** (`732553b`) — the "which test and why" note for a contingency table is now
-   honest for R×C tables too: only claims "all expected counts >= 5" when that's true;
-   an R×C table with a sparse cell keeps chi-square (no exact substitute exists) but says
-   plainly that the p-value may be unreliable. A `reliable` flag lets the conclusion line
-   add a caution sentence.
-7. **P0-5 + NEW-6** (`457379a`) — a zero-variance t-test group now refuses in plain English
-   ("no variation to test" / states the exact difference with no variability estimate)
-   instead of showing literal `NaN`.
+Everything below is complete and committed. Commits, oldest first:
+`a993f40` `3cadb9e` `c273a0e` `732553b` `457379a` `5d75bb7` `71d6336` `333cb85` `ea20a30`
+`c35ffe5` `f14d541` `2cb1c7c` `c5529a2` `65de628`.
 
-Deferred within these items (noted but not built, low-value/out of scope for this pass):
-none — all six subitems of each finding above were addressed, including the Excel-step
-and replay consistency requirements.
+### P0s (from `fix-2026-07-06-audit-findings.md`) + their dataset interactions
+1. **P0-1 + NEW-1** — `parseDates` validates month/day/calendar before rewriting; asks the user
+   per-column when date order is ambiguous via `ClarifyBox`/`needsPolicy`. New `epochSerialToNumber`
+   normalizer + `findEpochDates` checkup finding recovers real `.xlsx` columns Excel mis-typed as
+   dates near its 1899-12-30 epoch.
+2. **P0-2 + NEW-2** — `toNumber` in the offline engine returns `null` (not 0) for non-numeric text,
+   censored markers, and ranges; strips a trailing unit suffix (`"5 Days"` → `5`) first so legitimate
+   unit-suffixed durations aren't dropped. `executeCohort` reports `skippedCount`/`skippedColumn`.
+3. **A1 + NEW-4** — CSV/TSV parsed with SheetJS type-guessing disabled (`raw: true`), so `<0.5` and
+   `3/6/2024` arrive as literal strings; `detectGrain` falls back to any ID-like repeating column,
+   not just one named after the entity.
+4. **A2** — compound questions ("...UTI...duration_days over 7") no longer silently drop the second
+   condition; `resolveConditions()` tries to resolve leftover words as a second AND-ed condition, or
+   returns an honest `"partial"` status naming exactly what wasn't understood.
+5. **P0-3** — `buildRequestParams` omits `thinking` entirely for models that reject it (Haiku 4.5).
+6. **P0-4** — the "which test and why" note only claims "all expected counts >= 5" when true for
+   R×C tables; a sparse cell adds a plain reliability caveat instead of a false claim.
+7. **P0-5 + NEW-6** — a zero-variance t-test group refuses in plain English instead of showing `NaN`.
 
-## What's NOT done — the remaining queue, in the order the handoffs specify
+### A3 — aggregation/group-by (both levels)
+8. **A3 Level 1** (`5d75bb7`) — average/sum/per-X/by-X declined as an honest capability gap
+   (logged to the miss log) instead of a fake "add a Definitions row" prompt.
+9. **A3 Level 2** (`f14d541`) — the real feature: offline `sum`/`average`/`distinct` over a resolved
+   numeric/target column, plus group-by breakdowns for `GROUP_WORDS` ("how many patients per
+   diagnosis" → one row per diagnosis with count+share; "average duration_days per diagnosis" →
+   per-group averages). Matching `AVERAGEIFS`/`SUMIFS` Excel steps per group; an honest
+   Remove-Duplicates instruction for distinct (no formula can list several accepted values). Key
+   files: `src/logic/offline/matcher.js` (`resolveGroupBy`, `resolveAggregationTarget`,
+   `matchAggregation`), `src/logic/offline/cohort.js` (`executeAggregation`), `src/logic/offline/
+   fillPlan.js` (`fillAggregationPlan`, `fillGroupCountPlan`). Verified live in the browser
+   (uploaded CSV, asked both an aggregation and a group-by question, correct Excel formulas, no
+   console errors).
+
+### A4, A5 (small, already-shipped Level-1-adjacent items)
+10. **A4** (`71d6336`) — `buildOfflineExample()` builds a verified "answered on this computer"
+    example chip from the user's real headers, shown above the AI-only examples in `PromptPanel`.
+11. **A5** (`333cb85`) — the cleaning log's date-validity check now shares one source of truth
+    (`isValidCalendarDate` in `normalizers.js`) with `parseDates`, instead of a second copy that
+    merely happened to agree.
+
+### B1-B5 — novice UX core (`2cb1c7c`)
+12. **B1** — Steps 5-10 collapse into three goal-grouped `<details>` sections (Monthly routine /
+    Analyze & chart / Reshape), collapsed by default. Fixed the pre-upload "Step 1 then Step 6"
+    broken numbering: the replay tool shows under a plain "Already have a saved recipe?" heading
+    before a file is loaded, and under "Step 6" once one is.
+13. **B2** — "Try it with example data" next to the dropzone loads a synthetic two-sheet workbook
+    (`src/logic/exampleWorkbook.js`) built from the same messy patterns the test suite uses
+    (duplicate rows, missing/censored values, mixed dates, text numbers).
+14. **B3** — every run gets a "Result of: ..." label, scrolls into view (`resultsRef` +
+    `requestAnimationFrame` scrollIntoView), and lands in a clickable session-history strip
+    (`runHistory`/`activeHistoryId` state in `App.jsx`) so an earlier answer isn't lost.
+15. **B4** — single-slot "Undo last apply" (`undoSnapshot` — reverts sheet + log + recipe together)
+    and "Start over" (`originalWorkbook` — back to the file as uploaded). Verified live: applied a
+    fix, undid it, confirmed the checkup's duplicate-row finding reappeared.
+16. **B5** — session log + in-progress recipe persist to `localStorage`
+    (`src/logic/sessionPersistence.js`, key `tidytable_session_v1`) across a refresh; the workbook
+    itself is NOT persisted (re-upload still needed). `beforeunload` warns while a workbook is loaded.
+
+### P1-6 through P1-12 (from `fix-2026-07-06-audit-findings.md`) — all seven done
+17. **P1-11** (`c5529a2`) — `WORKER_SOURCE` shadows `fetch`/`XMLHttpRequest`/`WebSocket`/
+    `EventSource`/`importScripts` before running generated transform code (hardening, not a real
+    sandbox — the comment says so). Tested via a `vm` context standing in for `self` (a plain
+    object wouldn't reproduce `self === globalThis` aliasing that lets bare `fetch` resolve to the
+    shadowed one).
+18. **P1-8** (`c5529a2`) — trimCase's older-Excel VLOOKUP fallback was a one-column-range,
+    index-1 no-op; fixed to a two-column range with index 2. Its lookup columns now allocate from
+    the same helper-column sequence as every other fix (`buildFixPlan.js`'s `helperIndex`) instead
+    of hardcoded Y/Z, so they can't collide with real data or another fix's helper column.
+19. **P1-7** (`c5529a2`) — censoredValues' "exclude" policy (a no-op in the app) now gets its own
+    honest Excel instruction (no formula; filter these out before counting/averaging) instead of
+    the "boundary" formula, which would have converted `<0.5` to `0.5` in Excel while the app left
+    it as text.
+20. **P1-9** (`c5529a2`) — every Excel-step generator assumed "row 2 to rows.length+1". Now
+    `parseWorkbookFile` records the real physical extent
+    (`excelFirstDataRow`/`excelLastRow`/`droppedBlankRows` on the sheet object); `excelRowExtent()`/
+    `excelRowExtentNote()` in `workbook.js` are the shared readers, used by every Excel-step
+    builder (checkup fixes, cohort/group-by/aggregation offline answers) and the AI data context,
+    prepending a one-sentence honesty note to the first step when the sheet isn't tidy.
+21. **P1-12** (`c5529a2`) — `reshapeLongToWide`'s collision count was computed but never shown;
+    `ShelfPanel` now surfaces a notice when `collisions > 0`. A measure literally named the same as
+    the id column no longer overwrites the id (renamed to `"<name> (value)"`).
+22. **P1-6** (`65de628`) — replaced `Math.max(...bigArray)` (throws `RangeError` past the JS engine's
+    argument-spread limit — verified with a 300k-element array) with `maxOf()`, a reduce loop, across
+    Bar/Line/Scatter chart previews and `ReportCardsView`. Scatter datasets over 2,000 points are
+    sampled down (evenly spaced) with an honest "showing a sample of N of M points" note. A
+    categorical dataset past ~30 distinct groups declines a bar-per-category chart plainly instead
+    of rendering one (a long time series is unaffected — it gets a line, not bars).
+23. **P1-10** (`65de628`) — Steps 7-9 and the Reshape step's base side now disclose "only the first
+    sheet, 'X', is used here" (matching the pattern Step 2's checkup intro already used) when a
+    workbook has more than one sheet. This is the audit's allowed "minimum honest version" instead
+    of a full active-sheet selector; the offline matcher's summary already names the sheet
+    ("Starting from N rows in 'SheetName'").
+
+Deferred within these items: none — every subitem of every finding above was addressed.
+
+## What's NOT done — the remaining queue
 
 From `.claude/prompts/fix-2026-07-06-audit-findings.md`:
-- **P1-6..P1-12**: chart crash on large data; censored-values "exclude" Excel/app mismatch;
-  trimCase broken VLOOKUP fallback + fragile Y/Z helper columns; wrong Excel row refs with
-  blank/padding rows; first-sheet-only silently used; worker "no network" claim is false;
-  Shelf reshape collision silently overwritten. Dataset fixtures for these:
-  NEW-3 (trailing-space/newline category variants → P1-8), NEW-4's reshape half
-  (→ P1-12, patient-count half already done above).
-- **P2-13..P2-23**: smaller correctness/polish items (sentinel-blank COUNTA mismatch,
-  line-chart order, pie single-slice, unescaped COUNTIFS wildcards, duplicate-header
-  rename collision, reportCards cross-group sums, mislabeled worker errors, saveRecipe
-  overwrite, cost estimate staleness, t-test raw-value cap, plaintext API key disclosure).
+- **P2-13..P2-23** — smaller correctness/polish items (sentinel-blank COUNTA mismatch, line-chart
+  chronological order, pie single-slice/negative-value handling, unescaped COUNTIFS wildcards,
+  duplicate-header rename collision, reportCards cross-group sums, mislabeled worker/transform
+  errors in `runViaClaude`, `saveRecipe` overwrite, cost-estimate staleness, t-test raw-value cap,
+  plaintext API key disclosure copy). None started. Each is small and independent — good for a
+  short session or to batch a few at a time.
 
-From `.claude/prompts/handoff-2026-07-06-accuracy-ux.md` (its own suggested order):
-- **A3 Level 1** (small, high trust payoff) — aggregation/group words (`average`, `per`,
-  `by`) currently produce a fake "add a Definitions row" message; should be an honest
-  capability message routed to the miss log.
-- **A4** — example prompt chips all fail without an API key; add a working
-  "answered on this computer" example group.
-- **A5** — cleaning log must only vouch for genuinely valid dates (should now be easy: it
-  can check `parseDates`'s validity logic from P0-1).
-- **B1–B5** — the novice UX core: collapse the 9-card step wall into goal-grouped
-  sections; add "Try it with example data" (synthetic only); scroll-to-result + a small
-  session history; Undo/Start over (keep `originalWorkbook`); `beforeunload` warning +
-  localStorage persistence of the log/recipe. This is sized like its own UI pass.
-- **A3 Level 2** (biggest capability win, sized like its own small phase) — implement
-  offline `sum`/`average`/`distinct` over a resolved numeric column and group-by for
-  `GROUP_WORDS`, with matching Excel steps (AVERAGEIFS etc., the system prompt already
-  teaches the AI path this).
-- **B6–B12** — per-column profile table (flags empty/constant/text-numbers — NEW-6 and
-  NEW-5 are ready-made fixtures), in-app Definitions editor, reactive privacy badge, chart
-  polish (numeric-only value dropdown, PNG download, sort), stats/regression pickers
-  badged by type (also ready-made from NEW-6's empty/constant columns), AI retry, a11y
-  quick pass.
-- **A6** — let the user pick the surviving spelling in category merges (small, standalone).
+From `.claude/prompts/handoff-2026-07-06-accuracy-ux.md`:
+- **B6-B12** — per-column profile table (flags empty/constant/text-numbers — NEW-5/NEW-6 are
+  ready-made fixtures), in-app Definitions editor, reactive privacy badge, chart polish
+  (numeric-only value dropdown, PNG download, sort), stats/regression pickers badged by type, AI
+  retry, a11y quick pass. Sized like its own UI pass — B1-B5 (the novice UX core) is done, this is
+  the next tier of polish on top of it.
+- **A6** — let the user pick the surviving spelling in category merges (small, standalone;
+  `findCategoryVariants` already shows the `"x" -> "y"` chips, just needs to make the canonical
+  choice clickable).
 
-From `.claude/prompts/datasets-2026-07-09-realworld-examples.md`, items not yet folded in:
-NEW-3 (trailing-space/newline categories → P1-8/A6), NEW-5 (numbers-as-text with a lone
-real float → coerceNumbers/B6), NEW-7 (multi-value `;`/newline cells, incl. multi-date
-cells that must NOT be corrupted by the date fix — new capability, unscoped), NEW-8
-(sentinel strings that are NOT missing, e.g. "No Culture" — inverts P2-13), NEW-9
-(inconsistent Yes/No vs YES/NO casing — category normalization), NEW-10 (redundant
-near-duplicate columns — B6 profiling only, no engine change).
+From `.claude/prompts/datasets-2026-07-09-realworld-examples.md`, not yet folded in:
+- **NEW-3** (trailing-space/newline category variants → P1-8/A6 scope, but not the VLOOKUP part
+  already fixed — this is about the *matching* logic finding these as variants, separate work)
+- **NEW-5** (numbers-as-text with a lone real float → `coerceNumbers`/B6 profiling)
+- **NEW-7** (multi-value `;`/newline cells, incl. multi-date cells that must NOT be corrupted by
+  the date fix — new capability, unscoped)
+- **NEW-8** (sentinel strings that are NOT missing, e.g. "No Culture" — inverts P2-13)
+- **NEW-9** (inconsistent Yes/No vs YES/NO casing — category normalization)
+- **NEW-10** (redundant near-duplicate columns — B6 profiling only, no engine change)
 
 ## Why this is a good stopping point
 
-Everything above the line is either a P0 (silent-wrong-answer class bug) or directly
-interacts with one (NEW-1/NEW-2/NEW-4/NEW-6). Everything below the line is P1/P2 polish
-or a genuinely new UX/feature build (B1–B12 is a UI redesign; A3 Level 2 is a new offline
-aggregation engine) — each sized like its own session, per the original handoffs'
-"suggested order" notes.
+Every P0 and every P1 from the confirmed-bug audit is done. A3 (both levels) and B1-B5 (the novice
+UX core) — the two biggest capability/UX items from the accuracy-ux handoff — are done. What's left
+is P2 polish (smaller, independent, no particular order), B6-B12 (a second UI pass, sized like its
+own session), A6 (small, standalone), and the NEW-3/5/7/8/9/10 dataset items (each its own small
+scoped fixture-driven fix). None of it is P0/P1-severity or blocks anything else.
 
 ## Resuming
 
 1. `cd ~/Downloads/TidyTable && git checkout fix/2026-07-09-audit-findings`
-2. `npx vitest run` — confirm **208 passing (28 files)** before starting new work
-   (this is the count after A3 Level 1 + A4 + A5, commits `5d75bb7`/`71d6336`/`333cb85`/
-   `ea20a30` — see the "Update" section near the top of this file for what each did).
-3. **Open decision, ask the owner before picking one** — the two remaining items are
-   each sized like their own session and pull in different directions:
-   - **B1–B5** (novice UX core) — collapse the 9-card step wall into goal-grouped
-     sections; "Try it with example data" (synthetic only, separate from A4's
-     real-data example chip already shipped); scroll-to-result + small session
-     history; Undo/Start over (keep `originalWorkbook`); `beforeunload` warning +
-     localStorage persistence of the log/recipe. This is a UI redesign pass.
-   - **A3 Level 2** (biggest capability win) — implement offline `sum`/`average`/
-     `distinct` over a resolved numeric column and group-by for `GROUP_WORDS`
-     (`src/logic/offline/synonyms.js` already exports `GROUP_WORDS`, currently
-     unused — see A3 Level 1's commit for how the matcher declines these today),
-     with matching Excel steps (AVERAGEIFS etc.). This is a new offline-engine
-     capability, not a UI change.
-   Do not default to either without checking — they don't block each other, so
-   whichever the owner wants next is fine to start cold.
-4. After B1–B5/A3 Level 2, the rest of the queue (P1-6..P1-12, P2-13..P2-23, B6–B12,
-   A6, the NEW-3/5/7/8/9/10 dataset items) is unchanged from the "What's NOT done"
-   section below — still not started.
-5. Same per-item workflow: reproduce → failing test with a synthetic fixture → fix →
-   full suite green → commit named by finding id. Do not push — branch is local-only,
-   owner reviews before anything hits GitHub.
+2. `npx vitest run` — confirm **270 passing (39 files)** before starting new work.
+3. **Open decision, ask the owner before picking one** — these don't block each other:
+   - **P2-13..P2-23** — a batch of small, independent polish fixes. Good if you want quick,
+     low-risk wins; do a few at a time with a test each, same workflow as the P1 batch.
+   - **B6-B12** — the next UI/polish pass on top of B1-B5 (profile table, Definitions editor,
+     privacy badge, chart polish, stats/regression type badges, AI retry, a11y). Sized like its
+     own session.
+   - **A6** — small and standalone (category-merge canonical-spelling picker); could be a quick
+     add-on to either of the above.
+   - **NEW-3/5/7/8/9/10** — dataset-driven items, each its own small scoped fix.
+   Do not default to any one without checking — whichever the owner wants next is fine to start
+   cold, per-item workflow below applies to all of them.
+4. Same per-item workflow as every prior pass: reproduce → failing test with a synthetic fixture →
+   fix → full suite green → commit named by finding id (or a short descriptive name for B/A items).
+   For anything UI-observable, verify in the running app (`preview_start` → upload/interact →
+   screenshot/console-check) before calling it done, not just the test suite.
+5. Do not push — branch is local-only, owner reviews before anything hits GitHub.

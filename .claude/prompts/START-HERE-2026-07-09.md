@@ -1,5 +1,12 @@
 # TidyTable — Session kickoff (2026-07-09): apply the outstanding handoffs
 
+> **STATUS (2026-07-09, later same day): the queue below is DONE.** All P0s, A1/A2, A3 (Levels 1
+> and 2), A4, A5, B1-B5, and all seven P1s (P1-6..P1-12) are complete — 270 tests passing, branch
+> `fix/2026-07-09-audit-findings` off `phase/5-charts`, not pushed. **Do not restart this queue.**
+> For what's left and how to resume, read
+> `.claude/prompts/handoff-2026-07-09-remaining-work.md` instead — it has the current test count,
+> the "Resuming" steps, and the real remaining queue (P2-13..P2-23, B6-B12, A6, NEW-3/5/7/8/9/10).
+
 You are working on **TidyTable**, a browser-only React + Vite app that cleans and analyzes messy
 Excel files for spreadsheet/RStudio **novices** (often clinical data). Local repo:
 `~/Downloads/TidyTable`. Live: https://jojohuhu-git.github.io/TidyTable/. Owner: Joanne
