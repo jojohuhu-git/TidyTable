@@ -113,16 +113,29 @@ function contingencyResult(sheet, colA, colB, level) {
   const chi = chiSquare(counts);
   const is2x2 = rowLevels.length === 2 && colLevels.length === 2;
 
-  // The test-choice rule: switch to Fisher when an expected count is below 5.
+  // The test-choice rule, honestly stated for every table shape:
+  //  - 2x2, all expected counts >= 5: chi-square is reliable.
+  //  - 2x2, an expected count < 5: switch to Fisher's exact test.
+  //  - larger than 2x2 with an expected count < 5: chi-square has no exact
+  //    substitute here, so it's still used, but the note must not claim
+  //    reliability it doesn't have.
   let primary = chi;
-  let choiceNote =
-    `All expected counts are 5 or more (smallest is ${round(chi.minExpected, 1)}), so the chi-square test is reliable here.`;
+  let choiceNote;
+  let reliable = true;
   if (is2x2 && chi.minExpected < 5) {
     const [[a, b], [c, d]] = counts;
     const fish = fisherExact(a, b, c, d);
     primary = { ...fish, df: null };
+    reliable = false;
     choiceNote =
       `One expected count is below 5 (the smallest is ${round(chi.minExpected, 1)}), so Fisher's exact test is used instead of chi-square, which would be unreliable here.`;
+  } else if (!is2x2 && chi.minExpected < 5) {
+    reliable = false;
+    choiceNote =
+      `Some expected counts are below 5 (the smallest is ${round(chi.minExpected, 1)}). With a table this size the chi-square p-value may be unreliable — consider combining sparse categories, and treat a borderline p-value with caution.`;
+  } else {
+    choiceNote =
+      `All expected counts are 5 or more (smallest is ${round(chi.minExpected, 1)}), so the chi-square test is reliable here.`;
   }
 
   const steps = [
@@ -152,11 +165,16 @@ function contingencyResult(sheet, colA, colB, level) {
       cells: { a, b, c, d }, rowLevels: rowLevels.map(String), colLevels: colLevels.map(String) } });
   }
 
+  let conclusion = associationLine(`an association between "${colA}" and "${colB}"`, primary.p);
+  if (!reliable && primary.test !== "fisher") {
+    conclusion += " Take this p-value with caution: some expected counts in this table were below 5, so the chi-square approximation is less trustworthy here.";
+  }
+
   return {
     ok: true, kind: "contingency", is2x2, testName: primary.test === "fisher" ? "Fisher's exact test" : "Chi-square test",
-    colA, colB, useFisher: primary.test === "fisher",
+    colA, colB, useFisher: primary.test === "fisher", reliable,
     p: primary.p, statistic: primary.statistic ?? null, df: primary.df ?? null, steps,
-    conclusion: associationLine(`an association between "${colA}" and "${colB}"`, primary.p),
+    conclusion,
   };
 }
 
