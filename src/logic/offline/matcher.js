@@ -119,6 +119,40 @@ function resolveCondition(clause, sheet, headers, index, defs) {
   return { kind: "missing", term: phrase, reason: "unknown" };
 }
 
+// A2: resolveCondition's single-significant-word fallback can match just one
+// word of a compound clause (e.g. "UTI" out of "UTI had duration_days over
+// 7") and silently ignore the rest. Wrap it: when the match only consumed
+// part of the clause and what's left is significant (a comparator+number, or
+// 2+ real words), try to resolve the leftover words as a second condition of
+// their own. If that succeeds, both conditions are kept (AND-ed, like a
+// nested "of those" level). If it fails, refuse rather than silently drop the
+// residue — the caller turns this into a "partial" result.
+function resolveConditions(clause, sheet, headers, index, defs) {
+  const condition = resolveCondition(clause, sheet, headers, index, defs);
+  if (!condition) return [];
+  if (condition.kind !== "value" || condition.source !== "value") return [condition];
+
+  const fullWords = termWords(clause);
+  const matchedWords = new Set(words(condition.term));
+  const residue = fullWords.filter((w) => !matchedWords.has(w));
+  if (residue.length === 0) return [condition]; // the whole clause was the value phrase
+
+  const compar = detectComparator(clause);
+  const numMatch = String(clause).match(/-?\d+(?:\.\d+)?/);
+  const comparWords = compar ? words(compar.phrase) : [];
+  const residueHasComparator = Boolean(
+    compar && numMatch && compar.op !== "=" && residue.some((w) => comparWords.includes(w) || w === numMatch[0]),
+  );
+  if (residue.length < 2 && !residueHasComparator) return [condition]; // a stray leftover word, not worth blocking
+
+  const second = resolveCondition(residue.join(" "), sheet, headers, index, defs);
+  if (second && (second.kind === "threshold" || second.kind === "value" || second.kind === "set")) {
+    return [condition, second];
+  }
+
+  return [{ kind: "partial", matched: condition, unmatchedText: residue.join(" "), term: clause.trim() }];
+}
+
 // Pull the base cohort clause out ("of patients with pyelonephritis"). Returns
 // { term, start, end } describing the term phrase and where the whole clause sits
 // in the original text, or null.
@@ -223,8 +257,19 @@ export function matchRequest(request, workbook, defs, options = {}) {
   }
 
   const stages = rawStages
-    .map((s) => ({ ...s, condition: resolveCondition(s.text, sheet, headers, index, defs) }))
+    .flatMap((s) => resolveConditions(s.text, sheet, headers, index, defs).map((condition) => ({ ...s, condition })))
     .filter((s) => s.condition); // drop stages that were pure filler
+
+  const partial = stages.find((s) => s.condition.kind === "partial");
+  if (partial) {
+    return {
+      status: "partial",
+      understood: partial.condition.matched,
+      unmatchedText: partial.condition.unmatchedText,
+      clause: partial.condition.term,
+      request,
+    };
+  }
 
   const missing = stages.filter((s) => s.condition.kind === "missing").map((s) => s.condition);
   if (missing.length) {

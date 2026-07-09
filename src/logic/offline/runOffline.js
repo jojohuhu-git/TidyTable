@@ -5,7 +5,7 @@
 // of range declines gracefully and is logged — never a confident wrong answer.
 
 import { parseDefinitions } from "./definitions.js";
-import { matchRequest } from "./matcher.js";
+import { matchRequest, conditionPhrase } from "./matcher.js";
 import { fillPlan } from "./fillPlan.js";
 import { logMiss } from "./missLog.js";
 
@@ -29,6 +29,10 @@ export function runOffline(request, workbook, options = {}) {
       definitionsPresent: match.definitionsPresent,
       message: buildBlockMessage(match),
     };
+  }
+
+  if (match.status === "partial") {
+    return { kind: "block", message: buildPartialMessage(match) };
   }
 
   if (match.status === "grain") {
@@ -57,6 +61,18 @@ function buildBlockMessage(match) {
   return (
     `${lead} I will not guess clinical meaning. Add a row to a sheet named "Definitions" with three columns — ` +
     `the term, the column it applies to, and the values (or a rule like "> 7 when Diagnosis = pyelonephritis") that count — then ask again.`
+  );
+}
+
+// A2: the question packed more than one condition into one clause and only
+// part of it could be understood. Say exactly what was understood and ask
+// for a rephrase, rather than silently answering with just that part.
+function buildPartialMessage(match) {
+  const understoodPhrase = match.understood ? conditionPhrase(match.understood) : `"${match.clause}"`;
+  return (
+    `I understood ${understoodPhrase} but could not understand "${match.unmatchedText}" in "${match.clause}". ` +
+    `I will not guess and drop part of your question. Try asking just the part I understood, or split it, e.g. ` +
+    `"of patients with ${match.understood?.value ?? "..."}, how many had ${match.unmatchedText}?"`
   );
 }
 
