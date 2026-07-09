@@ -3,9 +3,9 @@ import { PLAN_SCHEMA } from "./schema.js";
 import { fakeValue, fakeStream } from "./synthetic.js";
 
 export const MODELS = [
-  { id: "claude-opus-4-8", label: "Claude Opus 4.8 — best quality (recommended)" },
-  { id: "claude-sonnet-5", label: "Claude Sonnet 5 — fast, cheaper" },
-  { id: "claude-haiku-4-5", label: "Claude Haiku 4.5 — cheapest, simple requests only" },
+  { id: "claude-opus-4-8", label: "Claude Opus 4.8 — best quality (recommended)", supportsAdaptiveThinking: true },
+  { id: "claude-sonnet-5", label: "Claude Sonnet 5 — fast, cheaper", supportsAdaptiveThinking: true },
+  { id: "claude-haiku-4-5", label: "Claude Haiku 4.5 — cheapest, simple requests only", supportsAdaptiveThinking: false },
 ];
 export const DEFAULT_MODEL = "claude-opus-4-8";
 
@@ -122,6 +122,26 @@ export function estimateCostUSD(model, tokens) {
   return (tokens / 1_000_000) * per;
 }
 
+// P0-3: adaptive thinking is only supported on Claude 4.6+ models. Sending it
+// to Haiku 4.5 gets a 400 that breaks every request. Build the request params
+// per model so this is testable without a network call, and so a model that
+// doesn't support the param never gets it (no budget_tokens fallback either —
+// just omit "thinking" entirely for those models).
+export function buildRequestParams(model, { system, userMessage }) {
+  const entry = MODELS.find((m) => m.id === model);
+  const params = {
+    model,
+    max_tokens: 64000,
+    system,
+    output_config: { format: { type: "json_schema", schema: PLAN_SCHEMA } },
+    messages: [{ role: "user", content: userMessage }],
+  };
+  if (entry?.supportsAdaptiveThinking) {
+    params.thinking = { type: "adaptive" };
+  }
+  return params;
+}
+
 export async function requestPlan({ apiKey, model, dataContext, userRequest, onStatus }) {
   const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
 
@@ -137,14 +157,7 @@ export async function requestPlan({ apiKey, model, dataContext, userRequest, onS
 
   onStatus?.("Claude is reading your data and writing the plan…");
 
-  const stream = client.messages.stream({
-    model,
-    max_tokens: 64000,
-    thinking: { type: "adaptive" },
-    system: SYSTEM,
-    output_config: { format: { type: "json_schema", schema: PLAN_SCHEMA } },
-    messages: [{ role: "user", content: userMessage }],
-  });
+  const stream = client.messages.stream(buildRequestParams(model, { system: SYSTEM, userMessage }));
 
   const message = await stream.finalMessage();
 
