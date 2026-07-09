@@ -26,28 +26,31 @@ function num(v) {
 export function buildReportCards(rows, { personColumn, valueColumn = null, groupColumn = null }) {
   const metricLabel = valueColumn ? `total ${valueColumn}` : "number of rows";
 
-  // Aggregate the measure per person, remembering each person's group.
-  const perPerson = new Map(); // person -> { value, group }
+  // Aggregate the measure per (person, group) pair — P2-18: a person whose
+  // rows span more than one group gets one total per group they actually
+  // appear in, instead of every row's value being folded into whichever
+  // group their first row happened to belong to.
+  const perPersonGroup = new Map(); // "person|||group" -> { person, group, value }
   for (const r of rows) {
     const person = r[personColumn];
     if (person == null || String(person).trim() === "") continue;
-    const key = String(person);
-    const cur = perPerson.get(key) || { value: 0, group: groupColumn ? r[groupColumn] : null };
+    const g = groupColumn ? (r[groupColumn] == null ? "(no group)" : String(r[groupColumn])) : "(all)";
+    const key = `${person}|||${g}`;
+    const cur = perPersonGroup.get(key) || { person: String(person), group: g, value: 0 };
     if (valueColumn) {
       const n = num(r[valueColumn]);
       if (n != null) cur.value += n;
     } else {
       cur.value += 1;
     }
-    perPerson.set(key, cur);
+    perPersonGroup.set(key, cur);
   }
 
   // Group people for display and small-cell checks.
   const groups = new Map(); // groupLabel -> [{ person, value }]
-  for (const [person, info] of perPerson.entries()) {
-    const g = groupColumn ? (info.group == null ? "(no group)" : String(info.group)) : "(all)";
+  for (const { person, group: g, value } of perPersonGroup.values()) {
     if (!groups.has(g)) groups.set(g, []);
-    groups.get(g).push({ person, value: info.value });
+    groups.get(g).push({ person, value });
   }
 
   const warnings = [];
