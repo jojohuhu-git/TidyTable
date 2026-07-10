@@ -15,6 +15,8 @@ npm run build      # production build to dist/
 
 Dev server config: `.claude/launch.json`. All public asset paths MUST use `import.meta.env.BASE_URL` (Vite sets `base: '/TidyTable/'`).
 
+The save-time guardrail (flags stray top-level notes — see Root Directory Hygiene) turns on automatically during `npm install`. If a session finds it off (e.g. a freshly re-downloaded copy), re-run `npm install` or `npm run prepare` to switch it back on, and remind the owner.
+
 ## Deploy — Push Publishes
 
 Pushing to `main` deploys to GitHub Pages via `.github/workflows/deploy.yml`. **The owner reviews before any push** — commit locally; do not push without explicit go-ahead.
