@@ -27,6 +27,8 @@ import RegressionWizard from "./components/RegressionWizard.jsx";
 import ChartsPanel from "./components/ChartsPanel.jsx";
 import ShelfPanel from "./components/ShelfPanel.jsx";
 import ColumnProfileTable from "./components/ColumnProfileTable.jsx";
+import DefinitionsEditor from "./components/DefinitionsEditor.jsx";
+import { emptyDefinitionsStore, addDefinitionEntry } from "./logic/offline/definitionsStore.js";
 
 const MAX_RUN_HISTORY = 8;
 
@@ -56,6 +58,10 @@ export default function App() {
   const [keyStore, setKeyStore] = useState(() => loadKeyStore());
   const [notice, setNotice] = useState(""); // plain, non-error message (e.g. "add a definition")
   const [pendingGrain, setPendingGrain] = useState(null); // { grain, request } awaiting a combine-rows answer
+  // B7: in-app definitions, merged on top of a real Definitions sheet if the
+  // workbook has one; resets with the workbook, like excluded columns.
+  const [definitionsStore, setDefinitionsStore] = useState(() => emptyDefinitionsStore());
+  const [pendingDefinitions, setPendingDefinitions] = useState(null); // { missingTerms, message, request }
   const resultsRef = useRef(null);
 
   const dataContext = useMemo(() => {
@@ -98,17 +104,24 @@ export default function App() {
   }
 
   // Every request tries the offline engine first (build prompt §3.3). A confident
-  // answer needs no key; an undefined clinical term blocks plainly; a per-patient
-  // question over repeating rows asks before answering; anything out of range
-  // declines and, if a key exists, is offered to Claude.
-  async function runOfflineFlow(request, options) {
-    const res = runOffline(request, workbook, options);
+  // answer needs no key; an undefined clinical term blocks plainly (B7: with an
+  // in-app way to define it, not just the Definitions-sheet round-trip); a
+  // per-patient question over repeating rows asks before answering; anything
+  // out of range declines and, if a key exists, is offered to Claude.
+  // `storeOverride` lets a just-added definition be used immediately, without
+  // waiting a render for `definitionsStore` state to update.
+  async function runOfflineFlow(request, options, storeOverride) {
+    const res = runOffline(request, workbook, { ...options, definitionsStore: storeOverride || definitionsStore });
     if (res.kind === "answer") {
       recordResult(`Result of: your question "${request}"`, res.plan, res.resultRows);
       return;
     }
     if (res.kind === "block") {
-      setNotice(res.message);
+      if (res.missingTerms) {
+        setPendingDefinitions({ missingTerms: res.missingTerms, message: res.message, request });
+      } else {
+        setNotice(res.message);
+      }
       return;
     }
     if (res.kind === "clarify-grain") {
@@ -121,6 +134,16 @@ export default function App() {
       return;
     }
     await runViaClaude(request, res.claudeHint);
+  }
+
+  // B7: record the typed definition and immediately re-run the question that
+  // was blocked on it — the whole point is no Excel round-trip.
+  function addDefinitionAndRerun(entry) {
+    const next = addDefinitionEntry(definitionsStore, entry);
+    setDefinitionsStore(next);
+    const request = pendingDefinitions?.request;
+    setPendingDefinitions(null);
+    if (request) runOfflineFlow(request, {}, next);
   }
 
   // P2-19: requesting a plan from Claude and running its generated transform
@@ -160,6 +183,7 @@ export default function App() {
     setError("");
     setNotice("");
     setPendingGrain(null);
+    setPendingDefinitions(null);
     await runOfflineFlow(prompt, {});
   }
 
@@ -184,6 +208,8 @@ export default function App() {
     setError("");
     setNotice("");
     setPendingGrain(null);
+    setPendingDefinitions(null);
+    setDefinitionsStore(emptyDefinitionsStore());
     setSessionLog([]);
     setRecipe(newRecipe());
     setCheckupVersion((v) => v + 1);
@@ -382,6 +408,15 @@ export default function App() {
                 ]}
                 onAnswer={answerGrain}
                 onCancel={() => setPendingGrain(null)}
+              />
+            )}
+            {pendingDefinitions && (
+              <DefinitionsEditor
+                missingTerms={pendingDefinitions.missingTerms}
+                message={pendingDefinitions.message}
+                columns={workbook.sheets[0].headers.map((h) => h.name)}
+                onAdd={addDefinitionAndRerun}
+                onCancel={() => setPendingDefinitions(null)}
               />
             )}
             {notice && <div className="notice-box" role="status">{notice}</div>}

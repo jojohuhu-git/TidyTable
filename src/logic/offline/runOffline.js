@@ -5,16 +5,20 @@
 // of range declines gracefully and is logged — never a confident wrong answer.
 
 import { parseDefinitions } from "./definitions.js";
+import { mergeDefinitions } from "./definitionsStore.js";
 import { matchRequest, conditionPhrase } from "./matcher.js";
 import { fillPlan } from "./fillPlan.js";
 import { logMiss } from "./missLog.js";
 
 // options.grainMode: pass "group-then-test" after the user agrees to combine rows.
+// options.definitionsStore: B7's in-app definitions (see definitionsStore.js),
+// merged on top of a real Definitions sheet if the workbook has one.
 export function runOffline(request, workbook, options = {}) {
   if (!workbook?.sheets?.length) {
     return { kind: "decline", reason: "no-data", message: "Upload a spreadsheet first." };
   }
-  const defs = parseDefinitions(workbook);
+  const sheetDefs = parseDefinitions(workbook);
+  const defs = options.definitionsStore ? mergeDefinitions(sheetDefs, options.definitionsStore) : sheetDefs;
   const match = matchRequest(request, workbook, defs, options);
 
   if (match.status === "confident") {

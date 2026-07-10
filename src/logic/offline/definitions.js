@@ -38,7 +38,7 @@ const COMPARATOR_RE = /^\s*(>=|<=|<>|>|<|=)\s*(-?\d+(?:\.\d+)?)\s*(?:when\s+(.+)
 
 // Parse a "> 7 when Diagnosis = pyelonephritis" style rule. Returns the guard as
 // { column, value } or null when there is no "when" clause.
-function parseThreshold(raw) {
+export function parseThreshold(raw) {
   const m = String(raw).match(COMPARATOR_RE);
   if (!m) return null;
   const [, op, num, whenClause] = m;
@@ -51,11 +51,28 @@ function parseThreshold(raw) {
 }
 
 // Split a value list on commas / semicolons / "or", dropping empties.
-function parseValueList(raw) {
+export function parseValueList(raw) {
   return String(raw)
     .split(/[,;]|\bor\b/i)
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+// B7: the same term/column/rule -> definition-object shape the Definitions
+// sheet parser builds per row, exposed so the in-app definitions editor
+// builds an identical shape from typed form fields — one parser, not two
+// that could quietly disagree.
+export function buildDefinitionEntry(term, columnName, raw) {
+  const threshold = raw != null && String(raw).trim() !== "" ? parseThreshold(raw) : null;
+  return {
+    term: String(term).trim(),
+    columnName: columnName != null && String(columnName).trim() !== "" ? String(columnName).trim() : null,
+    kind: threshold ? "threshold" : "values",
+    op: threshold?.op || null,
+    value: threshold ? threshold.value : null,
+    when: threshold?.when || null,
+    values: threshold ? [] : (raw != null ? parseValueList(raw) : []),
+  };
 }
 
 // Build the lookup from a workbook. Returns { present, byTerm } where byTerm is a
@@ -73,19 +90,9 @@ export function parseDefinitions(workbook) {
   const byTerm = new Map();
   for (const row of sheet.rows) {
     const term = row[termCol];
-    const columnName = row[columnCol];
-    const raw = row[valueCol];
     if (term == null || String(term).trim() === "") continue;
-    const threshold = raw != null ? parseThreshold(raw) : null;
-    byTerm.set(termKey(term), {
-      term: String(term).trim(),
-      columnName: columnName != null ? String(columnName).trim() : null,
-      kind: threshold ? "threshold" : "values",
-      op: threshold?.op || null,
-      value: threshold ? threshold.value : null,
-      when: threshold?.when || null,
-      values: threshold ? [] : (raw != null ? parseValueList(raw) : []),
-    });
+    const entry = buildDefinitionEntry(term, row[columnCol], row[valueCol]);
+    byTerm.set(termKey(term), entry);
   }
   return { present: true, byTerm };
 }
