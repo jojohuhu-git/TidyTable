@@ -13,7 +13,7 @@ import { foldKey } from "../checkup/normalizers.js";
 import { lookupDefinition } from "./definitions.js";
 import {
   detectIntent, detectComparator, splitNestedLevels, COHORT_MARKERS, GROUP_WORDS,
-  expandClinicalSynonyms, NUMERIC_STAT_INTENTS,
+  expandClinicalSynonyms, NUMERIC_STAT_INTENTS, detectTopN,
 } from "./synonyms.js";
 import { findValueCandidates, findColumnCandidates, nearestSuggestions } from "./valueMatch.js";
 import { conceptColumnCandidates, valueContentCandidates, isConceptWord } from "./concepts.js";
@@ -221,6 +221,29 @@ function resolveAggregationTarget(text, intentPhrase, headers, { aliasMap, index
     const ref = resolveColumnRef(tw.join(" "), headers, { aliasMap, index, numericOnly });
     if (ref) return { ...ref, phrase: tw.join(" ") };
   }
+  return null;
+}
+
+// Phase 4: pull the column to rank out of a top-N/most-common request —
+// "most common diagnosis" -> "Diagnosis", "top 5 drugs" -> "Drug", "longest
+// duration_days" -> "Duration_days". Strips both the wording phrase ("most
+// common") and, if present, the separate "top N" count phrase, then resolves
+// the remaining words the same honesty-ordered way an aggregation target
+// resolves (exact/contained header first, then Phase 3's concept/value-
+// content stretch, which the caller confirms before trusting it).
+function resolveTopNTarget(text, topInfo, headers, opts) {
+  let remainder = text;
+  for (const p of [topInfo.topPhrase, topInfo.wordPhrase]) {
+    if (!p) continue;
+    const re = new RegExp(`\\b${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    remainder = remainder.replace(re, " ");
+  }
+  const tw = termWords(remainder).filter((w) => !/^\d+$/.test(w));
+  if (!tw.length) return null;
+  const direct = fuzzyColumn(tw.join(" "), headers) || fuzzyColumn(tw.map(singularize).join(" "), headers);
+  if (direct) return { column: direct, stretched: false };
+  const ref = resolveColumnRef(tw.join(" "), headers, opts);
+  if (ref) return { ...ref, phrase: tw.join(" ") };
   return null;
 }
 
@@ -733,6 +756,14 @@ export function matchRequest(request, workbook, defs, options = {}) {
     if (!aliasMap.has(k) && col) aliasMap.set(k, { kind: "column", column: col });
   }
 
+  // Phase 4: the most-common/top-N ranking family is checked first, ahead of
+  // every other intent — its trigger words ("most common", "top 5", "longest")
+  // never overlap the other intents' phrases (see synonyms.js), and it does
+  // not compose with a "per X" breakdown or nested "of those" levels (out of
+  // scope for this phase), so it resolves against the raw request directly.
+  const topN = detectTopN(request);
+  if (topN) return matchTopN(request, topN, sheet, headers, index, defs, aliasMap);
+
   const intent = detectIntent(request);
 
   // A3 Level 2: resolve a "per X"/"by X"/"grouped by X" breakdown column
@@ -924,6 +955,84 @@ function matchAggregation(request, intent, targetColumn, cohort, groupBy, sheet,
   };
 }
 
+// Phase 4: the default cap when no "top N" count was stated. Frequency
+// ranking's default is "the full ranked table" (no cap) — it mirrors the
+// existing "per X" breakdown, which always shows every group, and a
+// clinical file usually has few distinct values (diagnoses, drugs) so the
+// full list is short and useful. Magnitude ranking's default is 1 — it ranks
+// raw ROWS, which can number in the thousands, so "longest duration" with no
+// count means "the single longest", not a full re-sort of the sheet.
+const DEFAULT_TOPN = { frequency: Infinity, magnitude: 1 };
+
+// Phase 4: resolve a most-common/top-N ranking request once a target column
+// is pinned down. Reuses the same cohort-filter machinery average/sum/etc.
+// use — only the base cohort clause becomes a filter stage, same scope as
+// matchAggregation (nested "of those" levels are out of scope for a ranking).
+function matchTopN(request, topInfo, sheet, headers, index, defs, aliasMap) {
+  const cohort = extractCohort(request);
+  const targetSearchText = cohort ? (request.slice(0, cohort.start) + " " + request.slice(cohort.end)).trim() : request;
+  const targetRef = resolveTopNTarget(targetSearchText, topInfo, headers, { aliasMap, index });
+  if (!targetRef) return { status: "none", reason: "unsupported-topn", request };
+  if (targetRef.stretched) {
+    return columnConfirm(targetRef.phrase || targetSearchText.trim(), targetRef.candidates, targetRef.via, request);
+  }
+
+  const family = topInfo.family;
+  // Phase 1's honesty gate: "longest"/"shortest" rank a column's raw values by
+  // magnitude, which only makes sense for numbers. "most common"/"top N" rank
+  // by frequency, which works on any column type (like a distinct count), so
+  // no gate applies there.
+  if (family === "magnitude") {
+    const h = headers.find((x) => x.name === targetRef.column);
+    if (h && h.type && !NUMERIC_COLUMN_TYPES.has(h.type)) {
+      return { status: "none", reason: "non-numeric-target", targetColumn: targetRef.column, aggIntent: "topN-magnitude", request };
+    }
+  }
+
+  const rawStages = [];
+  if (cohort) rawStages.push({ text: cohort.termText, role: "cohort" });
+  const stages = rawStages
+    .flatMap((s) => resolveConditions(s.text, sheet, headers, index, defs, aliasMap).map((condition) => ({ ...s, condition })))
+    .filter((s) => s.condition);
+
+  const partial = stages.find((s) => s.condition.kind === "partial");
+  if (partial) {
+    return {
+      status: "partial",
+      understood: partial.condition.matched,
+      unmatchedText: partial.condition.unmatchedText,
+      clause: partial.condition.term,
+      request,
+    };
+  }
+
+  const missing = stages.filter((s) => s.condition.kind === "missing").map((s) => s.condition);
+  if (missing.length) {
+    return {
+      status: "needs_definitions",
+      missingTerms: missing,
+      definitionsPresent: Boolean(defs?.present),
+      request,
+    };
+  }
+
+  const confirm = buildConfirmation(stages, request);
+  if (confirm) return confirm;
+
+  const n = topInfo.n != null ? topInfo.n : DEFAULT_TOPN[family];
+  const cleanedStages = cleanStages(stages);
+  const topN = { targetColumn: targetRef.column, direction: topInfo.direction, n, family };
+  return {
+    status: "confident",
+    intent: "topN",
+    topN,
+    stages: cleanedStages,
+    grainMode: "row",
+    lookedFor: describeLookedForTopN(topN, cleanedStages),
+    sheetName: sheet.name,
+  };
+}
+
 export function conditionPhrase(c) {
   if (c.kind === "threshold") return `"${c.column}" is ${opWord(c.op)} ${c.value}`;
   if (c.kind === "set") return `"${c.column}" is ${c.op === "not-in" ? "NONE of" : "one of"} ${c.values.join(", ")}`;
@@ -962,4 +1071,17 @@ export function describeLookedForAggregation(aggIntent, targetColumn, stages, gr
   const where = parts.length ? ` where ${parts.join(", then ")}` : "";
   const brokenDown = groupBy ? `, broken down by "${groupBy.column}"` : "";
   return `${verb} "${targetColumn}"${where}${brokenDown}.`;
+}
+
+// Phase 4: the trust panel line for a most-common/top-N ranking request.
+export function describeLookedForTopN(topN, stages) {
+  const parts = stages.map((s) => conditionPhrase(s.condition));
+  const where = parts.length ? ` where ${parts.join(", then ")}` : "";
+  const cap = topN.n === Infinity ? "" : ` (top ${topN.n})`;
+  if (topN.family === "magnitude") {
+    const verb = topN.direction === "least" ? "smallest" : "largest";
+    return `Ranking "${topN.targetColumn}" by value, ${verb} first${cap}${where}.`;
+  }
+  const verb = topN.direction === "least" ? "least common" : "most common";
+  return `Ranking "${topN.targetColumn}" by how ${verb} each value is${cap}${where}.`;
 }
