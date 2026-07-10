@@ -101,20 +101,39 @@ function findDuplicateIds(sheet) {
   return out;
 }
 
+// NEW-8: a sentinel-shaped token ("N/A") is not always missing data — a
+// Sensitive/Resistant/N/A or "</= 10"/"> 10"/"N/A" field uses it as its own
+// real category ("not tested"), and blanking it would erase that signal.
+// Treat it as a category, not a blank, only when the column's OTHER values
+// form a small closed set of real text labels (not numbers/durations, which
+// legitimately have few distinct values in a small sheet purely by chance).
+const CATEGORICAL_MAX_DISTINCT = 4;
+function looksLikeClosedCategory(nonSentinelRaw) {
+  if (nonSentinelRaw.length === 0) return false;
+  const distinctCount = distinct(nonSentinelRaw.map((v) => v.toLowerCase()));
+  if (distinctCount === 0 || distinctCount > CATEGORICAL_MAX_DISTINCT) return false;
+  return !nonSentinelRaw.every((v) => typeof coerceNumbers(v) === "number");
+}
+
 function findMissing(sheet) {
   const out = [];
   const SENTINELS = new Set(["n/a", "na", "none", "-", "."]);
   for (const h of sheet.headers) {
-    let missing = 0;
+    let blankCount = 0;
+    let sentinelCount = 0;
     const sentinelForms = new Set();
+    const nonSentinelRaw = [];
     for (const r of sheet.rows) {
       const v = r[h.name];
-      if (v == null || String(v).trim() === "") { missing++; continue; }
-      const t = String(v).trim().toLowerCase();
-      if (SENTINELS.has(t)) { missing++; sentinelForms.add(String(v).trim()); }
+      if (v == null || String(v).trim() === "") { blankCount++; continue; }
+      const raw = String(v).trim();
+      if (SENTINELS.has(raw.toLowerCase())) { sentinelCount++; sentinelForms.add(raw); }
+      else { nonSentinelRaw.push(raw); }
     }
+    const treatSentinelsAsMissing = !looksLikeClosedCategory(nonSentinelRaw);
+    const missing = blankCount + (treatSentinelsAsMissing ? sentinelCount : 0);
     if (missing === 0) continue;
-    const hasSentinels = sentinelForms.size > 0;
+    const hasSentinels = treatSentinelsAsMissing && sentinelForms.size > 0;
     out.push({
       id: nextId(),
       type: "missing",
@@ -404,22 +423,39 @@ function flag(sheet, h, type, title, detail, samples) {
   };
 }
 
+// NEW-8: "</= 10" is real clinical shorthand for "≤ 10" (a WBCs-style lab
+// column reports every result as a threshold, never a raw number) — the
+// plain "<=" form is already covered by [<>]=?, this adds the "</=" and
+// ">/=" spellings seen in real sheets.
+const CENSOR_RE = /^(?:[<>]=?|<\/=|>\/=)\s*-?\d/;
+const CENSOR_SENTINEL_RE = /^(n\/a|na|none|-|\.)$/i;
+
 function findCensored(sheet) {
   const out = [];
   for (const h of sheet.headers) {
     if (h.type === "date") continue;
     const affected = [];
     let plainNumbers = 0;
+    let otherText = 0;
     for (const r of sheet.rows) {
       const v = r[h.name];
       if (v == null) continue;
       if (typeof v === "number") { plainNumbers++; continue; }
       const s = String(v).trim();
-      if (/^[<>]=?\s*-?\d/.test(s) || /^(pending|tnp|not done|nd)$/i.test(s)) affected.push(v);
-      else if (isNumericString(v)) plainNumbers++;
+      if (s === "") continue;
+      if (CENSOR_RE.test(s) || /^(pending|tnp|not done|nd)$/i.test(s)) { affected.push(v); continue; }
+      if (isNumericString(v)) { plainNumbers++; continue; }
+      if (CENSOR_SENTINEL_RE.test(s)) continue; // a missing-value marker, not evidence either way
+      otherText++;
     }
-    // Only surface where the column is mostly numeric (a real measurement column).
-    if (affected.length === 0 || plainNumbers < affected.length) continue;
+    // Surface either where the column is mostly numeric (a real measurement
+    // column with a few censored results), or where every recognized value
+    // is a censored/threshold result (a column reported entirely as
+    // "<=X"/">X", with no unrelated free text) — a fully-censored lab column
+    // like WBCs never has "plain numbers" at all.
+    const passesNumericMajority = plainNumbers >= affected.length;
+    const passesAllRecognized = otherText === 0;
+    if (affected.length === 0 || !(passesNumericMajority || passesAllRecognized)) continue;
     out.push({
       id: nextId(),
       type: "censored",
