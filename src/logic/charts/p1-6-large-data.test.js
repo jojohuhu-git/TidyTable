@@ -37,14 +37,18 @@ describe("P1-6 — scatter datasets are sampled down past a point cap", () => {
   });
 });
 
-describe("P1-6 — the advisor refuses a bar chart with too many categories", () => {
-  it("declines plainly past ~30 distinct categories, counting them honestly", () => {
+describe("P1-6 / W4 — the advisor draws many categories as horizontal bars, never refusing", () => {
+  // W4 (owner's decision): the old P1-6 "refuse past ~30 categories" behavior
+  // was replaced — a large category count now draws a horizontal all-rows bar
+  // chart (sorted largest-first, canvas grows taller), never type "none".
+  it("recommends a horizontal bar layout past many distinct categories, counting them honestly", () => {
     const rows = Array.from({ length: 200 }, (_, i) => ({ PatientID: `P${i}` }));
     const ds = buildDataset(deriveSheet("D", rows), "PatientID", null);
     const rec = recommendChart(ds);
-    expect(rec.type).toBe("none");
+    expect(rec.type).toBe("bar");
+    expect(rec.layout).toBe("horizontal");
     expect(rec.reason).toMatch(/200 categories/);
-    expect(rec.reason).toMatch(/fewer groups/i);
+    expect(rec.offerGroupOther).toBe(true);
   });
 
   it("still recommends bars for a normal-sized category count", () => {

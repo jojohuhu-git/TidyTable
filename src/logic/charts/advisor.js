@@ -1,15 +1,20 @@
-// Chart advisor (build prompt §11). Opinionated: from the shape of the result it
-// picks ONE recommended chart and says why, with any alternatives collapsed. A
-// pie is only offered when it is genuinely a few parts of a whole (≤4 slices);
-// past that it says plainly why bars are better. Nothing here draws anything —
-// ChartPreview renders and excelChart.js writes the reproduction steps.
+// Chart advisor (build prompt §11; W4 layout intelligence). Opinionated: from
+// the shape of the result it picks ONE recommended chart and says why, with
+// any alternatives collapsed. A pie is only offered when it is genuinely a
+// few parts of a whole (≤4 slices); past that it says plainly why bars are
+// better. Nothing here draws anything — ChartPreview renders and
+// excelChart.js writes the reproduction steps.
+//
+// W4 (owner's locked decision): the advisor never refuses a chart just
+// because there are a lot of categories. Past MANY_CATEGORIES it recommends
+// a HORIZONTAL bar layout (`layout: "horizontal"`) — sorted largest-first,
+// labels down the side, the preview grows taller to fit every row — and
+// still draws every category. Grouping the smallest ones into "Other" is
+// offered as a one-click, reversible option (see aggregate.js
+// groupSmallIntoOther), never applied automatically.
 
 const PIE_MAX_SLICES = 4;
-// P1-6: past this many distinct categories, a bar-per-category chart is
-// unreadable (and, at real scale, thousands of bars). Refuse plainly instead
-// of rendering something nobody can read, and count honestly — this is the
-// dataset's real distinct-group count, not a sampled or capped number.
-const TOO_MANY_CATEGORIES = 30;
+const MANY_CATEGORIES = 12;
 
 // dataset shapes:
 //   { kind: "categorical", points: [{label, value}], labelIsTime: boolean, valueName }
@@ -37,13 +42,18 @@ export function recommendChart(dataset) {
     };
   }
 
-  // P1-6: a bar-per-category chart past this many groups is unreadable (and,
-  // at real scale, thousands of bars) — a line handles a long time series
-  // fine (above), so this only gates the plain-categorical/bar path.
-  if (n > TOO_MANY_CATEGORIES) {
+  // W4: many categories → a horizontal bar chart, sorted largest-first (see
+  // aggregate.js — categorical points are already sorted that way), drawing
+  // every one of the n categories. No pie past PIE_MAX_SLICES anyway, so the
+  // only decision left is the layout.
+  if (n > MANY_CATEGORIES) {
     return {
-      type: "none",
-      reason: `This would compare ${n} categories, which is too many to read as a chart. Pick a column with fewer groups (a bar-per-category chart works well up to about ${TOO_MANY_CATEGORIES}).`,
+      type: "bar",
+      layout: "horizontal",
+      reason: `Comparing ${n} categories — laid out as horizontal bars, largest first, so every one is still readable even though there are a lot of them.`,
+      alternatives: [],
+      noPieReason: `A ${n}-slice pie would be unreadable; horizontal bars compare all ${n} categories clearly.`,
+      offerGroupOther: n > MANY_CATEGORIES * 2,
     };
   }
 

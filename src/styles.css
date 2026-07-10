@@ -169,6 +169,16 @@ body {
 .charts-alts ul { list-style: none; padding-left: 0; }
 .charts-alts li { margin: 0.3rem 0; }
 .charts-steps-h { margin: 0.6rem 0 0.3rem; }
+
+/* W4: free-text "describe the chart" box, the collapsible manual pickers, the
+   optional "group small into Other" toggle, and the palette note. */
+.chart-text-row { display: flex; align-items: flex-end; gap: 0.7rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
+.chart-text-label { display: flex; flex-direction: column; gap: 0.3rem; flex: 1; min-width: 16rem; font-size: 0.92rem; color: var(--ink-soft); }
+.chart-text-input { padding: 0.45rem 0.6rem; border: 1px solid var(--line); border-radius: var(--rad); background: var(--card); font: inherit; }
+.chart-manual { margin: 0.2rem 0 0.6rem; }
+.chart-manual > summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 0.92rem; margin-bottom: 0.4rem; }
+.chart-other-toggle { display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.9rem; color: var(--ink-soft); margin: 0.5rem 0; }
+.chart-palette-note { margin: 0.3rem 0 0.5rem; }
 .shelf-config { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 0.7rem; }
 .shelf-field { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.92rem; }
 .shelf-field select { padding: 0.35rem 0.5rem; border: 1px solid var(--line); border-radius: var(--rad); background: var(--card); }

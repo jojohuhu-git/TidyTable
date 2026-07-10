@@ -5,6 +5,7 @@
 
 import { foldKey } from "../logic/checkup/normalizers.js";
 import { maxOf } from "../logic/charts/aggregate.js";
+import { chartPalette } from "../logic/charts/palette.js";
 import { buildChartAriaSummary } from "../logic/charts/chartAriaSummary.js";
 
 export const CHART_W = 480;
@@ -12,6 +13,11 @@ export const CHART_H = 300;
 const W = CHART_W;
 const H = CHART_H;
 const TITLE_PAD = 24; // B9: room for the real chart title, so it doesn't overlap the plot
+// W4: a long horizontal all-rows bar list grows as tall as it needs — this is
+// the per-row height once the list is longer than a normal chart can hold, so
+// every category still gets a readable, labeled bar (owner's decision: never
+// refuse for "too many values").
+const LONG_ROW_H = 22;
 
 // B9: a real title (e.g. "count by Diagnosis") makes an exported PNG
 // self-explanatory on its own, and also says what the bar values are —
@@ -23,16 +29,22 @@ function ChartTitle({ title }) {
   );
 }
 
-export default function ChartPreview({ chartType, dataset, highlightLabel, title, svgRef }) {
+export default function ChartPreview({ chartType, dataset, highlightLabel, title, svgRef, layout }) {
   if (!dataset || !dataset.points?.length) return null;
   const isSubject = (label) =>
     highlightLabel != null && foldKey(label) === foldKey(highlightLabel);
-  const fill = (label) =>
-    highlightLabel == null || isSubject(label) ? "var(--accent)" : "var(--line)";
+  // W4: with no highlight, color the bars/slices from the chart palette
+  // (Okabe-Ito for a short list, a single-hue teal ramp for a long one) — a
+  // report-card highlight still overrides everything to the accent/grey pair.
+  const palette = chartPalette(dataset.points.length);
+  const fill = (label, i) => {
+    if (highlightLabel != null) return isSubject(label) ? "var(--accent)" : "var(--line)";
+    return palette[i] || "var(--accent)";
+  };
 
-  if (chartType === "bar") return <BarChart dataset={dataset} fill={fill} title={title} svgRef={svgRef} />;
+  if (chartType === "bar") return <BarChart dataset={dataset} fill={fill} title={title} svgRef={svgRef} layout={layout} highlighting={highlightLabel != null} />;
   if (chartType === "line") return <LineChart dataset={dataset} title={title} svgRef={svgRef} />;
-  if (chartType === "pie") return <PieChart dataset={dataset} fill={fill} title={title} svgRef={svgRef} />;
+  if (chartType === "pie") return <PieChart dataset={dataset} fill={fill} title={title} svgRef={svgRef} highlighting={highlightLabel != null} />;
   if (chartType === "scatter") return <ScatterChart dataset={dataset} title={title} svgRef={svgRef} />;
   return null;
 }
@@ -45,18 +57,26 @@ function niceMax(v) {
 
 // P2-15: a negative value has no natural "start at zero, grow right" bar —
 // draw it growing left from a zero axis instead of clamping/misreading it.
-function BarChart({ dataset, fill, title, svgRef }) {
+// W4: past what a fixed-height chart can hold, the SVG grows taller (one row
+// per category at LONG_ROW_H) so every category is drawn and labeled, largest
+// first — the horizontal all-rows layout the advisor recommends for many
+// categories. The bars are already horizontal in this component; `layout` and
+// the long-list path only change the height and the color ramp.
+function BarChart({ dataset, fill, title, svgRef, layout }) {
   const padL = 130;
   const padR = 40;
   const padY = 16 + (title ? TITLE_PAD : 0);
   const points = dataset.points;
+  // A "long" list grows the canvas; a short one keeps the classic 300px chart.
+  const isLong = points.length > 12 || layout === "horizontal";
+  const chartH = isLong ? padY + 16 + points.length * LONG_ROW_H : H;
   const values = points.map((p) => p.value);
   const posMax = niceMax(maxOf(values, 0));
   const negMax = niceMax(maxOf(values.map((v) => -v), 0));
   const totalRange = posMax + negMax || 1;
   const scale = (W - padL - padR) / totalRange;
   const zeroX = padL + negMax * scale;
-  const rowH = (H - padY - 16) / points.length;
+  const rowH = (chartH - padY - 16) / points.length;
   const barH = Math.min(rowH * 0.62, 34);
   // B12: a data summary in the aria-label, not just the chart type, so a
   // screen reader user gets the numbers without seeing the SVG.
@@ -64,9 +84,9 @@ function BarChart({ dataset, fill, title, svgRef }) {
     ? `Bar chart of ${title}: ${buildChartAriaSummary(dataset)}`
     : `Bar chart: ${buildChartAriaSummary(dataset)}`;
   return (
-    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="chart-svg" role="img" aria-label={ariaLabel}>
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${chartH}`} width={W} height={chartH} className="chart-svg" role="img" aria-label={ariaLabel}>
       <ChartTitle title={title} />
-      {negMax > 0 && <line x1={zeroX} y1={padY} x2={zeroX} y2={H - 16} stroke="var(--line)" />}
+      {negMax > 0 && <line x1={zeroX} y1={padY} x2={zeroX} y2={chartH - 16} stroke="var(--line)" />}
       {points.map((p, i) => {
         const y = padY + i * rowH + (rowH - barH) / 2;
         const w = Math.max(1, Math.abs(p.value) * scale);
@@ -77,7 +97,7 @@ function BarChart({ dataset, fill, title, svgRef }) {
             <text x={padL - 8} y={y + barH / 2} textAnchor="end" dominantBaseline="middle" className="chart-label">
               {p.label.length > 18 ? p.label.slice(0, 17) + "…" : p.label}
             </text>
-            <rect x={x} y={y} width={w} height={barH} fill={fill(p.label)} rx="2" />
+            <rect x={x} y={y} width={w} height={barH} fill={fill(p.label, i)} rx="2" />
             <text
               x={negative ? x - 5 : x + w + 5}
               y={y + barH / 2}
@@ -146,7 +166,7 @@ function PieChart({ dataset, fill, title, svgRef }) {
         if (frac >= 1 - 1e-9) {
           return (
             <g key={i}>
-              <circle cx={cx} cy={cy} r={r} fill={fill ? fill(p.label) : color} stroke="var(--card)" strokeWidth="1.5" />
+              <circle cx={cx} cy={cy} r={r} fill={fill ? fill(p.label, i) : color} stroke="var(--card)" strokeWidth="1.5" />
               <text x={cx} y={cy + r + 18} textAnchor="middle" dominantBaseline="middle" className="chart-label">
                 {p.label} ({Math.round(frac * 100)}%)
               </text>
@@ -164,7 +184,7 @@ function PieChart({ dataset, fill, title, svgRef }) {
         angle = end;
         return (
           <g key={i}>
-            <path d={d} fill={fill ? fill(p.label) : color} stroke="var(--card)" strokeWidth="1.5" />
+            <path d={d} fill={fill ? fill(p.label, i) : color} stroke="var(--card)" strokeWidth="1.5" />
             <text x={cx + (r + 18) * Math.cos(mid)} y={cy + (r + 18) * Math.sin(mid)} textAnchor="middle" dominantBaseline="middle" className="chart-label">
               {p.label} ({Math.round(frac * 100)}%)
             </text>
