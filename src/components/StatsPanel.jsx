@@ -2,6 +2,12 @@ import { useMemo, useState } from "react";
 import { analyze } from "../logic/stats/runStats.js";
 import { rTTest, rChiSquare } from "../logic/rscripts/templates.js";
 import { downloadText } from "../logic/workbook.js";
+import { CopyButton } from "./ResultsPanel.jsx";
+
+// P2-22: the t-test crosscheck used to print every raw value inline, which
+// is unreadable (and slow to render) for a real-sized group. Show at most
+// this many and offer a copy button for the full list instead.
+const CROSSCHECK_VALUE_CAP = 50;
 
 // Step 7 (build prompt §9): compare two columns and show all the work. Pick a
 // grouping column and an outcome column; the app builds the table, picks the
@@ -191,11 +197,24 @@ function StepBody({ step }) {
 
   if (step.kind === "crosscheck-ttest") {
     const d = step.data;
+    const fmtList = (label, values) => {
+      const shown = values.slice(0, CROSSCHECK_VALUE_CAP);
+      const more = values.length - shown.length;
+      return `${label} = [${shown.join(", ")}${more > 0 ? `, …and ${more} more` : ""}]`;
+    };
     return (
-      <p>
-        You can confirm this at <a href="https://www.openepi.com" target="_blank" rel="noreferrer">openepi.com</a>{" "}
-        using the two lists of {d.numCol} values: {d.groups[0]} = [{d.a.join(", ")}], {d.groups[1]} = [{d.b.join(", ")}].
-      </p>
+      <div>
+        <p>
+          You can confirm this at <a href="https://www.openepi.com" target="_blank" rel="noreferrer">openepi.com</a>{" "}
+          using the two lists of {d.numCol} values: {fmtList(d.groups[0], d.a)}, {fmtList(d.groups[1], d.b)}.
+        </p>
+        {(d.a.length > CROSSCHECK_VALUE_CAP || d.b.length > CROSSCHECK_VALUE_CAP) && (
+          <CopyButton
+            text={`${d.groups[0]} = [${d.a.join(", ")}]\n${d.groups[1]} = [${d.b.join(", ")}]`}
+            label="Copy full lists"
+          />
+        )}
+      </div>
     );
   }
 

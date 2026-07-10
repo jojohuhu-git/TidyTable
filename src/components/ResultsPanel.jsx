@@ -3,7 +3,7 @@ import DataTable from "./DataTable.jsx";
 import RstudioGuide from "./RstudioGuide.jsx";
 import { downloadRowsAsXlsx, downloadRowsAsCsv, downloadText } from "../logic/workbook.js";
 
-function CopyButton({ text, label = "Copy" }) {
+export function CopyButton({ text, label = "Copy" }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
