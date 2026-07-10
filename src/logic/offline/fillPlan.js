@@ -109,8 +109,8 @@ var SHEET = ${JSON.stringify(match.sheetName)};
 var UNIT = ${JSON.stringify(grain ? "people" : "rows")};
 var rows = sheets[SHEET] || [];
 var pred = function (c) { return function (r) {
-  if (c.kind === "value") { return r[c.column] != null && foldKey(r[c.column]) === foldKey(c.value); }
-  if (c.kind === "set") { var set = {}; for (var i = 0; i < c.values.length; i++) { set[foldKey(c.values[i])] = 1; } return r[c.column] != null && set[foldKey(r[c.column])] === 1; }
+  if (c.kind === "value") { if (c.op === "<>") { return r[c.column] == null || foldKey(r[c.column]) !== foldKey(c.value); } return r[c.column] != null && foldKey(r[c.column]) === foldKey(c.value); }
+  if (c.kind === "set") { var set = {}; for (var i = 0; i < c.values.length; i++) { set[foldKey(c.values[i])] = 1; } if (c.op === "not-in") { return r[c.column] == null || set[foldKey(r[c.column])] !== 1; } return r[c.column] != null && set[foldKey(r[c.column])] === 1; }
   if (c.kind === "threshold") { if (c.when) { var wv = r[c.when.column]; if (wv == null || foldKey(wv) !== foldKey(c.when.value)) return false; } var n = toNumber(r[c.column]); if (n == null) return false; return cmp(n, c.op, c.value); }
   return false;
 }; };
@@ -120,7 +120,8 @@ if (GRAIN) {
   for (var i = 0; i < rows.length; i++) { var v = rows[i][GRAIN.entityColumn]; if (v == null || String(v).trim() === "") continue; var k = foldKey(v); if (!groups[k]) { groups[k] = []; order.push(k); } groups[k].push(rows[i]); }
   var ents = order.map(function (k) { return groups[k]; });
   var prev = ents.length;
-  for (var s = 0; s < STAGES.length; s++) { var p = pred(STAGES[s]); ents = ents.filter(function (g) { return g.some(p); }); var row = {}; row[${JSON.stringify(RESULT_KEYS.checked)}] = STAGES[s].term; row[${JSON.stringify(RESULT_KEYS.matched)}] = ents.length; row[${JSON.stringify(RESULT_KEYS.out)}] = prev; row[${JSON.stringify(RESULT_KEYS.share)}] = (prev ? Math.round(ents.length / prev * 1000) / 10 : 0) + "%"; out.push(row); prev = ents.length; }
+  var posOf = function (c) { if (!c.negated) return null; if (c.kind === "value") { var v = JSON.parse(JSON.stringify(c)); v.op = "="; v.negated = false; return v; } if (c.kind === "set") { var t = JSON.parse(JSON.stringify(c)); t.op = "in"; t.negated = false; return t; } return null; };
+  for (var s = 0; s < STAGES.length; s++) { var pos = posOf(STAGES[s]); var p = pos ? pred(pos) : pred(STAGES[s]); ents = ents.filter(function (g) { return pos ? !g.some(p) : g.some(p); }); var row = {}; row[${JSON.stringify(RESULT_KEYS.checked)}] = STAGES[s].term; row[${JSON.stringify(RESULT_KEYS.matched)}] = ents.length; row[${JSON.stringify(RESULT_KEYS.out)}] = prev; row[${JSON.stringify(RESULT_KEYS.share)}] = (prev ? Math.round(ents.length / prev * 1000) / 10 : 0) + "%"; out.push(row); prev = ents.length; }
 } else {
   var cur = rows; var prevR = rows.length;
   for (var s2 = 0; s2 < STAGES.length; s2++) { var p2 = pred(STAGES[s2]); cur = cur.filter(p2); var row2 = {}; row2[${JSON.stringify(RESULT_KEYS.checked)}] = STAGES[s2].term; row2[${JSON.stringify(RESULT_KEYS.matched)}] = cur.length; row2[${JSON.stringify(RESULT_KEYS.out)}] = prevR; row2[${JSON.stringify(RESULT_KEYS.share)}] = (prevR ? Math.round(cur.length / prevR * 1000) / 10 : 0) + "%"; out.push(row2); prevR = cur.length; }
@@ -194,8 +195,8 @@ var GROUP = ${JSON.stringify(match.groupColumn)};
 var SHEET = ${JSON.stringify(match.sheetName)};
 var rows = sheets[SHEET] || [];
 var pred = function (c) { return function (r) {
-  if (c.kind === "value") { return r[c.column] != null && foldKey(r[c.column]) === foldKey(c.value); }
-  if (c.kind === "set") { var set = {}; for (var i = 0; i < c.values.length; i++) { set[foldKey(c.values[i])] = 1; } return r[c.column] != null && set[foldKey(r[c.column])] === 1; }
+  if (c.kind === "value") { if (c.op === "<>") { return r[c.column] == null || foldKey(r[c.column]) !== foldKey(c.value); } return r[c.column] != null && foldKey(r[c.column]) === foldKey(c.value); }
+  if (c.kind === "set") { var set = {}; for (var i = 0; i < c.values.length; i++) { set[foldKey(c.values[i])] = 1; } if (c.op === "not-in") { return r[c.column] == null || set[foldKey(r[c.column])] !== 1; } return r[c.column] != null && set[foldKey(r[c.column])] === 1; }
   if (c.kind === "threshold") { if (c.when) { var wv = r[c.when.column]; if (wv == null || foldKey(wv) !== foldKey(c.when.value)) return false; } var n = toNumber(r[c.column]); if (n == null) return false; return cmp(n, c.op, c.value); }
   return false;
 }; };
@@ -350,8 +351,8 @@ var LABEL = ${JSON.stringify(label)};
 var SHEET = ${JSON.stringify(match.sheetName)};
 var rows = sheets[SHEET] || [];
 var pred = function (c) { return function (r) {
-  if (c.kind === "value") { return r[c.column] != null && foldKey(r[c.column]) === foldKey(c.value); }
-  if (c.kind === "set") { var set = {}; for (var i = 0; i < c.values.length; i++) { set[foldKey(c.values[i])] = 1; } return r[c.column] != null && set[foldKey(r[c.column])] === 1; }
+  if (c.kind === "value") { if (c.op === "<>") { return r[c.column] == null || foldKey(r[c.column]) !== foldKey(c.value); } return r[c.column] != null && foldKey(r[c.column]) === foldKey(c.value); }
+  if (c.kind === "set") { var set = {}; for (var i = 0; i < c.values.length; i++) { set[foldKey(c.values[i])] = 1; } if (c.op === "not-in") { return r[c.column] == null || set[foldKey(r[c.column])] !== 1; } return r[c.column] != null && set[foldKey(r[c.column])] === 1; }
   if (c.kind === "threshold") { if (c.when) { var wv = r[c.when.column]; if (wv == null || foldKey(wv) !== foldKey(c.when.value)) return false; } var n = toNumber(r[c.column]); if (n == null) return false; return cmp(n, c.op, c.value); }
   return false;
 }; };

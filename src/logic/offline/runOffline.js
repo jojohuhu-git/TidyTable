@@ -73,16 +73,25 @@ export function runOffline(request, workbook, options = {}) {
   };
 }
 
-// A3 Level 1: "average"/"sum"/"per X"/"by X" are a real capability gap (the
-// offline engine only ever counts or shares rows — see fillPlan.js), not an
-// undefined clinical term, so say that plainly instead of the generic decline.
+// The engine CAN average/sum/group-by since A3 Level 2 — these reasons now
+// mean it couldn't pin down WHICH column, so say that honestly instead of the
+// old (now false) "cannot compute yet".
 const UNSUPPORTED_LEAD = {
-  "unsupported-average": "This asks for an average, which the offline engine cannot compute yet — it can only count or share rows.",
-  "unsupported-sum": "This asks for a total/sum, which the offline engine cannot compute yet — it can only count or share rows.",
-  "unsupported-groupby": "This asks for a breakdown per group (\"per\"/\"by\"/\"grouped by\"), which the offline engine cannot compute yet — it can only count or share rows for one cohort at a time.",
+  "unsupported-average": "This asks for an average, but I couldn't tell which column of numbers to average. Name the column directly (e.g. \"average Duration_days\").",
+  "unsupported-sum": "This asks for a total/sum, but I couldn't tell which column of numbers to add up. Name the column directly (e.g. \"total Duration_days\").",
+  "unsupported-groupby": "This asks for a per-group breakdown, but I couldn't tell which column to group by. Name it directly (e.g. \"per Diagnosis\").",
 };
 
 function buildDeclineMessage(match) {
+  // Honesty bug 1 (2026-07-10): averaging a text column refuses plainly.
+  if (match.reason === "non-numeric-target") {
+    const verb = match.aggIntent === "sum" ? "add up" : "average";
+    return (
+      `"${match.targetColumn}" contains words, not numbers — I can't ${verb} it. ` +
+      `Name a numeric column instead (e.g. "average Duration_days"), or rephrase as a count ` +
+      `(e.g. "how many rows have ... in ${match.targetColumn}").`
+    );
+  }
   const lead = UNSUPPORTED_LEAD[match.reason]
     || "This request needs the AI mode — the offline engine could not answer it with confidence, so it will not guess.";
   return `${lead} Add your key at the top right to send it to Claude, or rephrase it as a count or share of rows.`;
@@ -120,7 +129,10 @@ function buildClaudeHint(match) {
     return "A local pre-check understood a count-type request but could not tell which columns or values to filter on.";
   }
   if (match.reason === "unsupported-average" || match.reason === "unsupported-sum" || match.reason === "unsupported-groupby") {
-    return "A local pre-check recognized this asks for an average/sum/group-by breakdown, which the offline engine does not compute.";
+    return "A local pre-check recognized this asks for an average/sum/group-by breakdown but could not resolve which column it applies to.";
+  }
+  if (match.reason === "non-numeric-target") {
+    return "A local pre-check found this asks to average or sum a text (non-numeric) column, which it refused.";
   }
   return "A local pre-check did not recognize this as a count or share of rows.";
 }

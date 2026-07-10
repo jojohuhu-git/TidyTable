@@ -42,10 +42,18 @@ function compare(n, op, target) {
 export function predicate(cond) {
   if (cond.kind === "value") {
     const want = foldKey(cond.value);
+    if (cond.op === "<>") {
+      // Bug 3 (negation): blank cells count as "not X" — the same rows
+      // Excel's COUNTIFS("<>X") counts, so the formula steps stay honest.
+      return (r) => r[cond.column] == null || foldKey(r[cond.column]) !== want;
+    }
     return (r) => r[cond.column] != null && foldKey(r[cond.column]) === want;
   }
   if (cond.kind === "set") {
     const set = new Set(cond.values.map(foldKey));
+    if (cond.op === "not-in") {
+      return (r) => r[cond.column] == null || !set.has(foldKey(r[cond.column]));
+    }
     return (r) => r[cond.column] != null && set.has(foldKey(r[cond.column]));
   }
   if (cond.kind === "threshold") {
@@ -60,6 +68,17 @@ export function predicate(cond) {
     };
   }
   return () => false;
+}
+
+// Bug 3 (negation): the positive twin of a negated value/set condition, used
+// by group-then-test grain — a patient "never got X" iff NO row matches X,
+// which is NOT the same as "some row is not X" for patients with several rows.
+// Negated thresholds keep their flipped op and stay on the some() path.
+export function positiveCondition(cond) {
+  if (!cond.negated) return null;
+  if (cond.kind === "value") return { ...cond, op: "=", negated: false };
+  if (cond.kind === "set") return { ...cond, op: "in", negated: false };
+  return null;
 }
 
 const pct = (num, den) => (den ? Math.round((num / den) * 1000) / 10 : 0);
@@ -105,7 +124,10 @@ export function executeCohort(match, workbook) {
     for (const stage of match.stages) {
       const pred = predicate(stage.condition);
       const skippedCount = countUnreadable(stage.condition, entities.flatMap((g) => g));
-      entities = entities.filter((rowsOf) => rowsOf.some(pred));
+      const pos = positiveCondition(stage.condition);
+      entities = pos
+        ? entities.filter((rowsOf) => !rowsOf.some(predicate(pos)))
+        : entities.filter((rowsOf) => rowsOf.some(pred));
       const count = entities.length;
       levels.push({
         description: conditionPhrase(stage.condition),
