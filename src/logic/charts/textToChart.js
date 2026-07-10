@@ -176,6 +176,22 @@ export function resolveChartRequest(text, sheet) {
     remainder = removeSpan(remainder, span.span);
   }
 
+  // 3.5) Honesty bug 2 (2026-07-10): no aggregation word was used, but the
+  // leftover words name a NUMERIC column ("duration by diagnosis"). A silent
+  // count-by-label would look plausible and be wrong — flip the read to
+  // "average of that column?" and flag it stretched so the UI confirms
+  // before drawing anything.
+  if (!intent && aggMode === "count") {
+    const numericPool = headers.filter((h) => isNumeric(sheet, h.name) && h.name !== labelCol);
+    const span = bestColumnSpan(remainder, numericPool);
+    if (span && span.score >= 2) {
+      aggMode = "average";
+      valueCol = span.column;
+      valueStretched = true;
+      remainder = removeSpan(remainder, span.span);
+    }
+  }
+
   // 4) Anything meaningful still left over is tried as a value filter
   // ("escherichia coli" in "escherichia coli by ward") — scoped to columns
   // other than the two axes already resolved, so the same word can't both
@@ -195,7 +211,10 @@ export function resolveChartRequest(text, sheet) {
       filter = { column: top.column, value: top.value };
       if (!top.exact) valueStretched = valueStretched || true; // a stretched filter still confirms before drawing
       if (candidates.some((c) => c.score === top.score && c !== top)) labelStretched = true;
-    } else if (leftover.length >= 2) {
+    } else if (leftover.length >= 2 || bestColumnSpan(remainder, headers.filter((h) => h.name !== labelCol && h.name !== valueCol))) {
+      // Bug 2 companion: a leftover word that names a COLUMN (not a cell
+      // value, e.g. "drug" in "drug by diagnosis") can't be charted as a
+      // filter — say so plainly instead of dropping it into a silent count.
       ignored = phrase;
     }
   }

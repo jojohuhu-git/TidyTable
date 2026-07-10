@@ -36,6 +36,10 @@ const STOP = new Set([
 
 const words = (s) => String(s || "").toLowerCase().split(/[^a-z0-9]+/i).filter(Boolean);
 
+// The header types (see workbook.js inferType) an average/sum can honestly run
+// on. Same set textToChart.js uses for its numeric dropdown.
+const NUMERIC_COLUMN_TYPES = new Set(["number", "mixed (text + numbers)"]);
+
 // Fuzzy-match a spoken column phrase to a real header. Exact fold first, then a
 // contained-key match so "duration" finds "Duration_days".
 function fuzzyColumn(phrase, headers) {
@@ -45,6 +49,10 @@ function fuzzyColumn(phrase, headers) {
   if (hit) return hit.name;
   hit = headers.find((h) => {
     const hk = columnKey(h.name);
+    // Honesty bug 1 (2026-07-10): a substring hit on a tiny key matches almost
+    // anything — the "s" left over from "what's" found "Diagnosi-s-". Require
+    // 3+ characters on both sides before a containment match counts.
+    if (key.length < 3 || hk.length < 3) return false;
     return hk.includes(key) || key.includes(hk);
   });
   return hit ? hit.name : null;
@@ -165,6 +173,52 @@ function resolveColumnScope(clause, headers, index) {
   return null;
 }
 
+// Honesty bug 3 (2026-07-10): negation support. These words used to be dropped
+// (or worse, split — "patients with" matched inside "patients withOUT"), so
+// "how many patients did NOT get amoxicillin" confidently counted the patients
+// who DID. A negation word now inverts the condition it attaches to; one that
+// attaches to nothing blocks, never gets dropped. "no" is included, but a
+// literal cell value like "No growth" still wins because the exact whole-phrase
+// scan runs before negation is considered.
+const NEGATION_WORDS = new Set([
+  "not", "never", "without", "excluding", "except", "no",
+  "didnt", "doesnt", "dont", "isnt", "wasnt", "werent", "hasnt", "havent", "hadnt",
+]);
+
+function detectNegation(clause) {
+  const text = String(clause)
+    .replace(/n[’'`]t\b/gi, "nt") // didn't/doesn't → didnt/doesnt
+    .replace(/\b(?:other|rather)\s+than\b/gi, " not ")
+    .replace(/\bapart\s+from\b/gi, " not ")
+    .replace(/\bexcept\s+for\b/gi, " not ");
+  const found = [];
+  const kept = [];
+  for (const w of words(text)) {
+    if (NEGATION_WORDS.has(w)) found.push(w);
+    else kept.push(w);
+  }
+  if (!found.length) return null;
+  return { remainder: kept.join(" "), words: found };
+}
+
+function invertOp(op) {
+  return { ">": "<=", ">=": "<", "<": ">=", "<=": ">", "=": "<>", "<>": "=" }[op] || op;
+}
+
+// Flip a resolved positive condition into its negation, keeping the W2 stretch
+// annotations so the confirm path still works. `negated: true` and the flipped
+// op survive cleanCondition — execution, the Excel steps, and the worker
+// transform all key off them, and per-patient grain treats a negated value/set
+// as "NO row matches" (see cohort.js positiveCondition).
+function negateCondition(cond, negWords, scopeWords) {
+  const out = { ...cond, negated: true, negWords };
+  if (cond.kind === "value") out.op = "<>";
+  else if (cond.kind === "set") out.op = "not-in";
+  else if (cond.kind === "threshold") out.op = invertOp(cond.op);
+  if (scopeWords && scopeWords.length) out.scopeWords = [...(cond.scopeWords || []), ...scopeWords];
+  return out;
+}
+
 // Turn a resolved value candidate into a value condition, carrying the real cell
 // value so every downstream surface (execution, Excel steps, transform) stays
 // identical to a plain exact match. `stretched`/`candidates` drive the middle-
@@ -196,10 +250,16 @@ function resolveCondition(clause, sheet, headers, index, defs, aliasMap) {
   // Threshold: a comparator and a number, on a named column.
   if (compar && numMatch && compar.op !== "=") {
     const before = String(clause).toLowerCase().split(compar.phrase)[0];
-    const colPhrase = termWords(before).join(" ");
+    // Honesty bug 3 (2026-07-10): "not more than 7" / "never over 7" — a
+    // negation word right before the comparator flips it; it used to be
+    // dropped as a stop-word, silently answering the OPPOSITE question.
+    const negBefore = /\b(?:not|never|no)\s*$/i.exec(before);
+    const op = negBefore ? invertOp(compar.op) : compar.op;
+    const colBefore = negBefore ? before.slice(0, negBefore.index) : before;
+    const colPhrase = termWords(colBefore).join(" ");
     const column = fuzzyColumn(colPhrase, headers) || fuzzyColumn(termWords(clause).join(" "), headers);
     if (column) {
-      return { kind: "threshold", column, op: compar.op, value: Number(numMatch[0]), source: "column", term: clause.trim() };
+      return { kind: "threshold", column, op, value: Number(numMatch[0]), source: "column", term: clause.trim() };
     }
   }
 
@@ -256,6 +316,27 @@ function resolveCondition(clause, sheet, headers, index, defs, aliasMap) {
   if (wholeExact && !whole.scopedFellBack && !scopeStretched) {
     return valueCondition(wholeExact, phrase, { stretched: false, scopeWords });
   }
+
+  // Honesty bug 3: negation. Checked AFTER the whole-phrase exact scan (so a
+  // literal value like "No growth" matches as itself) and BEFORE the
+  // single-word scan (so "amoxicillin" inside "not amoxicillin" can't hijack
+  // the clause positively). The remainder goes back through the full resolve
+  // pipeline, then the result is inverted.
+  const neg = detectNegation(valueClause);
+  if (neg) {
+    const inner = neg.remainder.trim()
+      ? resolveCondition(neg.remainder, sheet, headers, index, defs, aliasMap)
+      : null;
+    if (!inner) {
+      // A negation word with nothing to attach to — block, never drop.
+      return { kind: "missing", term: clause.trim(), reason: "unknown", nearest: nearestSuggestions(phrase, headers, index) };
+    }
+    if (inner.kind === "value" || inner.kind === "set" || inner.kind === "threshold") {
+      return negateCondition(inner, neg.words, scopeWords);
+    }
+    return inner; // missing/partial — blocks or asks, which is honest either way
+  }
+
   for (const w of termWords(valueClause)) {
     const one = scan(w);
     const oneExact = one.candidates.find((c) => c.exact);
@@ -330,8 +411,9 @@ function resolveConditions(clause, sheet, headers, index, defs, aliasMap) {
 
   const fullWords = termWords(clause);
   // W2c: words consumed by the value phrase AND by any column scope ("in urine")
-  // are accounted for — only genuinely leftover words count as residue.
-  const matchedWords = new Set([...words(condition.term), ...(condition.scopeWords || [])]);
+  // are accounted for — as are negation words ("not", "never") the condition
+  // absorbed — only genuinely leftover words count as residue.
+  const matchedWords = new Set([...words(condition.term), ...(condition.scopeWords || []), ...(condition.negWords || [])]);
   const residue = fullWords.filter((w) => !matchedWords.has(w));
   if (residue.length === 0) return [condition]; // the whole clause was the value phrase
 
@@ -384,7 +466,12 @@ function extractCohort(request) {
   const lower = request.toLowerCase();
   let best = null;
   for (const marker of COHORT_MARKERS) {
-    const idx = lower.indexOf(marker);
+    // Honesty bug 3 (2026-07-10): require a word boundary after the marker so
+    // "patients with" cannot match inside "patients withOUT" and swallow the
+    // negation — that inverted "how many patients without UTI".
+    const re = new RegExp(`${marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![a-z])`, "i");
+    const m = re.exec(lower);
+    const idx = m ? m.index : -1;
     if (idx !== -1 && (!best || idx < best.markerIdx || (idx === best.markerIdx && marker.length > best.marker.length))) {
       best = { marker, markerIdx: idx };
     }
@@ -455,8 +542,10 @@ function detectGrain(request, sheet, headers) {
 // serialized transform stay byte-for-byte what they were before W2 — the
 // execution surfaces only ever read kind/column/op/value/values/when.
 function cleanCondition(c) {
-  const { stretched, candidates, via, scopeWords, ...rest } = c;
-  void stretched; void candidates; void via; void scopeWords;
+  // `negated` and the flipped op are NOT stripped — they are semantic, not
+  // annotation; execution and the worker transform key off them.
+  const { stretched, candidates, via, scopeWords, negWords, ...rest } = c;
+  void stretched; void candidates; void via; void scopeWords; void negWords;
   return rest;
 }
 function cleanStages(stages) {
@@ -619,6 +708,18 @@ export function matchRequest(request, workbook, defs, options = {}) {
 // nested "of those" nesting is out of scope for an aggregation, so only the
 // cohort clause (if any) becomes a filter stage.
 function matchAggregation(request, intent, targetColumn, cohort, groupBy, sheet, headers, index, defs, aliasMap) {
+  // Honesty bug 1 (2026-07-10): averaging/summing a text column used to
+  // "work" — "average age" confidently answered 'Averaging "Diagnosis"'.
+  // Gate on the column's inferred type: words are not numbers, so refuse with
+  // a plain message instead of computing nonsense. "mixed" columns still pass
+  // (toNumber skips their unreadable cells and says so); a distinct count
+  // works on any type.
+  if (intent.intent !== "distinct") {
+    const h = headers.find((x) => x.name === targetColumn);
+    if (h && h.type && !NUMERIC_COLUMN_TYPES.has(h.type)) {
+      return { status: "none", reason: "non-numeric-target", targetColumn, aggIntent: intent.intent, request };
+    }
+  }
   const rawStages = [];
   if (cohort) rawStages.push({ text: cohort.termText, role: "cohort" });
 
@@ -664,8 +765,10 @@ function matchAggregation(request, intent, targetColumn, cohort, groupBy, sheet,
 
 export function conditionPhrase(c) {
   if (c.kind === "threshold") return `"${c.column}" is ${opWord(c.op)} ${c.value}`;
-  if (c.kind === "set") return `"${c.column}" is one of ${c.values.join(", ")}`;
-  return `"${c.column}" is ${c.value}`;
+  if (c.kind === "set") return `"${c.column}" is ${c.op === "not-in" ? "NONE of" : "one of"} ${c.values.join(", ")}`;
+  // Bug 3: a negated condition states the negation back plainly, so the user
+  // sees the app understood the "not" before trusting the number.
+  return `"${c.column}" is ${c.op === "<>" ? "NOT " : ""}${c.value}`;
 }
 
 function opWord(op) {
