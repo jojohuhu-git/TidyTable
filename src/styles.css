@@ -207,6 +207,11 @@ body {
 .privacy-modes { border: 1px solid var(--line); border-radius: var(--rad); margin-top: 1rem; padding: 0.8rem 1rem; }
 .privacy-modes legend { font-weight: 600; padding: 0 0.4rem; }
 .radio-row { display: flex; gap: 0.6rem; align-items: flex-start; margin: 0.5rem 0; font-size: 0.92rem; }
+
+.profile-table-wrap { margin-top: 1rem; border: 1px solid var(--line); border-radius: var(--rad); padding: 0.6rem 0.8rem; }
+.profile-table-wrap summary { cursor: pointer; font-weight: 600; }
+.profile-table-wrap .table-scroll { margin-top: 0.6rem; border: none; }
+.profile-row-empty td, .profile-row-constant td { color: var(--ink-soft); }
 .radio-row input { margin-top: 0.3rem; flex: none; }
 
 .prompt-box {

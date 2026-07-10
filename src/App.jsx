@@ -26,6 +26,7 @@ import StatsPanel from "./components/StatsPanel.jsx";
 import RegressionWizard from "./components/RegressionWizard.jsx";
 import ChartsPanel from "./components/ChartsPanel.jsx";
 import ShelfPanel from "./components/ShelfPanel.jsx";
+import ColumnProfileTable from "./components/ColumnProfileTable.jsx";
 
 const MAX_RUN_HISTORY = 8;
 
@@ -302,6 +303,7 @@ export default function App() {
               <span className="dim"> — synthetic, fake data, safe to explore. Nothing real.</span>
             </p>
           )}
+          {workbook && <ColumnProfileTable sheet={workbook.sheets[0]} />}
         </section>
 
         {workbook && (
