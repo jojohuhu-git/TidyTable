@@ -121,9 +121,15 @@ export function estimateTokens(text) {
 }
 
 // Rough input pricing per million tokens, for the pre-flight cost hint.
-const INPUT_PRICE = { "claude-opus-4-8": 5, "claude-sonnet-5": 2, "claude-haiku-4-5": 1 };
-export function estimateCostUSD(model, tokens) {
-  const per = INPUT_PRICE[model] ?? 5;
+// P2-21: Sonnet 5's $2/MTok is an introductory price that ends 2026-08-31 and
+// reverts to $3/MTok — compute it from the date instead of hardcoding the
+// intro price, so the estimate doesn't quietly go stale after that date.
+const SONNET_5_INTRO_PRICE_ENDS = new Date("2026-09-01T00:00:00Z");
+const INPUT_PRICE = { "claude-opus-4-8": 5, "claude-haiku-4-5": 1 };
+export function estimateCostUSD(model, tokens, now = new Date()) {
+  const per = model === "claude-sonnet-5"
+    ? (now < SONNET_5_INTRO_PRICE_ENDS ? 2 : 3)
+    : (INPUT_PRICE[model] ?? 5);
   return (tokens / 1_000_000) * per;
 }
 
