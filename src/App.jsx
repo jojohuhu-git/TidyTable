@@ -13,7 +13,7 @@ import {
   DEFAULT_MODEL,
 } from "./logic/claude.js";
 import { runTransform } from "./logic/runTransform.js";
-import { deriveSheet, downloadText } from "./logic/workbook.js";
+import { deriveSheet, downloadText, downloadWorkbookAsXlsx } from "./logic/workbook.js";
 import { buildFixPlan } from "./logic/checkup/buildFixPlan.js";
 import { makeLogEvent, formatCleaningLog } from "./logic/checkup/cleaningLog.js";
 import { newRecipe, addStep, checkupStep } from "./logic/recipes/recipe.js";
@@ -33,6 +33,15 @@ import { privacyBadgeText } from "./logic/privacyBadge.js";
 import { emptyDefinitionsStore, addDefinitionEntry } from "./logic/offline/definitionsStore.js";
 
 const MAX_RUN_HISTORY = 8;
+
+// W1: "DC antibiotics.xlsx" -> "DC antibiotics (cleaned).xlsx". Drops any
+// original extension (csv/xls/xlsx/tsv) and always writes a real .xlsx, since
+// the downloaded copy is an Excel workbook regardless of what was uploaded.
+function fixedFileName(originalName) {
+  const name = originalName || "TidyTable_workbook";
+  const base = name.replace(/\.(xlsx|xls|csv|tsv)$/i, "").trim() || "TidyTable_workbook";
+  return `${base} (cleaned).xlsx`;
+}
 
 export default function App() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("tidytable_api_key") || "");
@@ -387,6 +396,20 @@ export default function App() {
               busy={busy}
               onApply={handleApplyFixes}
             />
+            {sessionLog.length > 0 && (
+              <div className="download-fixed-file">
+                <button
+                  className="btn btn-primary"
+                  onClick={() => downloadWorkbookAsXlsx(workbook, fixedFileName(workbook.fileName))}
+                >
+                  Download your fixed file (.xlsx)
+                </button>
+                <p className="dim">
+                  Same file, fixes applied. Cell colors and column widths are reset — the data
+                  itself is untouched.
+                </p>
+              </div>
+            )}
             <div className="workbook-actions">
               <button className="btn btn-ghost" onClick={handleUndo} disabled={!undoSnapshot || busy}>
                 Undo last apply

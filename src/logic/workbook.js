@@ -193,6 +193,41 @@ export function downloadRowsAsXlsx(rows, fileName = "TidyTable_result.xlsx") {
   XLSX.writeFile(wb, fileName);
 }
 
+// W1: Step 2's "download your fixed file" button. Builds a single real .xlsx
+// from every sheet in the in-memory workbook — the cleaned first sheet plus any
+// other sheets untouched — using the same xlsx lib as the rest of the app.
+// Formatting (cell colors, column widths) is not preserved — only the data —
+// since the workbook object never carried that information past
+// parseWorkbookFile in the first place. Split from the download wrapper so the
+// exported workbook can be inspected directly in tests without file I/O.
+export function buildWorkbookXlsx(workbook) {
+  const wb = XLSX.utils.book_new();
+  for (const sheet of workbook.sheets) {
+    // Pin the column order (and keep an all-blank column present) to the sheet's
+    // own header list, so the exported sheet mirrors what the user sees rather
+    // than whatever key order the first row object happens to have.
+    const headerNames = (sheet.headers || []).map((h) => h.name);
+    const ws = headerNames.length
+      ? XLSX.utils.json_to_sheet(sheet.rows, { header: headerNames })
+      : XLSX.utils.json_to_sheet(sheet.rows);
+    // Excel sheet names are max 31 chars, forbid a few characters, and must be
+    // unique — sanitize and de-duplicate so book_append_sheet never throws.
+    let base = String(sheet.name || "Sheet").replace(/[\\/?*[\]:]/g, " ").slice(0, 31).trim() || "Sheet";
+    let candidate = base;
+    let n = 2;
+    while (wb.SheetNames.includes(candidate)) {
+      const suffix = ` (${n++})`;
+      candidate = base.slice(0, 31 - suffix.length) + suffix;
+    }
+    XLSX.utils.book_append_sheet(wb, ws, candidate);
+  }
+  return wb;
+}
+
+export function downloadWorkbookAsXlsx(workbook, fileName = "TidyTable_workbook.xlsx") {
+  XLSX.writeFile(buildWorkbookXlsx(workbook), fileName);
+}
+
 export function downloadRowsAsCsv(rows, fileName = "TidyTable_result.csv") {
   const ws = XLSX.utils.json_to_sheet(rows);
   const csv = XLSX.utils.sheet_to_csv(ws);
