@@ -293,6 +293,15 @@ body {
 }
 .finding-dismiss:hover { color: var(--ink); }
 
+/* A6: canonical-spelling picker for a categoryVariants finding */
+.variant-groups { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.3rem; }
+.variant-group { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; }
+.variant-chip {
+  font-family: var(--mono); font-size: 0.78rem; cursor: pointer;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0.1rem 0.4rem;
+}
+.variant-chip-active { background: var(--accent-soft); border-color: var(--accent); font-weight: 600; }
+
 /* One-question clarify prompt */
 .clarify {
   border: 1px solid var(--accent); border-radius: var(--rad);

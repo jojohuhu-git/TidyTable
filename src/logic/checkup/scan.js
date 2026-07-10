@@ -324,13 +324,18 @@ function findCategoryVariants(sheet) {
     }
     const map = {};
     const merges = [];
+    // A6: expose each fold-group's full spelling list (not just the map to
+    // the default canonical), so the UI can let the user pick which
+    // spelling survives instead of always defaulting to the most common one.
+    const variantGroups = [];
     for (const g of groups.values()) {
       if (g.size <= 1) continue;
-      // Canonical = the most common raw spelling in the group.
-      const canonical = [...g.entries()].sort((a, b) => b[1] - a[1])[0][0];
-      for (const raw of g.keys()) {
+      const entries = [...g.entries()].sort((a, b) => b[1] - a[1]); // most common first
+      const canonical = entries[0][0]; // default: the most common raw spelling
+      for (const [raw] of entries) {
         if (raw !== canonical) { map[raw] = canonical; merges.push(`"${raw}" -> "${canonical}"`); }
       }
+      variantGroups.push({ canonical, variants: entries.map(([value, count]) => ({ value, count })) });
     }
     if (merges.length === 0) continue;
     out.push({
@@ -343,6 +348,7 @@ function findCategoryVariants(sheet) {
       detail: `Some values in "${h.name}" are the same category typed differently (upper/lower case or extra spaces). The fix merges each into one chosen spelling, so they group and count together.`,
       count: merges.length,
       samples: sample(merges),
+      groups: variantGroups,
       fixable: true,
       fix: { normalizer: "trimCase", params: { map } },
     });

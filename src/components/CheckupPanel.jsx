@@ -16,6 +16,33 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
   const [dismissed, setDismissed] = useState(() => new Set());
   const [policies, setPolicies] = useState({}); // findingId -> policy
   const [askingPolicy, setAskingPolicy] = useState(null); // findingId
+  // A6: findingId -> { groupIndex: chosenCanonicalValue }. Defaults to each
+  // group's most-common spelling (f.groups[i].canonical) until overridden.
+  const [canonicalChoices, setCanonicalChoices] = useState({});
+
+  function chooseCanonical(findingId, groupIndex, value) {
+    setCanonicalChoices((c) => ({
+      ...c,
+      [findingId]: { ...(c[findingId] || {}), [groupIndex]: value },
+    }));
+  }
+
+  // A6: rebuild the trimCase map from each group's chosen canonical spelling
+  // (default or user-picked), instead of always using the scan's default.
+  function fixParams(f) {
+    if (f.type === "categoryVariants" && f.groups) {
+      const overrides = canonicalChoices[f.id] || {};
+      const map = {};
+      f.groups.forEach((g, gi) => {
+        const canonical = overrides[gi] ?? g.canonical;
+        for (const v of g.variants) {
+          if (v.value !== canonical) map[v.value] = canonical;
+        }
+      });
+      return { map };
+    }
+    return { ...(f.fix.params || {}) };
+  }
 
   const visible = findings.filter((f) => !dismissed.has(f.id));
   const fixable = visible.filter((f) => f.fixable);
@@ -54,7 +81,7 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
     const fixes = fixable
       .filter((f) => selected.has(f.id))
       .map((f) => {
-        const fix = { normalizer: f.fix.normalizer, column: f.column, params: { ...(f.fix.params || {}) } };
+        const fix = { normalizer: f.fix.normalizer, column: f.column, params: fixParams(f) };
         if (f.fix.needsPolicy) fix.params[f.fix.paramKey || "policy"] = policies[f.id];
         return fix;
       });
@@ -88,10 +115,35 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
               <span className="finding-count">{f.count} affected</span>
             </label>
             <p className="finding-detail">{f.detail}</p>
-            {f.samples?.length > 0 && (
-              <div className="finding-samples">
-                {f.samples.map((s, i) => <span key={i} className="sample-chip">{String(s)}</span>)}
+            {f.type === "categoryVariants" && f.groups?.length > 0 ? (
+              <div className="variant-groups">
+                {f.groups.map((g, gi) => {
+                  const chosen = canonicalChoices[f.id]?.[gi] ?? g.canonical;
+                  return (
+                    <div key={gi} className="variant-group">
+                      <span className="dim">Merge into: </span>
+                      {g.variants.map((v) => (
+                        <button
+                          key={v.value}
+                          type="button"
+                          className={`variant-chip ${chosen === v.value ? "variant-chip-active" : ""}`}
+                          aria-pressed={chosen === v.value}
+                          onClick={() => chooseCanonical(f.id, gi, v.value)}
+                          disabled={busy}
+                        >
+                          {v.value} ({v.count})
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })}
               </div>
+            ) : (
+              f.samples?.length > 0 && (
+                <div className="finding-samples">
+                  {f.samples.map((s, i) => <span key={i} className="sample-chip">{String(s)}</span>)}
+                </div>
+              )
             )}
             {askingPolicy === f.id && (
               <ClarifyBox
