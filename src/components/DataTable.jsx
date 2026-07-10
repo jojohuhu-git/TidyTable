@@ -10,7 +10,7 @@ export default function DataTable({ rows, columns, maskedColumns = new Set(), ma
         <thead>
           <tr>
             {cols.map((c) => (
-              <th key={c}>{c}{maskedColumns.has(c) ? " 🔒" : ""}</th>
+              <th key={c}>{c}{maskedColumns.has(c) ? " (hidden)" : ""}</th>
             ))}
           </tr>
         </thead>

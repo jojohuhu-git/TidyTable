@@ -1,10 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { PLAN_SCHEMA } from "./schema.js";
+import { fakeValue, fakeStream } from "./synthetic.js";
+import { excelRowExtent } from "./workbook.js";
 
 export const MODELS = [
-  { id: "claude-opus-4-8", label: "Claude Opus 4.8 — best quality (recommended)" },
-  { id: "claude-sonnet-5", label: "Claude Sonnet 5 — fast, cheaper" },
-  { id: "claude-haiku-4-5", label: "Claude Haiku 4.5 — cheapest, simple requests only" },
+  { id: "claude-opus-4-8", label: "Claude Opus 4.8 — best quality (recommended)", supportsAdaptiveThinking: true },
+  { id: "claude-sonnet-5", label: "Claude Sonnet 5 — fast, cheaper", supportsAdaptiveThinking: true },
+  { id: "claude-haiku-4-5", label: "Claude Haiku 4.5 — cheapest, simple requests only", supportsAdaptiveThinking: false },
 ];
 export const DEFAULT_MODEL = "claude-opus-4-8";
 
@@ -47,21 +49,38 @@ If the user's request cannot be answered from the columns available, still retur
 const SYSTEM = SYSTEM_PROMPT;
 
 // Build the data-description part of the user message.
+//
+// Privacy (build prompt §5): in the default "sample" mode we send only column
+// names, letters, and types, with MADE-UP example values that copy the shape of
+// the real data but never its contents. Real cell values are only ever sent in
+// the explicit "full" mode, which the UI marks clearly.
 export function buildDataContext(workbook, options) {
   const { excluded, privacyMode } = options; // excluded: Set of "sheet::column"
   const lines = [];
   lines.push(`Workbook file: "${workbook.fileName}"`);
+  if (privacyMode !== "full") {
+    lines.push("");
+    lines.push("Privacy note: all example values below are made up. They copy the shape and format of the real data (so you can write correct logic) but are not real cell contents.");
+  }
   lines.push("");
 
   for (const sheet of workbook.sheets) {
-    lines.push(`Sheet "${sheet.name}" — ${sheet.rowCount.toLocaleString()} data rows (data starts in row 2; row 1 is headers). Data rows span row 2 to row ${sheet.rowCount + 1}.`);
-    lines.push("Columns (Excel letter | header name | type | example values):");
+    const extent = excelRowExtent(sheet);
+    const rowNote = extent.needsNote
+      ? ` Header is in row ${extent.firstDataRow - 1}; data rows run from row ${extent.firstDataRow} to row ${extent.lastRow} (this sheet has ${extent.droppedBlankRows} blank row${extent.droppedBlankRows === 1 ? "" : "s"} inside that range that were skipped, so the physical range is longer than the ${sheet.rowCount.toLocaleString()} data rows).`
+      : ` Data rows span row ${extent.firstDataRow} to row ${extent.lastRow}.`;
+    lines.push(`Sheet "${sheet.name}" — ${sheet.rowCount.toLocaleString()} data rows (data starts in row ${extent.firstDataRow}; row ${extent.firstDataRow - 1} is headers).${rowNote}`);
+    const exampleLabel = privacyMode === "full" ? "example values" : "made-up example values";
+    lines.push(`Columns (Excel letter | header name | type | ${exampleLabel}):`);
+    // A single seeded stream per sheet keeps fakes stable and varied.
+    const rng = fakeStream(sheet.name.length + 7);
     for (const h of sheet.headers) {
       const key = `${sheet.name}::${h.name}`;
       if (excluded.has(key)) {
         lines.push(`  ${h.letter} | "${h.name}" | [values withheld by the user for privacy — the column exists in the real data; do not use its values in logic unless the user asks, and never echo them]`);
       } else {
-        const ex = h.samples.length ? h.samples.map((s) => JSON.stringify(s)).join(", ") : "(no examples — column mostly empty)";
+        const samples = privacyMode === "full" ? h.samples : h.samples.map((s) => fakeValue(s, rng));
+        const ex = samples.length ? samples.map((s) => JSON.stringify(s)).join(", ") : "(no examples — column mostly empty)";
         lines.push(`  ${h.letter} | "${h.name}" | ${h.type} | ${ex}`);
       }
     }
@@ -79,8 +98,17 @@ export function buildDataContext(workbook, options) {
       lines.push(`All ${sheet.rowCount} rows (JSON):`);
       lines.push(JSON.stringify(sheet.rows.map(strip)));
     } else {
-      const sample = sheet.rows.slice(0, 10).map(strip);
-      lines.push("First 10 rows as a sample (JSON) — the real data has more rows and may contain values not seen here:");
+      // Made-up sample rows: same columns and shape, fabricated contents.
+      const fake = (row) => {
+        const out = {};
+        for (const h of sheet.headers) {
+          const key = `${sheet.name}::${h.name}`;
+          out[h.name] = excluded.has(key) ? "[withheld]" : fakeValue(row[h.name], rng);
+        }
+        return out;
+      };
+      const sample = sheet.rows.slice(0, 10).map(fake);
+      lines.push("First 10 rows as a made-up sample (JSON) — real data has more rows and other values; these examples are fabricated look-alikes, not real cell contents:");
       lines.push(JSON.stringify(sample, null, 1));
     }
     lines.push("");
@@ -93,10 +121,36 @@ export function estimateTokens(text) {
 }
 
 // Rough input pricing per million tokens, for the pre-flight cost hint.
-const INPUT_PRICE = { "claude-opus-4-8": 5, "claude-sonnet-5": 2, "claude-haiku-4-5": 1 };
-export function estimateCostUSD(model, tokens) {
-  const per = INPUT_PRICE[model] ?? 5;
+// P2-21: Sonnet 5's $2/MTok is an introductory price that ends 2026-08-31 and
+// reverts to $3/MTok — compute it from the date instead of hardcoding the
+// intro price, so the estimate doesn't quietly go stale after that date.
+const SONNET_5_INTRO_PRICE_ENDS = new Date("2026-09-01T00:00:00Z");
+const INPUT_PRICE = { "claude-opus-4-8": 5, "claude-haiku-4-5": 1 };
+export function estimateCostUSD(model, tokens, now = new Date()) {
+  const per = model === "claude-sonnet-5"
+    ? (now < SONNET_5_INTRO_PRICE_ENDS ? 2 : 3)
+    : (INPUT_PRICE[model] ?? 5);
   return (tokens / 1_000_000) * per;
+}
+
+// P0-3: adaptive thinking is only supported on Claude 4.6+ models. Sending it
+// to Haiku 4.5 gets a 400 that breaks every request. Build the request params
+// per model so this is testable without a network call, and so a model that
+// doesn't support the param never gets it (no budget_tokens fallback either —
+// just omit "thinking" entirely for those models).
+export function buildRequestParams(model, { system, userMessage }) {
+  const entry = MODELS.find((m) => m.id === model);
+  const params = {
+    model,
+    max_tokens: 64000,
+    system,
+    output_config: { format: { type: "json_schema", schema: PLAN_SCHEMA } },
+    messages: [{ role: "user", content: userMessage }],
+  };
+  if (entry?.supportsAdaptiveThinking) {
+    params.thinking = { type: "adaptive" };
+  }
+  return params;
 }
 
 export async function requestPlan({ apiKey, model, dataContext, userRequest, onStatus }) {
@@ -114,14 +168,7 @@ export async function requestPlan({ apiKey, model, dataContext, userRequest, onS
 
   onStatus?.("Claude is reading your data and writing the plan…");
 
-  const stream = client.messages.stream({
-    model,
-    max_tokens: 64000,
-    thinking: { type: "adaptive" },
-    system: SYSTEM,
-    output_config: { format: { type: "json_schema", schema: PLAN_SCHEMA } },
-    messages: [{ role: "user", content: userMessage }],
-  });
+  const stream = client.messages.stream(buildRequestParams(model, { system: SYSTEM, userMessage }));
 
   const message = await stream.finalMessage();
 
