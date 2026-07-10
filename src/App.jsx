@@ -68,6 +68,10 @@ export default function App() {
   // this session (mode at send time), instead of a permanent claim that never
   // updates once a full-mode request has gone out.
   const [aiSends, setAiSends] = useState([]); // [{ mode: "sample" | "full" }]
+  // B11: a transform failure gets exactly one offered retry, so a Claude
+  // hiccup isn't a dead end — set on the first failure, cleared on success,
+  // a fresh request, or a second failure (only one retry, ever).
+  const [retryInfo, setRetryInfo] = useState(null); // { request, hint, failedCode, error }
   const resultsRef = useRef(null);
 
   const dataContext = useMemo(() => {
@@ -158,12 +162,17 @@ export default function App() {
   // separately so a transform failure is shown as-is instead of being
   // funneled through friendlyApiError, which frames everything as an "AI"
   // problem even when the AI call itself succeeded.
-  async function runViaClaude(request, hint) {
+  // B11: `retryContext` (set only when this call IS the one retry) appends
+  // the prior failure to the request, asking Claude for corrected code.
+  async function runViaClaude(request, hint, retryContext = null) {
     setBusy(true);
     let newPlan;
     try {
-      setStatus("Sending your request to Claude…");
-      const userRequest = hint ? `${request}\n\n(${hint})` : request;
+      setStatus(retryContext ? "Asking Claude to fix the extraction…" : "Sending your request to Claude…");
+      let userRequest = hint ? `${request}\n\n(${hint})` : request;
+      if (retryContext) {
+        userRequest += `\n\nThe previous transform failed with: ${retryContext.error} — return corrected code.\n\nPrevious code:\n${retryContext.failedCode}`;
+      }
       // B8: recorded at send time (not on success), since the data has left
       // the browser as soon as the request goes out, whether or not Claude's
       // reply comes back.
@@ -173,6 +182,7 @@ export default function App() {
       setError(friendlyApiError(err));
       setStatus("");
       setBusy(false);
+      setRetryInfo(null);
       return;
     }
     try {
@@ -181,12 +191,27 @@ export default function App() {
       const rows = await runTransform(newPlan.transform_code, sheetsByName);
       recordResult(`Result of: your question "${request}"`, newPlan, rows);
       setStatus("");
+      setRetryInfo(null);
     } catch (err) {
-      setError(err?.message || "The extraction step failed.");
+      const message = err?.message || "The extraction step failed.";
+      setError(message);
       setStatus("");
+      // Only the first failure offers a retry — a retry that also fails just
+      // shows the error, no infinite loop of AI attempts.
+      setRetryInfo(retryContext ? null : { request, hint, failedCode: newPlan.transform_code, error: message });
     } finally {
       setBusy(false);
     }
+  }
+
+  // B11: re-send the same request with the prior failure appended, asking
+  // for corrected code. One retry, then the offer is gone either way.
+  function retryTransform() {
+    if (!retryInfo) return;
+    const { request, hint, failedCode, error } = retryInfo;
+    setRetryInfo(null);
+    setError("");
+    runViaClaude(request, hint, { failedCode, error });
   }
 
   async function handleRun() {
@@ -194,6 +219,7 @@ export default function App() {
     setNotice("");
     setPendingGrain(null);
     setPendingDefinitions(null);
+    setRetryInfo(null);
     await runOfflineFlow(prompt, {});
   }
 
@@ -221,6 +247,7 @@ export default function App() {
     setPendingDefinitions(null);
     setDefinitionsStore(emptyDefinitionsStore());
     setAiSends([]); // B8: the badge tracks this workbook's sends, not a prior file's
+    setRetryInfo(null);
     setSessionLog([]);
     setRecipe(newRecipe());
     setCheckupVersion((v) => v + 1);
@@ -432,7 +459,18 @@ export default function App() {
               />
             )}
             {notice && <div className="notice-box" role="status">{notice}</div>}
-            {error && <div className="error-box" role="alert">{error}</div>}
+            {error && (
+              <div className="error-box" role="alert">
+                {error}
+                {retryInfo && (
+                  <div className="row-end" style={{ marginTop: "0.5rem" }}>
+                    <button type="button" className="btn btn-ghost" onClick={retryTransform} disabled={busy}>
+                      Try again — ask Claude to fix it
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </section>
         )}
 
