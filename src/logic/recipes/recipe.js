@@ -133,11 +133,22 @@ export function listRecipes() {
   return Object.values(lib).sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
 }
 
+// P2-20: saving under a name that already belongs to a *different* recipe
+// used to silently overwrite it. Re-saving the same recipe (same createdAt)
+// under its own name is still an in-place update, but a name collision with
+// someone else's recipe gets auto-suffixed instead of clobbering it.
 export function saveRecipe(recipe) {
   const lib = readLibrary();
-  lib[recipe.name] = recipe;
+  let name = recipe.name;
+  if (lib[name] && lib[name].createdAt !== recipe.createdAt) {
+    let n = 2;
+    while (lib[`${recipe.name} (${n})`]) n++;
+    name = `${recipe.name} (${n})`;
+  }
+  const toSave = { ...recipe, name };
+  lib[name] = toSave;
   localStorage.setItem(STORE_KEY, JSON.stringify(lib));
-  return recipe;
+  return toSave;
 }
 
 export function deleteRecipe(name) {

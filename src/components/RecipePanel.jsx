@@ -15,6 +15,7 @@ export default function RecipePanel({ recipe, sheet, onChange, onSaved }) {
   const [valueCol, setValueCol] = useState("");
   const [groupCol, setGroupCol] = useState("");
   const [saved, setSaved] = useState(false);
+  const [renamedOnSave, setRenamedOnSave] = useState(null); // { requested, actual } or null
 
   const columns = sheet.headers.map((h) => h.name);
   const numericColumns = sheet.headers.filter((h) => h.type === "number").map((h) => h.name);
@@ -45,11 +46,17 @@ export default function RecipePanel({ recipe, sheet, onChange, onSaved }) {
   }
 
   function save() {
-    const toSave = { ...recipe, name: name.trim() || "Monthly cleanup" };
-    saveRecipe(toSave);
-    onChange(toSave);
+    const requestedName = name.trim() || "Monthly cleanup";
+    const toSave = { ...recipe, name: requestedName };
+    const result = saveRecipe(toSave);
+    // P2-20: a name collision with a different existing recipe gets
+    // auto-suffixed rather than silently overwritten — reflect the name it
+    // actually saved under so that isn't invisible to the user.
+    setName(result.name);
+    setRenamedOnSave(result.name === requestedName ? null : { requested: requestedName, actual: result.name });
+    onChange(result);
     setSaved(true);
-    if (onSaved) onSaved(toSave);
+    if (onSaved) onSaved(result);
   }
 
   function exportFile() {
@@ -127,7 +134,13 @@ export default function RecipePanel({ recipe, sheet, onChange, onSaved }) {
         </label>
         <button type="button" className="btn btn-primary" onClick={save} disabled={recipe.steps.length === 0}>Save to this browser</button>
         <button type="button" className="btn btn-ghost" onClick={exportFile} disabled={recipe.steps.length === 0}>Export to a file</button>
-        {saved && <span className="dim">Saved.</span>}
+        {saved && (
+          <span className="dim">
+            {renamedOnSave
+              ? `"${renamedOnSave.requested}" was already taken by another recipe — saved as "${renamedOnSave.actual}" instead.`
+              : "Saved."}
+          </span>
+        )}
       </div>
     </div>
   );
