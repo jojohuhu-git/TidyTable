@@ -26,6 +26,12 @@ const STOP = new Set([
   "those", "these", "them", "among", "on", "taking", "took", "take", "did",
   "do", "does", "whose", "their", "for", "in", "to", "then", "also", "still",
   "days", "day",
+  // W2f: structural counting/proportion words that describe the QUESTION, not a
+  // filter value — so "what percent of rows have X" leaves only "X", instead of
+  // treating "percent"/"rows"/"share" as a leftover second condition (a false
+  // "I couldn't understand …" partial). None is ever a real cell value.
+  "rows", "row", "percent", "percentage", "share", "proportion", "fraction",
+  "what", "record", "records", "entries", "entry",
 ]);
 
 const words = (s) => String(s || "").toLowerCase().split(/[^a-z0-9]+/i).filter(Boolean);

@@ -32,6 +32,10 @@ export function runOffline(request, workbook, options = {}) {
       missingTerms: match.missingTerms,
       definitionsPresent: match.definitionsPresent,
       message: buildBlockMessage(match),
+      // W2e: the nearest values/columns the app CAN see for the first missing
+      // term, so the UI can offer them as clickable chips instead of jumping
+      // straight to "add a definition" / "use AI".
+      nearest: match.missingTerms?.[0]?.nearest || [],
     };
   }
 
@@ -41,6 +45,19 @@ export function runOffline(request, workbook, options = {}) {
 
   if (match.status === "grain") {
     return { kind: "clarify-grain", grain: match.grain, request };
+  }
+
+  // W2d: the app had to stretch (an abbreviation, a partial/prefix value
+  // match, a fuzzy column scope, or a tie) to reach a value. Ask "Did you
+  // mean…?" instead of silently answering or refusing — the middle path.
+  if (match.status === "needs_confirm") {
+    return {
+      kind: "confirm-value",
+      phrase: match.phrase,
+      candidates: match.candidates,
+      via: match.via,
+      request,
+    };
   }
 
   // Not our kind of request. Log it for the growth loop and offer Claude.

@@ -14,6 +14,7 @@ import {
 } from "./logic/claude.js";
 import { runTransform } from "./logic/runTransform.js";
 import { deriveSheet, downloadText } from "./logic/workbook.js";
+import { foldKey } from "./logic/checkup/normalizers.js";
 import { buildFixPlan } from "./logic/checkup/buildFixPlan.js";
 import { makeLogEvent, formatCleaningLog } from "./logic/checkup/cleaningLog.js";
 import { newRecipe, addStep, checkupStep } from "./logic/recipes/recipe.js";
@@ -63,7 +64,15 @@ export default function App() {
   // B7: in-app definitions, merged on top of a real Definitions sheet if the
   // workbook has one; resets with the workbook, like excluded columns.
   const [definitionsStore, setDefinitionsStore] = useState(() => emptyDefinitionsStore());
-  const [pendingDefinitions, setPendingDefinitions] = useState(null); // { missingTerms, message, request }
+  const [pendingDefinitions, setPendingDefinitions] = useState(null); // { missingTerms, message, request, nearest }
+  // W2d: "Did you mean…?" middle-path confirmation when the offline matcher
+  // had to stretch (an abbreviation, a partial value match, a fuzzy column
+  // scope, or a tie between candidates) to reach a value.
+  const [pendingConfirm, setPendingConfirm] = useState(null); // { phrase, candidates, via, request }
+  // W2d: phrase (folded) -> the confirmed { column, value } candidate, so the
+  // same stretch never asks twice in this session. Session-only, like the
+  // rest of the in-memory state — cleared on a fresh upload.
+  const [aliasMap, setAliasMap] = useState(() => new Map());
   // B8: the privacy badge must stay true — track every actual send to Claude
   // this session (mode at send time), instead of a permanent claim that never
   // updates once a full-mode request has gone out.
@@ -116,19 +125,25 @@ export default function App() {
   // Every request tries the offline engine first (build prompt §3.3). A confident
   // answer needs no key; an undefined clinical term blocks plainly (B7: with an
   // in-app way to define it, not just the Definitions-sheet round-trip); a
-  // per-patient question over repeating rows asks before answering; anything
-  // out of range declines and, if a key exists, is offered to Claude.
+  // per-patient question over repeating rows asks before answering; a
+  // stretched value match (W2d) asks "Did you mean…?" before answering;
+  // anything out of range declines and, if a key exists, is offered to Claude.
   // `storeOverride` lets a just-added definition be used immediately, without
-  // waiting a render for `definitionsStore` state to update.
-  async function runOfflineFlow(request, options, storeOverride) {
-    const res = runOffline(request, workbook, { ...options, definitionsStore: storeOverride || definitionsStore });
+  // waiting a render for `definitionsStore` state to update. `aliasOverride`
+  // does the same for a just-confirmed "Did you mean…?" answer.
+  async function runOfflineFlow(request, options, storeOverride, aliasOverride) {
+    const res = runOffline(request, workbook, {
+      ...options,
+      definitionsStore: storeOverride || definitionsStore,
+      aliasMap: aliasOverride || aliasMap,
+    });
     if (res.kind === "answer") {
       recordResult(`Result of: your question "${request}"`, res.plan, res.resultRows);
       return;
     }
     if (res.kind === "block") {
       if (res.missingTerms) {
-        setPendingDefinitions({ missingTerms: res.missingTerms, message: res.message, request });
+        setPendingDefinitions({ missingTerms: res.missingTerms, message: res.message, request, nearest: res.nearest || [] });
       } else {
         setNotice(res.message);
       }
@@ -138,12 +153,32 @@ export default function App() {
       setPendingGrain({ grain: res.grain, request });
       return;
     }
+    if (res.kind === "confirm-value") {
+      setPendingConfirm({ phrase: res.phrase, candidates: res.candidates, via: res.via, request });
+      return;
+    }
     // res.kind === "decline"
     if (!apiKey) {
       setNotice(res.message);
       return;
     }
     await runViaClaude(request, res.claudeHint);
+  }
+
+  // W2d: the user picked one of the "Did you mean…?" candidates (or typed
+  // something else and picked "Something else", which just cancels). Remember
+  // the mapping for the rest of the session so the same stretch never asks
+  // twice, then re-run the same request — it now resolves immediately via the
+  // alias, with no further stretch to confirm.
+  function answerConfirm(candidate) {
+    const phrase = pendingConfirm?.phrase;
+    const request = pendingConfirm?.request;
+    setPendingConfirm(null);
+    if (!phrase || !request) return;
+    const next = new Map(aliasMap);
+    next.set(foldKey(phrase), candidate);
+    setAliasMap(next);
+    runOfflineFlow(request, {}, null, next);
   }
 
   // B7: record the typed definition and immediately re-run the question that
@@ -219,6 +254,7 @@ export default function App() {
     setNotice("");
     setPendingGrain(null);
     setPendingDefinitions(null);
+    setPendingConfirm(null);
     setRetryInfo(null);
     await runOfflineFlow(prompt, {});
   }
@@ -245,6 +281,8 @@ export default function App() {
     setNotice("");
     setPendingGrain(null);
     setPendingDefinitions(null);
+    setPendingConfirm(null);
+    setAliasMap(new Map()); // W2d: a session-level alias map, fresh per workbook
     setDefinitionsStore(emptyDefinitionsStore());
     setAiSends([]); // B8: the badge tracks this workbook's sends, not a prior file's
     setRetryInfo(null);
@@ -449,13 +487,36 @@ export default function App() {
                 onCancel={() => setPendingGrain(null)}
               />
             )}
+            {pendingConfirm && (
+              <ClarifyBox
+                question={
+                  pendingConfirm.candidates.length === 1
+                    ? `Did you mean "${pendingConfirm.candidates[0].value}" in "${pendingConfirm.candidates[0].column}"?`
+                    : `"${pendingConfirm.phrase}" could mean a few things — which one?`
+                }
+                options={pendingConfirm.candidates.map((c, i) => ({
+                  value: String(i),
+                  label: String(c.value),
+                  detail: `in "${c.column}"`,
+                }))}
+                onAnswer={(i) => answerConfirm(pendingConfirm.candidates[Number(i)])}
+                onCancel={() => setPendingConfirm(null)}
+                cancelLabel="Something else"
+              />
+            )}
             {pendingDefinitions && (
               <DefinitionsEditor
                 missingTerms={pendingDefinitions.missingTerms}
                 message={pendingDefinitions.message}
+                nearest={pendingDefinitions.nearest}
                 columns={workbook.sheets[0].headers.map((h) => h.name)}
                 onAdd={addDefinitionAndRerun}
                 onCancel={() => setPendingDefinitions(null)}
+                onSendToClaude={apiKey ? () => {
+                  const request = pendingDefinitions.request;
+                  setPendingDefinitions(null);
+                  if (request) runViaClaude(request, "A local pre-check found an undefined clinical term and the user chose to ask the AI instead of defining it.");
+                } : null}
               />
             )}
             {notice && <div className="notice-box" role="status" aria-live="polite">{notice}</div>}

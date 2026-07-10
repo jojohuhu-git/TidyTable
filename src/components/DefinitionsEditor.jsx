@@ -1,11 +1,14 @@
 import { useState } from "react";
 import { buildDefinitionEntry } from "../logic/offline/definitions.js";
 
-// B7: shown in place of a plain decline when a question is blocked on a
-// clinical term the app won't guess. One small form per missing term — type
-// what it means, and the same question re-runs automatically. No Excel
-// round-trip required (a real Definitions sheet is still fully honored).
-export default function DefinitionsEditor({ missingTerms, message, onAdd, onCancel, columns }) {
+// B7 / W2e: shown in place of a plain decline when a question is blocked on a
+// clinical term the app won't guess. Order matches the "helpful decline"
+// house rule — nearest things the app can already see first, defining it
+// in-app second, and the AI (an extra click, only if a key is set) last.
+// One small form per missing term — type what it means, and the same
+// question re-runs automatically. No Excel round-trip required (a real
+// Definitions sheet is still fully honored).
+export default function DefinitionsEditor({ missingTerms, message, onAdd, onCancel, columns, nearest, onSendToClaude }) {
   const [term, setTerm] = useState(missingTerms?.[0]?.term || "");
   const [columnName, setColumnName] = useState(missingTerms?.[0]?.wantedColumn || "");
   const [rule, setRule] = useState("");
@@ -16,40 +19,77 @@ export default function DefinitionsEditor({ missingTerms, message, onAdd, onCanc
     onAdd(buildDefinitionEntry(term, columnName, rule));
   }
 
+  // W2e: clicking a nearest chip pre-fills the form with that value/column so
+  // confirming it is a one-click "add definition", not a blank retype.
+  function useNearest(n) {
+    if (n.kind === "column") {
+      setColumnName(n.name);
+    } else {
+      setColumnName(n.column);
+      setRule(String(n.value));
+    }
+  }
+
   return (
-    <form className="definitions-editor" onSubmit={submit} aria-label="Define a clinical term">
+    <div className="definitions-editor-wrap">
       <p className="clarify-q">{message}</p>
-      <p className="hint">
-        Or define it here instead of editing a Definitions sheet — this re-runs your question
-        automatically.
-      </p>
-      <label className="field-label" htmlFor="def-term">Term</label>
-      <input id="def-term" value={term} onChange={(e) => setTerm(e.target.value)} placeholder="oral beta-lactam" />
-
-      <label className="field-label" htmlFor="def-column">Column it applies to</label>
-      {columns?.length ? (
-        <select id="def-column" value={columnName} onChange={(e) => setColumnName(e.target.value)}>
-          <option value="">choose a column…</option>
-          {columns.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-      ) : (
-        <input id="def-column" value={columnName} onChange={(e) => setColumnName(e.target.value)} placeholder="Drug" />
+      {nearest?.length > 0 && (
+        <div className="nearest-suggestions">
+          <p className="hint">The closest things this file actually has:</p>
+          <div className="nearest-chips">
+            {nearest.map((n, i) => (
+              <button
+                key={i}
+                type="button"
+                className="btn btn-ghost nearest-chip"
+                onClick={() => useNearest(n)}
+              >
+                {n.kind === "column" ? `column "${n.name}"` : `"${n.value}" in "${n.column}"`}
+              </button>
+            ))}
+          </div>
+        </div>
       )}
+      <form className="definitions-editor" onSubmit={submit} aria-label="Define a clinical term">
+        <p className="hint">
+          Add a definition here instead of editing a Definitions sheet — this re-runs your
+          question automatically.
+        </p>
+        <label className="field-label" htmlFor="def-term">Term</label>
+        <input id="def-term" value={term} onChange={(e) => setTerm(e.target.value)} placeholder="oral beta-lactam" />
 
-      <label className="field-label" htmlFor="def-rule">Values that count (or a rule like "&gt; 7 when Diagnosis = pyelonephritis")</label>
-      <input
-        id="def-rule"
-        value={rule}
-        onChange={(e) => setRule(e.target.value)}
-        placeholder="cephalexin, amoxicillin, cefpodoxime"
-      />
+        <label className="field-label" htmlFor="def-column">Column it applies to</label>
+        {columns?.length ? (
+          <select id="def-column" value={columnName} onChange={(e) => setColumnName(e.target.value)}>
+            <option value="">choose a column…</option>
+            {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        ) : (
+          <input id="def-column" value={columnName} onChange={(e) => setColumnName(e.target.value)} placeholder="Drug" />
+        )}
 
-      <div className="row-end">
-        <button type="button" className="btn btn-ghost" onClick={onCancel}>Not now</button>
-        <button type="submit" className="btn btn-primary" disabled={!term.trim() || !rule.trim()}>
-          Add definition and ask again
-        </button>
-      </div>
-    </form>
+        <label className="field-label" htmlFor="def-rule">Values that count (or a rule like "&gt; 7 when Diagnosis = pyelonephritis")</label>
+        <input
+          id="def-rule"
+          value={rule}
+          onChange={(e) => setRule(e.target.value)}
+          placeholder="cephalexin, amoxicillin, cefpodoxime"
+        />
+
+        <div className="row-end">
+          <button type="button" className="btn btn-ghost" onClick={onCancel}>Not now</button>
+          <button type="submit" className="btn btn-primary" disabled={!term.trim() || !rule.trim()}>
+            Add definition and ask again
+          </button>
+        </div>
+      </form>
+      {onSendToClaude && (
+        <p className="hint definitions-ai-fallback">
+          Still stuck? <button type="button" className="btn-linklike" onClick={onSendToClaude}>
+            Or send this question to Claude instead (uses your key)
+          </button>
+        </p>
+      )}
+    </div>
   );
 }

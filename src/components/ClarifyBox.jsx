@@ -1,7 +1,7 @@
 // One-question, one-answer prompt (build prompt §1: "reuse it everywhere a module
 // needs to ask something"). Plain language, no jargon. The caller supplies the
 // question and a short list of options; picking one calls onAnswer(value).
-export default function ClarifyBox({ question, options, onAnswer, onCancel }) {
+export default function ClarifyBox({ question, options, onAnswer, onCancel, cancelLabel = "Not now" }) {
   return (
     <div className="clarify" role="group" aria-label="One quick question">
       <p className="clarify-q">{question}</p>
@@ -15,7 +15,7 @@ export default function ClarifyBox({ question, options, onAnswer, onCancel }) {
       </div>
       {onCancel && (
         <button type="button" className="btn btn-ghost" onClick={onCancel}>
-          Not now
+          {cancelLabel}
         </button>
       )}
     </div>
