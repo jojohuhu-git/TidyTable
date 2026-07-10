@@ -50,8 +50,14 @@ export default function ApiKeyPanel({ apiKey, setApiKey, model, setModel }) {
               checked={remember}
               onChange={(e) => setRemember(e.target.checked)}
             />
-            Remember on this computer (stored only in this browser)
+            Remember on this computer
           </label>
+          {remember && (
+            <p className="dim key-storage-note">
+              Stored unencrypted in this browser's storage — anyone with access to this computer
+              profile can read it. Use a key with a low spending limit.
+            </p>
+          )}
           <label className="field-label" htmlFor="model-select">AI model</label>
           <select id="model-select" value={model} onChange={(e) => saveModel(e.target.value)}>
             {MODELS.map((m) => (
