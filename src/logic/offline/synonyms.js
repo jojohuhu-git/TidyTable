@@ -129,6 +129,67 @@ export function detectComparator(text) {
   return null;
 }
 
+// --- Phase 4 (2026-07-10): most-common / top-N ranking family --------------
+// Two disjoint wordings, kept apart deliberately:
+//  - FREQUENCY words ("most common", "top N", "used most"...) rank how often
+//    each VALUE of a column appears — works on any column type (matcher.js
+//    treats it like "distinct": no numeric gate needed).
+//  - MAGNITUDE words ("longest", "shortest") rank the RAW ROW VALUES of a
+//    column by size — gated to a NUMERIC column by matcher.js, same as
+//    average/sum (Phase 1's honesty rule).
+// No bare "most"/"least"/"top" token triggers this — every phrase here is a
+// specific multi-word combination (or "top" + an explicit count), so "at
+// most 7"/"at least 5" (existing COMPARATORS phrases) can never be misread
+// as a ranking request. Same "false positives beat misses" rule the min/max
+// intents already follow (see the comment above INTENTS).
+const TOPN_FREQUENCY_MOST = [
+  "most frequently used", "most commonly used", "most frequently occurring", "most commonly occurring",
+  "most common", "most frequent", "most used", "used most often", "most often used", "used most",
+];
+const TOPN_FREQUENCY_LEAST = [
+  "least frequently used", "least commonly used", "least frequently occurring", "least commonly occurring",
+  "least common", "least frequent", "least used", "used least often", "least often used", "used least",
+];
+const TOPN_MAGNITUDE_MOST = ["longest"];
+const TOPN_MAGNITUDE_LEAST = ["shortest"];
+
+// Small, fixed number-word dictionary — enough for "top five", trivial with
+// existing machinery. Larger/irregular number words are Phase 7 territory.
+const TOPN_NUMBER_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+
+function findWholePhrase(t, list) {
+  for (const p of list) {
+    const re = new RegExp(`(^|[^a-z])${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`, "i");
+    if (re.test(t)) return p;
+  }
+  return null;
+}
+
+// Public: detect the Phase 4 ranking family in raw request text, or null.
+// Returns { family: "frequency"|"magnitude", direction: "most"|"least",
+// n: number|null, wordPhrase, topPhrase } — `n` is the requested cap (from
+// "top 5"/"top five"), or null when unstated (matcher.js picks the family's
+// default). `wordPhrase`/`topPhrase` are the literal substrings matched, so
+// the caller can strip them before hunting for the target column.
+export function detectTopN(text) {
+  const t = String(text || "").toLowerCase();
+  const topMatch = /\btop\s+(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten)\b/.exec(t);
+  const n = topMatch ? (/^\d+$/.test(topMatch[1]) ? Number(topMatch[1]) : TOPN_NUMBER_WORDS[topMatch[1]]) : null;
+
+  const freqLeast = findWholePhrase(t, TOPN_FREQUENCY_LEAST);
+  const freqMost = !freqLeast && findWholePhrase(t, TOPN_FREQUENCY_MOST);
+  const magLeast = !freqLeast && !freqMost && findWholePhrase(t, TOPN_MAGNITUDE_LEAST);
+  const magMost = !freqLeast && !freqMost && !magLeast && findWholePhrase(t, TOPN_MAGNITUDE_MOST);
+  const wordPhrase = freqLeast || freqMost || magLeast || magMost || null;
+
+  if (!wordPhrase && !topMatch) return null;
+
+  const family = magLeast || magMost ? "magnitude" : "frequency"; // bare "top N" defaults to frequency
+  const direction = freqLeast || magLeast ? "least" : "most"; // bare "top N" defaults to "most"
+
+  return { family, direction, n, wordPhrase, topPhrase: topMatch ? topMatch[0] : null };
+}
+
 // Split a request into nested levels on the "of those" markers, keeping order.
 // "Of patients with X, how many got Y, and of those how many had Z" →
 //   ["Of patients with X, how many got Y", "how many had Z"].

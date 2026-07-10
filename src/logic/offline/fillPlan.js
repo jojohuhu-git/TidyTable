@@ -4,7 +4,9 @@
 // is visible before anyone trusts the number. The transform recomputes the same
 // counts so re-running on new data stays honest.
 
-import { executeCohort, executeAggregation, toNumber } from "./cohort.js";
+import {
+  executeCohort, executeAggregation, executeTopN, toNumber, topNWithTies,
+} from "./cohort.js";
 import { excelRowExtent, excelRowExtentNote } from "../workbook.js";
 import { describeLookedForAggregation } from "./matcher.js";
 import { formatMeanSD, formatMedianIQR, formatNPercent } from "./clinicalFormat.js";
@@ -667,6 +669,11 @@ export function summarizeAnswer(match, exec) {
   if (match.intent === "describe") {
     return exec.n === 0 ? "no readable numbers" : `n=${exec.n}, mean ${exec.mean}, median ${exec.median}`;
   }
+  if (match.topN) {
+    if (!exec.ranked.length) return "no data";
+    const top = exec.ranked[0];
+    return exec.family === "frequency" ? `${top.label} (${top.count})` : String(top.value);
+  }
   if (match.aggregation) {
     if (exec.mode === "group") {
       return `${exec.results.length} group${exec.results.length === 1 ? "" : "s"}`;
@@ -881,11 +888,294 @@ function fillDescribePlan(match, workbook, sheet) {
   return { plan, resultRows, exec };
 }
 
+// Phase 4 (2026-07-10): most-common/top-N ranking — two output shapes, per
+// column type (see matcher.js's matchTopN / DEFAULT_TOPN):
+//  - "frequency" (any column type): how often each value appears, most/least
+//    common first, each row "value — n (%)". Percentages are of the rows
+//    with a READABLE value in the target column (blank/unreadable cells are
+//    excluded from the ranking itself, never surfaced as a winner) — the
+//    denominator is stated whenever it differs from the row total.
+//  - "magnitude" (numeric column only): the raw rows ranked by that column's
+//    value, largest/smallest first. The full matched row is returned (every
+//    column), like an Excel "sort, then look at the top rows" would show.
+// Either way, a tie sitting at the N-th cutoff is shown in full rather than
+// arbitrarily split — stated in the summary whenever it makes the shown
+// count differ from what was asked for.
+
+function buildTopNFrequencySummary(match, exec) {
+  const lines = [match.lookedFor, ""];
+  const denom = exec.total - exec.blank;
+  const dirWord = exec.direction === "least" ? "least common first" : "most common first";
+  const denomNote = exec.blank ? ` (${denom} with a readable "${exec.targetColumn}")` : "";
+  lines.push(`Starting from ${exec.total} row${exec.total === 1 ? "" : "s"} in "${match.sheetName}"${denomNote}, ranking "${exec.targetColumn}" by how often each value appears (${dirWord}):`);
+  for (const e of exec.ranked) {
+    lines.push(`- ${e.label}: ${formatNPercent(e.count, denom)}.`);
+  }
+  if (exec.blank) {
+    lines.push(`(${exec.blank} row${exec.blank === 1 ? "" : "s"} had a blank or unreadable "${exec.targetColumn}" — excluded from the ranking and from the ${denom} used as the percentage base.)`);
+  }
+  if (exec.ranked.length < exec.distinctValues) {
+    const extended = exec.ranked.length > exec.n ? "; extended to include a tie at the cutoff" : "";
+    lines.push(`Showing ${exec.ranked.length} of ${exec.distinctValues} distinct values (asked for top ${exec.n}${extended}).`);
+  } else if (exec.ranked.length > exec.n) {
+    lines.push(`Asked for the top ${exec.n}; showing all ${exec.ranked.length} because of a tie at the cutoff.`);
+  }
+  lines.push("");
+  lines.push("This was answered on your computer, with no data sent anywhere. The Excel steps reproduce the same counts by hand.");
+  return lines.join("\n");
+}
+
+function buildTopNMagnitudeSummary(match, exec, sheet) {
+  const lines = [match.lookedFor, ""];
+  const notes = new Set();
+  const dirWord = exec.direction === "least" ? "smallest first" : "largest first";
+  lines.push(`Starting from ${exec.total} row${exec.total === 1 ? "" : "s"} in "${match.sheetName}", ranking "${exec.targetColumn}" by value (${dirWord}):`);
+  const idCol = sheet.headers[0] ? sheet.headers[0].name : null;
+  exec.ranked.forEach((e, i) => {
+    const lbl = formatDurationLabel(e.value, exec.targetColumn);
+    if (lbl.assumptionNote) notes.add(lbl.assumptionNote);
+    const raw = idCol ? e.row[idCol] : null;
+    const idNote = idCol ? ` (${idCol}: ${raw == null || String(raw).trim() === "" ? "blank" : raw})` : "";
+    lines.push(`${i + 1}. ${lbl.text}${idNote}.`);
+  });
+  if (exec.unreadable) {
+    lines.push(`(${exec.unreadable} row${exec.unreadable === 1 ? "" : "s"} had no readable number in "${exec.targetColumn}" and were excluded from the ranking.)`);
+  }
+  if (exec.ranked.length > exec.n) {
+    lines.push(`Asked for the top ${exec.n}; showing ${exec.ranked.length} because of a tie at the cutoff.`);
+  }
+  for (const note of notes) lines.push(note);
+  lines.push("");
+  lines.push("This was answered on your computer, with no data sent anywhere. The Excel steps reproduce the same values by hand.");
+  return lines.join("\n");
+}
+
+// Excel has no single "top N most common" formula. Reuse the group-count
+// breakdown's COUNTIFS-per-value pattern (same honest fallback for a
+// Definitions "set" filter) but only for the values actually ranked, plus an
+// upfront note about sorting/PivotTable — the same "honest multi-step
+// instruction, not a fake formula" precedent Phase 2 set for MEDIANIFS etc.
+function buildTopNFrequencyExcelSteps(match, exec, sheet) {
+  const extent = excelRowExtent(sheet);
+  const lastRow = extent.lastRow;
+  const range = (col) => `'${sheet.name}'!${letterFor(sheet, col)}2:${letterFor(sheet, col)}${lastRow}`;
+  const crit = (op, value) => (op === "=" ? `"${escapeCriteria(value)}"` : `"${op}${escapeCriteria(value)}"`);
+  const hasSet = match.stages.some((s) => s.condition.kind === "set");
+
+  const intro = {
+    title: `Rank "${exec.targetColumn}" by frequency`,
+    where: `Sheet "${sheet.name}"`,
+    formula: "",
+    instruction:
+      "Excel has no single \"top N most common\" formula. Build a PivotTable with " +
+      `"${exec.targetColumn}" in Rows and Count of any column in Values, then use the pivot's own sort button ` +
+      `to sort ${exec.direction === "least" ? "smallest to largest" : "largest to smallest"} — the top rows are the ranking. ` +
+      "The COUNTIFS formulas below confirm each value's count by hand" +
+      (hasSet ? ", once you've filtered to the conditions above (a single formula can't check several accepted values at once)" : "") + ".",
+  };
+
+  if (hasSet) {
+    return withExtentNote([intro, {
+      title: "Filter first",
+      where: `Sheet "${sheet.name}"`,
+      formula: "",
+      instruction: "Turn on Data > Filter and filter each column to the values that count for the conditions above, then build the PivotTable on the filtered rows.",
+    }], extent);
+  }
+
+  const filterPairs = [];
+  for (const stage of match.stages) {
+    const c = stage.condition;
+    filterPairs.push(`${range(c.column)}, ${crit(c.op, c.value)}`);
+    if (c.when) filterPairs.push(`${range(c.when.column)}, "${escapeCriteria(c.when.value)}"`);
+  }
+  const steps = exec.ranked.map((e, i) => {
+    const pairs = [`${range(exec.targetColumn)}, ${crit("=", e.label)}`, ...filterPairs];
+    const step = {
+      title: `${e.label}`,
+      where: "An empty cell",
+      formula: `=COUNTIFS(${pairs.join(", ")})`,
+      instruction: `Counts the rows where "${exec.targetColumn}" is ${e.label}${filterPairs.length ? " and every other condition above" : ""}. It should equal ${e.count}.`,
+    };
+    if (i === 0) step.teaches = "COUNTIFS counts rows that meet several conditions at once; sorting these counts by hand (or via a PivotTable) gives the ranking.";
+    return step;
+  });
+  return withExtentNote([intro, ...steps], extent);
+}
+
+// Magnitude ranking IS a native Excel operation — Data > Sort — plus LARGE/
+// SMALL as a one-cell spot-check of the top value, so this gets a real
+// formula where the frequency family cannot.
+function buildTopNMagnitudeExcelSteps(match, exec, sheet) {
+  const extent = excelRowExtent(sheet);
+  const lastRow = extent.lastRow;
+  const targetRange = `'${sheet.name}'!${letterFor(sheet, exec.targetColumn)}2:${letterFor(sheet, exec.targetColumn)}${lastRow}`;
+  const hasFilters = match.stages.length > 0;
+  const fn = exec.direction === "least" ? "SMALL" : "LARGE";
+  const steps = [{
+    title: `Sort by "${exec.targetColumn}"`,
+    where: `Sheet "${sheet.name}"`,
+    formula: "",
+    instruction:
+      (hasFilters ? "Turn on Data > Filter and filter to the conditions above first. Then t" : "T") +
+      `urn on Data > Sort, sort by "${exec.targetColumn}" ${exec.direction === "least" ? "smallest to largest" : "largest to smallest"}. ` +
+      `The top ${exec.n} row${exec.n === 1 ? "" : "s"} shown are the ranking (a tie at the cutoff may show as more than ${exec.n} rows, which is honest — they are genuinely tied).`,
+  }];
+  if (!hasFilters) {
+    steps.push({
+      title: `Check the ${exec.direction === "least" ? "smallest" : "largest"} value`,
+      where: "An empty cell",
+      formula: `=${fn}(${targetRange}, 1)`,
+      instruction: `Confirms the ${exec.direction === "least" ? "smallest" : "largest"} value directly. It should equal ${exec.ranked.length ? exec.ranked[0].value : "n/a"}.`,
+      teaches: `${fn} returns the k-th ${exec.direction === "least" ? "smallest" : "largest"} value in a range — a quick check independent of sorting.`,
+    });
+  }
+  return withExtentNote(steps, extent);
+}
+
+// cohort.js's rankFrequency/rankMagnitude call the module-level `foldKey`/
+// `toNumber` IMPORTS — reusing their real .toString() here would carry a
+// broken reference into the transform (Vite rewrites imports at the source
+// level, so a toString()'d function that calls one no longer resolves once
+// pasted elsewhere; verified this breaks under the exact "execute the
+// generated code" test this file's own tests use). So, like STATS_BLOCK
+// above, these two are hand-mirrored literal text — kept in sync with
+// cohort.js deliberately, never toString()'d. topNWithTies has no such
+// reference and IS toString()'d directly below (same trick as toNumber).
+const RANK_FREQUENCY_BLOCK = `
+var rankFrequency = function (rows, column) {
+  var groups = {}; var order = []; var blank = 0;
+  for (var i = 0; i < rows.length; i++) {
+    var v = rows[i][column];
+    if (v == null || String(v).trim() === "") { blank++; continue; }
+    var k = foldKey(v);
+    if (!groups[k]) { groups[k] = { label: v, count: 0 }; order.push(k); }
+    groups[k].count++;
+  }
+  var entries = [];
+  for (var j = 0; j < order.length; j++) entries.push(groups[order[j]]);
+  return { entries: entries, blank: blank, total: rows.length };
+};
+`;
+const RANK_MAGNITUDE_BLOCK = `
+var rankMagnitude = function (rows, column) {
+  var entries = []; var unreadable = 0;
+  for (var i = 0; i < rows.length; i++) {
+    var n = toNumber(rows[i][column]);
+    if (n == null) { unreadable++; continue; }
+    entries.push({ row: rows[i], value: n });
+  }
+  return { entries: entries, unreadable: unreadable, total: rows.length };
+};
+`;
+
+function buildTopNFrequencyTransformCode(match, exec) {
+  const stages = match.stages.map((s) => s.condition);
+  return `
+var foldKey = function (v) { return String(v).trim().toLowerCase().replace(/\\s+/g, " "); };
+${toNumber.toString()}
+${RANK_FREQUENCY_BLOCK}
+${topNWithTies.toString()}
+var cmp = function (n, op, t) { switch (op) { case ">": return n > t; case ">=": return n >= t; case "<": return n < t; case "<=": return n <= t; case "<>": return n !== t; default: return n === t; } };
+var STAGES = ${JSON.stringify(stages)};
+var TARGET = ${JSON.stringify(exec.targetColumn)};
+var N = ${exec.n === Infinity ? "Infinity" : JSON.stringify(exec.n)};
+var DIRECTION = ${JSON.stringify(exec.direction)};
+var SHEET = ${JSON.stringify(match.sheetName)};
+var rows = sheets[SHEET] || [];
+var pred = function (c) { return function (r) {
+  if (c.kind === "value") { if (c.op === "<>") { return r[c.column] == null || foldKey(r[c.column]) !== foldKey(c.value); } return r[c.column] != null && foldKey(r[c.column]) === foldKey(c.value); }
+  if (c.kind === "set") { var set = {}; for (var i = 0; i < c.values.length; i++) { set[foldKey(c.values[i])] = 1; } if (c.op === "not-in") { return r[c.column] == null || set[foldKey(r[c.column])] !== 1; } return r[c.column] != null && set[foldKey(r[c.column])] === 1; }
+  if (c.kind === "threshold") { if (c.when) { var wv = r[c.when.column]; if (wv == null || foldKey(wv) !== foldKey(c.when.value)) return false; } var n = toNumber(r[c.column]); if (n == null) return false; return cmp(n, c.op, c.value); }
+  return false;
+}; };
+var filtered = rows;
+for (var s = 0; s < STAGES.length; s++) { filtered = filtered.filter(pred(STAGES[s])); }
+var freq = rankFrequency(filtered, TARGET);
+var ranked = topNWithTies(freq.entries, N, function (e) { return e.count; }, DIRECTION);
+var denom = freq.total - freq.blank;
+var out = ranked.map(function (e) {
+  var row = {};
+  row[TARGET] = e.label;
+  row["Count"] = e.count;
+  row["Share of total"] = (denom ? Math.round(e.count / denom * 1000) / 10 : 0) + "%";
+  return row;
+});
+return out;
+`.trim();
+}
+
+function buildTopNMagnitudeTransformCode(match, exec) {
+  const stages = match.stages.map((s) => s.condition);
+  return `
+var foldKey = function (v) { return String(v).trim().toLowerCase().replace(/\\s+/g, " "); };
+${toNumber.toString()}
+${RANK_MAGNITUDE_BLOCK}
+${topNWithTies.toString()}
+var cmp = function (n, op, t) { switch (op) { case ">": return n > t; case ">=": return n >= t; case "<": return n < t; case "<=": return n <= t; case "<>": return n !== t; default: return n === t; } };
+var STAGES = ${JSON.stringify(stages)};
+var TARGET = ${JSON.stringify(exec.targetColumn)};
+var N = ${exec.n === Infinity ? "Infinity" : JSON.stringify(exec.n)};
+var DIRECTION = ${JSON.stringify(exec.direction)};
+var SHEET = ${JSON.stringify(match.sheetName)};
+var rows = sheets[SHEET] || [];
+var pred = function (c) { return function (r) {
+  if (c.kind === "value") { if (c.op === "<>") { return r[c.column] == null || foldKey(r[c.column]) !== foldKey(c.value); } return r[c.column] != null && foldKey(r[c.column]) === foldKey(c.value); }
+  if (c.kind === "set") { var set = {}; for (var i = 0; i < c.values.length; i++) { set[foldKey(c.values[i])] = 1; } if (c.op === "not-in") { return r[c.column] == null || set[foldKey(r[c.column])] !== 1; } return r[c.column] != null && set[foldKey(r[c.column])] === 1; }
+  if (c.kind === "threshold") { if (c.when) { var wv = r[c.when.column]; if (wv == null || foldKey(wv) !== foldKey(c.when.value)) return false; } var n = toNumber(r[c.column]); if (n == null) return false; return cmp(n, c.op, c.value); }
+  return false;
+}; };
+var filtered = rows;
+for (var s = 0; s < STAGES.length; s++) { filtered = filtered.filter(pred(STAGES[s])); }
+var mag = rankMagnitude(filtered, TARGET);
+var ranked = topNWithTies(mag.entries, N, function (e) { return e.value; }, DIRECTION);
+var out = ranked.map(function (e, i) {
+  var row = { Rank: i + 1 };
+  for (var k in e.row) row[k] = e.row[k];
+  return row;
+});
+return out;
+`.trim();
+}
+
+function fillTopNPlan(match, workbook, sheet) {
+  const exec = executeTopN(match, workbook);
+  const isFrequency = exec.family === "frequency";
+
+  const resultRows = isFrequency
+    ? exec.ranked.map((e) => {
+      const denom = exec.total - exec.blank;
+      return {
+        [exec.targetColumn]: e.label,
+        Count: e.count,
+        "Share of total": `${denom ? Math.round((e.count / denom) * 1000) / 10 : 0}%`,
+      };
+    })
+    : exec.ranked.map((e, i) => ({ Rank: i + 1, ...e.row }));
+
+  const plan = {
+    engine: "offline",
+    looked_for: match.lookedFor,
+    summary: isFrequency ? buildTopNFrequencySummary(match, exec) : buildTopNMagnitudeSummary(match, exec, sheet),
+    transform_code: isFrequency ? buildTopNFrequencyTransformCode(match, exec) : buildTopNMagnitudeTransformCode(match, exec),
+    excel_steps: isFrequency ? buildTopNFrequencyExcelSteps(match, exec, sheet) : buildTopNMagnitudeExcelSteps(match, exec, sheet),
+    r_script:
+      "# This ranking was worked out inside TidyTable, on your computer.\n" +
+      "# The result table and the Excel steps above reproduce it exactly.\n" +
+      "# A full R version arrives with the statistics features.\n",
+    r_run_notes:
+      "This ranking ran on your computer, so there is no R script to run for it yet. " +
+      "Use the Excel steps to reproduce the same result by hand.",
+  };
+  return { plan, resultRows, exec };
+}
+
 // Public: build the plan and the ready-to-show result rows for a confident match.
 export function fillPlan(match, workbook) {
   const sheet = workbook.sheets.find((s) => s.name === match.sheetName) || workbook.sheets[0];
 
   if (match.intent === "describe") return fillDescribePlan(match, workbook, sheet);
+  if (match.topN) return fillTopNPlan(match, workbook, sheet);
   if (match.aggregation) return fillAggregationPlan(match, workbook, sheet);
   if (match.groupColumn) return fillGroupCountPlan(match, workbook, sheet);
 

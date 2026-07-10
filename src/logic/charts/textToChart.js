@@ -14,7 +14,7 @@
 // synonyms.js) instead of re-implementing fuzzy matching from scratch.
 
 import { findColumnCandidates, findValueCandidates, scoreTokenMatch, tokens } from "../offline/valueMatch.js";
-import { detectIntent, GROUP_WORDS } from "../offline/synonyms.js";
+import { detectIntent, GROUP_WORDS, detectTopN } from "../offline/synonyms.js";
 import { foldKey } from "../checkup/normalizers.js";
 import { matchColumn } from "../recipes/recipe.js";
 
@@ -114,23 +114,38 @@ export function resolveChartRequest(text, sheet) {
   if (!sheet?.headers?.length) return { status: "none", reason: "no-data", message: "Upload a spreadsheet first." };
   const headers = sheet.headers;
 
-  const intent = detectIntent(raw);
+  // Phase 4: "top 5"/"most common"/"least common"/"longest"/"shortest" — the
+  // Step 9 mirror of the Q&A ranking family (offline/matcher.js's
+  // detectTopN). Only the cap/direction transfers to a chart (a full ranked
+  // TABLE isn't a chart concept); the words are stripped before the normal
+  // label/value search runs, same as an aggregation intent phrase already is.
+  const topInfo = detectTopN(raw);
+  let workingText = raw;
+  if (topInfo) {
+    for (const p of [topInfo.topPhrase, topInfo.wordPhrase]) {
+      if (!p) continue;
+      const re = new RegExp(`\\b${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+      workingText = workingText.replace(re, " ");
+    }
+  }
+
+  const intent = detectIntent(workingText);
   let aggMode = "count";
   if (intent?.intent === "average") aggMode = "average";
   else if (intent?.intent === "sum") aggMode = "sum";
 
   // 1) An explicit "by X"/"per X" grouping column, if the phrase after the
   // marker actually names a real header.
-  const group = resolveGroupMarker(raw, headers);
+  const group = resolveGroupMarker(workingText, headers);
   let labelCol = null;
   let labelStretched = false;
   let labelTies = [];
-  let remainder = raw;
+  let remainder = workingText;
   if (group) {
     labelCol = group.column;
     labelStretched = group.stretched;
     labelTies = group.ties;
-    remainder = (raw.slice(0, group.start) + " " + raw.slice(group.end)).trim();
+    remainder = (workingText.slice(0, group.start) + " " + workingText.slice(group.end)).trim();
   }
 
   // 2) A sum/average needs a numeric target column, searched near the intent
@@ -220,12 +235,14 @@ export function resolveChartRequest(text, sheet) {
   }
 
   const confidence = labelStretched || valueStretched || filter?.stretched ? "stretched" : "exact";
-  const lookedFor = describeLookedFor({ labelCol, valueCol, aggMode, filter });
+  const rank = topInfo ? { n: topInfo.n ?? null, direction: topInfo.direction } : null;
+  const lookedFor = describeLookedFor({ labelCol, valueCol, aggMode, filter, rank });
 
   return {
     status: "resolved",
     labelCol, valueCol, aggMode, filter, confidence, lookedFor, ignored,
     ties: labelTies,
+    rank,
   };
 }
 
@@ -243,8 +260,9 @@ function removeSpan(text, span) {
   return out;
 }
 
-function describeLookedFor({ labelCol, valueCol, aggMode, filter }) {
+function describeLookedFor({ labelCol, valueCol, aggMode, filter, rank }) {
   const what = aggMode === "count" ? "a count of rows" : `the ${aggMode} of "${valueCol}"`;
   const where = filter ? ` where "${filter.column}" is "${filter.value}"` : "";
-  return `Comparing ${what} across "${labelCol}"${where}.`;
+  const capped = rank?.n != null ? `, top ${rank.n}${rank.direction === "least" ? " least common" : ""}` : "";
+  return `Comparing ${what} across "${labelCol}"${where}${capped}.`;
 }

@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { buildDataset, groupSmallIntoOther } from "../logic/charts/aggregate.js";
+import { buildDataset, groupSmallIntoOther, applyRankCap } from "../logic/charts/aggregate.js";
 import { recommendChart } from "../logic/charts/advisor.js";
 import { excelChartSteps } from "../logic/charts/excelChart.js";
 import { buildChartTitle } from "../logic/charts/chartTitle.js";
@@ -31,6 +31,7 @@ export default function ChartsPanel({ sheet }) {
   const [textNote, setTextNote] = useState(""); // plain message when text couldn't resolve
   const [pendingConfirm, setPendingConfirm] = useState(null); // W4 middle path: { plan, summary }
   const [groupOther, setGroupOther] = useState(false); // W4: fold small values into "Other"
+  const [chartRank, setChartRank] = useState(null); // Phase 4: { n, direction } from a "top N"/"most common" free-text request
   const svgRef = useRef(null);
 
   // Apply a resolved (or confirmed) plan to the pickers below, so the dropdowns
@@ -42,6 +43,7 @@ export default function ChartsPanel({ sheet }) {
     setFilter(plan.filter || null);
     setChosen(null);
     setGroupOther(false);
+    setChartRank(plan.rank || null);
   }
 
   // W4: read the free-text box. Exact, unambiguous → apply immediately. Any
@@ -69,10 +71,13 @@ export default function ChartsPanel({ sheet }) {
     return buildDataset(sheet, labelCol, valueCol || null, { aggMode, filter });
   }, [sheet, labelCol, valueCol, aggMode, filter]);
 
-  const dataset = useMemo(
-    () => (baseDataset && groupOther ? groupSmallIntoOther(baseDataset) : baseDataset),
-    [baseDataset, groupOther],
-  );
+  const dataset = useMemo(() => {
+    const grouped = baseDataset && groupOther ? groupSmallIntoOther(baseDataset) : baseDataset;
+    // Phase 4: "top 5 drugs" caps the bar chart the same way it caps the Q&A
+    // ranked table — sorted desc (or asc for "least common"), a tie at the
+    // cutoff shown in full.
+    return grouped && chartRank ? applyRankCap(grouped, chartRank) : grouped;
+  }, [baseDataset, groupOther, chartRank]);
 
   const rec = useMemo(() => (dataset ? recommendChart(dataset) : null), [dataset]);
   const chartType = chosen || rec?.type;
@@ -117,7 +122,7 @@ export default function ChartsPanel({ sheet }) {
         <div className="stats-pickers">
           <label>
             Labels (what to compare)
-            <select value={labelCol} onChange={(e) => { setLabelCol(e.target.value); setChosen(null); setFilter(null); }}>
+            <select value={labelCol} onChange={(e) => { setLabelCol(e.target.value); setChosen(null); setFilter(null); setChartRank(null); }}>
               <option value="">choose a column…</option>
               {columns.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
@@ -132,6 +137,7 @@ export default function ChartsPanel({ sheet }) {
                 else if (v) { setValueCol(v); setAggMode("sum"); }
                 else { setValueCol(""); setAggMode("count"); }
                 setChosen(null);
+                setChartRank(null);
               }}
             >
               <option value="">how many of each (count)</option>
@@ -202,6 +208,11 @@ export default function ChartsPanel({ sheet }) {
           {dataset.sampled && (
             <p className="hint">
               Showing a sample of {dataset.points.length.toLocaleString()} of {dataset.totalPoints.toLocaleString()} points, spread evenly through the data, so the preview stays readable and fast.
+            </p>
+          )}
+          {dataset.rankRequestedN != null && dataset.rankShown > dataset.rankRequestedN && (
+            <p className="hint">
+              Asked for the top {dataset.rankRequestedN}; showing {dataset.rankShown} because of a tie at the cutoff.
             </p>
           )}
           {dataset.noDataGroups?.length > 0 && (

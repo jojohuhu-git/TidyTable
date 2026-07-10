@@ -270,6 +270,84 @@ export function aggregateOne(rowsIn, targetColumn, aggIntent) {
   };
 }
 
+// Phase 4 (2026-07-10): frequency ranking of a column's values — the "most/
+// least common X" / "top N Y" family. Self-contained (var/for, no closures
+// beyond the `foldKey` free variable) so fillPlan.js can inline this exact
+// source via toString() into the worker transform, same trick as toNumber
+// above. A blank/unreadable cell is EXCLUDED entirely — never counted as a
+// candidate "value" and never silently surfaced as "the least common" for
+// having no data; `blank` reports how many were excluded so the caller can
+// say so honestly and use it to state the percentage denominator.
+export function rankFrequency(rows, column) {
+  var groups = {};
+  var order = [];
+  var blank = 0;
+  for (var i = 0; i < rows.length; i++) {
+    var v = rows[i][column];
+    if (v == null || String(v).trim() === "") { blank++; continue; }
+    var k = foldKey(v);
+    if (!groups[k]) { groups[k] = { label: v, count: 0 }; order.push(k); }
+    groups[k].count++;
+  }
+  var entries = [];
+  for (var j = 0; j < order.length; j++) entries.push(groups[order[j]]);
+  return { entries: entries, blank: blank, total: rows.length };
+}
+
+// Phase 4: magnitude ranking of a NUMERIC column's raw row values — the
+// "longest/shortest X" family. A row with an unreadable number is excluded
+// (never treated as 0 or as the smallest/largest), the same honesty rule
+// every other numeric read in this engine follows. Self-contained like
+// rankFrequency, for the same toString()-inlining reason.
+export function rankMagnitude(rows, column) {
+  var entries = [];
+  var unreadable = 0;
+  for (var i = 0; i < rows.length; i++) {
+    var n = toNumber(rows[i][column]);
+    if (n == null) { unreadable++; continue; }
+    entries.push({ row: rows[i], value: n });
+  }
+  return { entries: entries, unreadable: unreadable, total: rows.length };
+}
+
+// Phase 4: sort `entries` by `keyFn` in the given direction and keep the top
+// `n` — but if the cutoff value repeats past position `n` (a tie sitting
+// astride the boundary), every tied entry is kept rather than arbitrarily
+// cutting the tie in half. Ties are otherwise broken by original (first-seen)
+// order, so the result is deterministic and reproducible. `n` may be
+// `Infinity` (no cap — the full ranked list). Self-contained like the two
+// functions above, for the same toString()-inlining reason.
+export function topNWithTies(entries, n, keyFn, direction) {
+  var sorted = entries.slice().sort(function (a, b) {
+    return direction === "least" ? keyFn(a) - keyFn(b) : keyFn(b) - keyFn(a);
+  });
+  if (n >= sorted.length) return sorted;
+  var cutoffValue = keyFn(sorted[n - 1]);
+  var end = n;
+  while (end < sorted.length && keyFn(sorted[end]) === cutoffValue) end++;
+  return sorted.slice(0, end);
+}
+
+// match: a "confident" match with match.topN set (see matcher.js). Runs the
+// cohort filter stages first (same predicate() machinery a plain count
+// uses), then ranks either by frequency (any column type) or by magnitude
+// (numeric column only — matcher.js gates this before a match ever reaches
+// "confident").
+export function executeTopN(match, workbook) {
+  const sheet = workbook.sheets.find((s) => s.name === match.sheetName) || workbook.sheets[0];
+  let rows = sheet.rows;
+  for (const stage of match.stages) rows = rows.filter(predicate(stage.condition));
+  const { targetColumn, direction, n, family } = match.topN;
+  if (family === "frequency") {
+    const { entries, blank, total } = rankFrequency(rows, targetColumn);
+    const ranked = topNWithTies(entries, n, (e) => e.count, direction);
+    return { family, targetColumn, direction, n, total, blank, distinctValues: entries.length, ranked };
+  }
+  const { entries, unreadable, total } = rankMagnitude(rows, targetColumn);
+  const ranked = topNWithTies(entries, n, (e) => e.value, direction);
+  return { family, targetColumn, direction, n, total, unreadable, ranked };
+}
+
 // match: a "confident" match with match.aggregation set (see matcher.js).
 export function executeAggregation(match, workbook) {
   const sheet = workbook.sheets.find((s) => s.name === match.sheetName) || workbook.sheets[0];

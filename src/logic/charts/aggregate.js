@@ -5,7 +5,7 @@
 // prefer a line.
 
 import { foldKey } from "../checkup/normalizers.js";
-import { toNumber } from "../offline/cohort.js";
+import { toNumber, topNWithTies } from "../offline/cohort.js";
 
 const MONTHS = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i;
 const MONTH_INDEX = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
@@ -215,4 +215,24 @@ export function groupSmallIntoOther(dataset, thresholdPct = 2) {
   if (otherCount < 2) return dataset; // nothing meaningful to collapse
   const points = [...kept, { label: `Other (${otherCount} smaller groups)`, value: otherValue }];
   return { ...dataset, points, otherGrouped: otherCount };
+}
+
+// Phase 4 (2026-07-10): the Step 9 mirror of the Q&A "most common"/"top N"
+// ranking family (see offline/matcher.js's detectTopN) — "top 5 drugs" caps
+// the bar chart at 5, sorted by count, largest first; "least common" reorders
+// ascending. Reuses the exact same tie-at-the-cutoff rule Step 3 uses
+// (topNWithTies) so a tied Nth bar is never arbitrarily half-shown, and
+// `rankRequestedN`/`rankShown` let the panel say so honestly when a tie made
+// the shown count differ from what was asked for. Time-series datasets are
+// left alone — capping "top 5 months" isn't a meaningful chart-time concept
+// (Phase 8 territory).
+export function applyRankCap(dataset, rank) {
+  if (!dataset || dataset.kind !== "categorical" || dataset.labelIsTime || !rank) return dataset;
+  const { n, direction } = rank;
+  if (n == null) {
+    const points = [...dataset.points].sort((a, b) => (direction === "least" ? a.value - b.value : b.value - a.value));
+    return { ...dataset, points };
+  }
+  const points = topNWithTies(dataset.points, n, (p) => p.value, direction);
+  return { ...dataset, points, rankRequestedN: n, rankShown: points.length };
 }

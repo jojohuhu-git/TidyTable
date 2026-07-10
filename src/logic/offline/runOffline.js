@@ -87,23 +87,32 @@ const UNSUPPORTED_LEAD = {
   "unsupported-max": "This asks for a maximum, but I couldn't tell which column of numbers. Name the column directly (e.g. \"maximum Duration_days\").",
   "unsupported-range": "This asks for a range, but I couldn't tell which column of numbers. Name the column directly (e.g. \"range of Duration_days\").",
   "unsupported-describe": "This asks to describe/summarize a column, but I couldn't tell which one. Name the column directly (e.g. \"describe Duration_days\").",
+  // Phase 4: the most-common/top-N ranking family.
+  "unsupported-topn": "This asks to rank values, but I couldn't tell which column. Name it directly (e.g. \"most common Diagnosis\" or \"top 5 Drug\").",
 };
 
 // Phase 2: the verb used in the non-numeric-target decline for each stat
 // intent — "add up" for sum, "find the median of" for median, etc.
+// Phase 4 adds "topN-magnitude" ("longest"/"shortest" on a text column).
 const NON_NUMERIC_VERB = {
   sum: "add up", median: "find the median of", quartiles: "find the quartiles of",
   stdev: "find the standard deviation of", min: "find the minimum of",
   max: "find the maximum of", range: "find the range of", describe: "describe",
+  "topN-magnitude": "rank by the size of",
 };
+
+// Phase 4: the "name a numeric column" example is worded per aggIntent so a
+// "longest"/"shortest" decline doesn't suggest an unrelated "average" rephrase.
+const NON_NUMERIC_EXAMPLE = { "topN-magnitude": "longest Duration_days" };
 
 function buildDeclineMessage(match) {
   // Honesty bug 1 (2026-07-10): averaging a text column refuses plainly.
   if (match.reason === "non-numeric-target") {
     const verb = NON_NUMERIC_VERB[match.aggIntent] || "average";
+    const example = NON_NUMERIC_EXAMPLE[match.aggIntent] || "average Duration_days";
     return (
       `"${match.targetColumn}" contains words, not numbers — I can't ${verb} it. ` +
-      `Name a numeric column instead (e.g. "average Duration_days"), or rephrase as a count ` +
+      `Name a numeric column instead (e.g. "${example}"), or rephrase as a count ` +
       `(e.g. "how many rows have ... in ${match.targetColumn}").`
     );
   }
@@ -148,6 +157,9 @@ function buildClaudeHint(match) {
   }
   if (match.reason === "non-numeric-target") {
     return "A local pre-check found this asks to average or sum a text (non-numeric) column, which it refused.";
+  }
+  if (match.reason === "unsupported-topn") {
+    return "A local pre-check recognized this asks for a most-common/top-N ranking but could not resolve which column it applies to.";
   }
   return "A local pre-check did not recognize this as a count or share of rows.";
 }
