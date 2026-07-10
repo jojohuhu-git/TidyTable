@@ -418,6 +418,9 @@ body {
 /* B4: undo / start-over controls for the checkup step. */
 .workbook-actions { display: flex; gap: 0.6rem; margin-top: 1rem; border-top: 1px solid var(--line); padding-top: 1rem; }
 
+/* W1: "download your fixed file" — appears once a fix has been applied. */
+.download-fixed-file { margin-top: 1rem; display: flex; flex-direction: column; align-items: flex-start; gap: 0.4rem; }
+
 @media (max-width: 640px) {
   .masthead { flex-direction: column; }
   .keypanel-pop { right: auto; left: 0; }
