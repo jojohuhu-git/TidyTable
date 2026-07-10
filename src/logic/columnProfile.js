@@ -4,10 +4,23 @@
 // window `parseWorkbookFile` already uses for type inference and examples, so
 // this adds no new full-sheet scan on a large file.
 
+import { coerceNumbers } from "./checkup/normalizers.js";
+
 const PROFILE_SAMPLE_SIZE = 500;
 
 function foldForDistinct(v) {
   return typeof v === "string" ? v.trim().toLowerCase() : v;
+}
+
+// NEW-5: a column stored entirely as text-formatted numbers (with one stray
+// real float mixed in, or none) parses as "text" or "mixed (text + numbers)"
+// at the raw-type level — accurate, but unhelpful for the profile table,
+// which would otherwise show a top-3-by-frequency list of what's really a
+// numeric range. Detect it and profile it as numeric instead.
+function looksNumericAsText(type, nonNull) {
+  if (type !== "text" && type !== "mixed (text + numbers)") return false;
+  if (nonNull.length === 0) return false;
+  return nonNull.every((v) => typeof v === "number" || (typeof v === "string" && typeof coerceNumbers(v) === "number"));
 }
 
 export function buildColumnProfile(sheet) {
@@ -17,12 +30,14 @@ export function buildColumnProfile(sheet) {
     const nonNull = values.filter((v) => v != null && String(v).trim() !== "");
     const filledPct = sample.length ? Math.round((nonNull.length / sample.length) * 100) : 0;
     const distinctCount = new Set(nonNull.map(foldForDistinct)).size;
+    const numericAsText = looksNumericAsText(h.type, nonNull);
+    const type = numericAsText ? "number (stored as text)" : h.type;
 
     let summary;
     if (nonNull.length === 0) {
       summary = "empty column";
-    } else if (h.type === "number") {
-      const nums = nonNull.filter((v) => typeof v === "number");
+    } else if (h.type === "number" || numericAsText) {
+      const nums = nonNull.map((v) => (typeof v === "number" ? v : coerceNumbers(v)));
       const min = Math.min(...nums);
       const max = Math.max(...nums);
       summary = min === max ? `constant: ${min}` : `${min} – ${max}`;
@@ -39,7 +54,7 @@ export function buildColumnProfile(sheet) {
     return {
       letter: h.letter,
       name: h.name,
-      type: h.type,
+      type,
       filledPct,
       distinctCount,
       summary,

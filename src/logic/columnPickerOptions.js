@@ -8,9 +8,14 @@ import { buildColumnProfile } from "./columnProfile.js";
 
 const GROUPING_MAX_DISTINCT = 10;
 
+// NEW-5: buildColumnProfile also reports "number (stored as text)" for a
+// column that's really numeric but not yet coerced — treat it as numeric
+// here too, so it isn't badged/ranked like a free-text column.
+const isNumericType = (type) => type === "number" || type === "number (stored as text)";
+
 function badgeFor(p) {
   if (p.isEmpty) return "empty";
-  if (p.type === "number") return "number";
+  if (isNumericType(p.type)) return p.type;
   return `text · ${p.distinctCount} value${p.distinctCount === 1 ? "" : "s"}`;
 }
 
@@ -20,8 +25,8 @@ function badgeFor(p) {
 export function columnPickerOptions(sheet, role = "any") {
   const profile = buildColumnProfile(sheet);
   const likely = (p) => {
-    if (role === "grouping") return p.type !== "number" && p.distinctCount >= 2 && p.distinctCount <= GROUPING_MAX_DISTINCT;
-    if (role === "outcome") return p.type === "number";
+    if (role === "grouping") return !isNumericType(p.type) && p.distinctCount >= 2 && p.distinctCount <= GROUPING_MAX_DISTINCT;
+    if (role === "outcome") return isNumericType(p.type);
     return false;
   };
   const options = profile.map((p) => ({ name: p.name, badge: badgeFor(p), likely: likely(p) }));
