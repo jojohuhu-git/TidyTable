@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { analyze } from "../logic/stats/runStats.js";
 import { rTTest, rChiSquare } from "../logic/rscripts/templates.js";
 import { downloadText } from "../logic/workbook.js";
+import { columnPickerOptions } from "../logic/columnPickerOptions.js";
 import { CopyButton } from "./ResultsPanel.jsx";
 
 // P2-22: the t-test crosscheck used to print every raw value inline, which
@@ -14,7 +15,11 @@ const CROSSCHECK_VALUE_CAP = 50;
 // right test, and lays out the pieces in the OpenEpi order so every number is
 // traceable. An R script reproduces the same test.
 export default function StatsPanel({ sheet }) {
-  const columns = sheet.headers.map((h) => h.name);
+  // B10: badge each option by type/cardinality and put the columns most
+  // likely to fit the role first, so a novice is steered away from e.g.
+  // "Patient ID" as a grouping column.
+  const groupingOptions = useMemo(() => columnPickerOptions(sheet, "grouping"), [sheet]);
+  const outcomeOptions = useMemo(() => columnPickerOptions(sheet, "outcome"), [sheet]);
   const [colA, setColA] = useState("");
   const [colB, setColB] = useState("");
 
@@ -41,14 +46,18 @@ export default function StatsPanel({ sheet }) {
           Grouping column
           <select value={colA} onChange={(e) => setColA(e.target.value)}>
             <option value="">choose a column…</option>
-            {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+            {groupingOptions.map((o) => (
+              <option key={o.name} value={o.name}>{o.name} ({o.badge})</option>
+            ))}
           </select>
         </label>
         <label>
           Outcome or measurement column
           <select value={colB} onChange={(e) => setColB(e.target.value)}>
             <option value="">choose a column…</option>
-            {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+            {outcomeOptions.map((o) => (
+              <option key={o.name} value={o.name}>{o.name} ({o.badge})</option>
+            ))}
           </select>
         </label>
       </div>

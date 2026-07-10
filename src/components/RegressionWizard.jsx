@@ -2,13 +2,18 @@ import { useMemo, useState } from "react";
 import { assessRegression, methodName } from "../logic/stats/epvWizard.js";
 import { rRegression } from "../logic/rscripts/templates.js";
 import { downloadText } from "../logic/workbook.js";
+import { columnPickerOptions } from "../logic/columnPickerOptions.js";
 
 // Step 8 (build prompt §9): the appropriateness double-check before any
 // regression script. Three plain questions and an events-per-variable check
 // computed from the numbers you give. It recommends the right method or declines
 // — it never writes a script it just argued against.
 export default function RegressionWizard({ sheet }) {
-  const columns = sheet.headers.map((h) => h.name);
+  // B10: badge each option by type/cardinality and put the columns most
+  // likely to fit the role first, same idea as StatsPanel.
+  const predictorOptions = useMemo(() => columnPickerOptions(sheet, "any"), [sheet]);
+  const numericFirstOptions = useMemo(() => columnPickerOptions(sheet, "outcome"), [sheet]);
+  const groupingFirstOptions = useMemo(() => columnPickerOptions(sheet, "grouping"), [sheet]);
   const [outcomeType, setOutcomeType] = useState("");
   const [repeated, setRepeated] = useState("");
   const [events, setEvents] = useState("");
@@ -76,10 +81,10 @@ export default function RegressionWizard({ sheet }) {
       <div className="wizard-q">
         <p className="wizard-label">Which variables do you want in the model? ({predictors.length} chosen)</p>
         <div className="col-privacy">
-          {columns.map((c) => (
-            <label key={c} className={`col-chip ${predictors.includes(c) ? "" : "col-chip-off"}`}>
-              <input type="checkbox" checked={predictors.includes(c)} onChange={() => togglePredictor(c)} />
-              {c}
+          {predictorOptions.map((o) => (
+            <label key={o.name} className={`col-chip ${predictors.includes(o.name) ? "" : "col-chip-off"}`}>
+              <input type="checkbox" checked={predictors.includes(o.name)} onChange={() => togglePredictor(o.name)} />
+              {o.name} <span className="dim">({o.badge})</span>
             </label>
           ))}
         </div>
@@ -103,7 +108,9 @@ export default function RegressionWizard({ sheet }) {
             <p className="wizard-label">Which column is the outcome?</p>
             <select value={outcomeCol} onChange={(e) => setOutcomeCol(e.target.value)}>
               <option value="">choose…</option>
-              {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+              {(outcomeType === "measurement" ? numericFirstOptions : groupingFirstOptions).map((o) => (
+                <option key={o.name} value={o.name}>{o.name} ({o.badge})</option>
+              ))}
             </select>
           </div>
 
@@ -112,11 +119,11 @@ export default function RegressionWizard({ sheet }) {
               <p className="wizard-label">For a time-to-event model, which column is the follow-up time, and which marks the event (1/0)?</p>
               <select value={timeCol} onChange={(e) => setTimeCol(e.target.value)}>
                 <option value="">follow-up time column…</option>
-                {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+                {numericFirstOptions.map((o) => <option key={o.name} value={o.name}>{o.name} ({o.badge})</option>)}
               </select>
               <select value={eventCol} onChange={(e) => setEventCol(e.target.value)}>
                 <option value="">event marker column…</option>
-                {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+                {groupingFirstOptions.map((o) => <option key={o.name} value={o.name}>{o.name} ({o.badge})</option>)}
               </select>
             </div>
           )}
