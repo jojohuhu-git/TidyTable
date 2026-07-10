@@ -29,6 +29,7 @@ import ShelfPanel from "./components/ShelfPanel.jsx";
 import ColumnProfileTable from "./components/ColumnProfileTable.jsx";
 import DefinitionsEditor from "./components/DefinitionsEditor.jsx";
 import DefinitionsPanel from "./components/DefinitionsPanel.jsx";
+import { privacyBadgeText } from "./logic/privacyBadge.js";
 import { emptyDefinitionsStore, addDefinitionEntry } from "./logic/offline/definitionsStore.js";
 
 const MAX_RUN_HISTORY = 8;
@@ -63,6 +64,10 @@ export default function App() {
   // workbook has one; resets with the workbook, like excluded columns.
   const [definitionsStore, setDefinitionsStore] = useState(() => emptyDefinitionsStore());
   const [pendingDefinitions, setPendingDefinitions] = useState(null); // { missingTerms, message, request }
+  // B8: the privacy badge must stay true — track every actual send to Claude
+  // this session (mode at send time), instead of a permanent claim that never
+  // updates once a full-mode request has gone out.
+  const [aiSends, setAiSends] = useState([]); // [{ mode: "sample" | "full" }]
   const resultsRef = useRef(null);
 
   const dataContext = useMemo(() => {
@@ -159,6 +164,10 @@ export default function App() {
     try {
       setStatus("Sending your request to Claude…");
       const userRequest = hint ? `${request}\n\n(${hint})` : request;
+      // B8: recorded at send time (not on success), since the data has left
+      // the browser as soon as the request goes out, whether or not Claude's
+      // reply comes back.
+      setAiSends((s) => [...s, { mode: privacyMode }]);
       newPlan = await requestPlan({ apiKey, model, dataContext, userRequest, onStatus: setStatus });
     } catch (err) {
       setError(friendlyApiError(err));
@@ -211,6 +220,7 @@ export default function App() {
     setPendingGrain(null);
     setPendingDefinitions(null);
     setDefinitionsStore(emptyDefinitionsStore());
+    setAiSends([]); // B8: the badge tracks this workbook's sends, not a prior file's
     setSessionLog([]);
     setRecipe(newRecipe());
     setCheckupVersion((v) => v + 1);
@@ -301,7 +311,7 @@ export default function App() {
             Upload a spreadsheet, ask for what you need in plain words, and get the
             cleaned data — plus an Excel recipe and an RStudio script to double-check it.
           </p>
-          <p className="privacy-badge">Your data has not left this computer.</p>
+          <p className="privacy-badge">{privacyBadgeText(aiSends)}</p>
         </div>
         <ApiKeyPanel apiKey={apiKey} setApiKey={setApiKey} model={model} setModel={setModel} />
       </header>

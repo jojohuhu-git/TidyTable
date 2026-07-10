@@ -136,7 +136,16 @@ export default function UploadPanel({
                 type="radio"
                 name="privacy"
                 checked={privacyMode === "full"}
-                onChange={() => setPrivacyMode("full")}
+                onChange={() => {
+                  // B8: full mode sends every cell value to Anthropic — a
+                  // one-time confirm before switching to it, so it's never a
+                  // silent radio click.
+                  if (window.confirm(
+                    "This sends every value in the spreadsheet to Anthropic using your key — OK?",
+                  )) {
+                    setPrivacyMode("full");
+                  }
+                }}
               />
               <span>
                 <strong>The whole spreadsheet</strong> — lets the AI see every value (useful for
