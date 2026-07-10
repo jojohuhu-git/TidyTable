@@ -231,6 +231,12 @@ body {
 .example-chip-offline { border-color: var(--accent); color: var(--ink); }
 .run-row { display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap; }
 
+/* W2f: the collapsible "what works without AI" cheat-sheet under Step 3. */
+.offline-cheatsheet { margin: 0 0 0.9rem; }
+.offline-cheatsheet summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 0.9rem; }
+.offline-cheatsheet ul { margin: 0.5rem 0 0; padding-left: 1.2rem; font-size: 0.9rem; }
+.offline-cheatsheet li { margin-bottom: 0.35rem; }
+
 .summary-box {
   background: var(--accent-soft); border-radius: var(--rad);
   padding: 0.8rem 1rem; margin-bottom: 0.9rem;
