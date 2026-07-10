@@ -164,6 +164,7 @@ body {
 .chart-svg { width: 100%; max-width: 480px; height: auto; margin: 0.6rem 0; }
 .chart-label { font-size: 11px; fill: var(--ink-soft); }
 .chart-value { font-size: 11px; fill: var(--ink); font-weight: 600; }
+.chart-title { font-size: 13px; fill: var(--ink); font-weight: 600; }
 .charts-alts summary { cursor: pointer; color: var(--accent); font-weight: 600; margin: 0.4rem 0; }
 .charts-alts ul { list-style: none; padding-left: 0; }
 .charts-alts li { margin: 0.3rem 0; }

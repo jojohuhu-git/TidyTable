@@ -6,20 +6,33 @@
 import { foldKey } from "../logic/checkup/normalizers.js";
 import { maxOf } from "../logic/charts/aggregate.js";
 
-const W = 480;
-const H = 300;
+export const CHART_W = 480;
+export const CHART_H = 300;
+const W = CHART_W;
+const H = CHART_H;
+const TITLE_PAD = 24; // B9: room for the real chart title, so it doesn't overlap the plot
 
-export default function ChartPreview({ chartType, dataset, highlightLabel }) {
+// B9: a real title (e.g. "count by Diagnosis") makes an exported PNG
+// self-explanatory on its own, and also says what the bar values are —
+// dataset.valueName is already "count" or "total X".
+function ChartTitle({ title }) {
+  if (!title) return null;
+  return (
+    <text x={W / 2} y={16} textAnchor="middle" className="chart-title">{title}</text>
+  );
+}
+
+export default function ChartPreview({ chartType, dataset, highlightLabel, title, svgRef }) {
   if (!dataset || !dataset.points?.length) return null;
   const isSubject = (label) =>
     highlightLabel != null && foldKey(label) === foldKey(highlightLabel);
   const fill = (label) =>
     highlightLabel == null || isSubject(label) ? "var(--accent)" : "var(--line)";
 
-  if (chartType === "bar") return <BarChart dataset={dataset} fill={fill} />;
-  if (chartType === "line") return <LineChart dataset={dataset} />;
-  if (chartType === "pie") return <PieChart dataset={dataset} fill={fill} />;
-  if (chartType === "scatter") return <ScatterChart dataset={dataset} />;
+  if (chartType === "bar") return <BarChart dataset={dataset} fill={fill} title={title} svgRef={svgRef} />;
+  if (chartType === "line") return <LineChart dataset={dataset} title={title} svgRef={svgRef} />;
+  if (chartType === "pie") return <PieChart dataset={dataset} fill={fill} title={title} svgRef={svgRef} />;
+  if (chartType === "scatter") return <ScatterChart dataset={dataset} title={title} svgRef={svgRef} />;
   return null;
 }
 
@@ -31,10 +44,10 @@ function niceMax(v) {
 
 // P2-15: a negative value has no natural "start at zero, grow right" bar —
 // draw it growing left from a zero axis instead of clamping/misreading it.
-function BarChart({ dataset, fill }) {
+function BarChart({ dataset, fill, title, svgRef }) {
   const padL = 130;
   const padR = 40;
-  const padY = 16;
+  const padY = 16 + (title ? TITLE_PAD : 0);
   const points = dataset.points;
   const values = points.map((p) => p.value);
   const posMax = niceMax(maxOf(values, 0));
@@ -42,11 +55,12 @@ function BarChart({ dataset, fill }) {
   const totalRange = posMax + negMax || 1;
   const scale = (W - padL - padR) / totalRange;
   const zeroX = padL + negMax * scale;
-  const rowH = (H - padY * 2) / points.length;
+  const rowH = (H - padY - 16) / points.length;
   const barH = Math.min(rowH * 0.62, 34);
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="chart-svg" role="img" aria-label="Bar chart">
-      {negMax > 0 && <line x1={zeroX} y1={padY} x2={zeroX} y2={H - padY} stroke="var(--line)" />}
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="chart-svg" role="img" aria-label={title ? `Bar chart of ${title}` : "Bar chart"}>
+      <ChartTitle title={title} />
+      {negMax > 0 && <line x1={zeroX} y1={padY} x2={zeroX} y2={H - 16} stroke="var(--line)" />}
       {points.map((p, i) => {
         const y = padY + i * rowH + (rowH - barH) / 2;
         const w = Math.max(1, Math.abs(p.value) * scale);
@@ -74,11 +88,11 @@ function BarChart({ dataset, fill }) {
   );
 }
 
-function LineChart({ dataset }) {
+function LineChart({ dataset, title, svgRef }) {
   const padL = 44;
   const padR = 20;
   const padB = 34;
-  const padT = 16;
+  const padT = 16 + (title ? TITLE_PAD : 0);
   const points = dataset.points;
   const max = niceMax(maxOf(points.map((p) => p.value)));
   const stepX = (W - padL - padR) / Math.max(1, points.length - 1);
@@ -86,7 +100,8 @@ function LineChart({ dataset }) {
   const xy = points.map((p, i) => [padL + i * stepX, H - padB - p.value * scaleY]);
   const d = xy.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="chart-svg" role="img" aria-label="Line chart">
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="chart-svg" role="img" aria-label={title ? `Line chart of ${title}` : "Line chart"}>
+      <ChartTitle title={title} />
       <line x1={padL} y1={H - padB} x2={W - padR} y2={H - padB} stroke="var(--line)" />
       <line x1={padL} y1={padT} x2={padL} y2={H - padB} stroke="var(--line)" />
       <path d={d} fill="none" stroke="var(--accent)" strokeWidth="2" />
@@ -102,15 +117,16 @@ function LineChart({ dataset }) {
   );
 }
 
-function PieChart({ dataset, fill }) {
+function PieChart({ dataset, fill, title, svgRef }) {
   const cx = 150;
-  const cy = H / 2;
+  const cy = H / 2 + (title ? TITLE_PAD / 2 : 0);
   const r = 110;
   const total = dataset.points.reduce((s, p) => s + p.value, 0) || 1;
   let angle = -Math.PI / 2;
   const greys = ["var(--accent)", "var(--line)", "#c9d6d3", "#9fb7b2"];
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="chart-svg" role="img" aria-label="Pie chart">
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="chart-svg" role="img" aria-label={title ? `Pie chart of ${title}` : "Pie chart"}>
+      <ChartTitle title={title} />
       {dataset.points.map((p, i) => {
         const frac = p.value / total;
         const color = dataset.points.length <= 4 ? greys[i % greys.length] : "var(--accent)";
@@ -150,11 +166,11 @@ function PieChart({ dataset, fill }) {
   );
 }
 
-function ScatterChart({ dataset }) {
+function ScatterChart({ dataset, title, svgRef }) {
   const padL = 44;
   const padR = 20;
   const padB = 34;
-  const padT = 16;
+  const padT = 16 + (title ? TITLE_PAD : 0);
   const xs = dataset.points.map((p) => p.x);
   const ys = dataset.points.map((p) => p.y);
   const maxX = niceMax(maxOf(xs));
@@ -162,7 +178,8 @@ function ScatterChart({ dataset }) {
   const sx = (W - padL - padR) / maxX;
   const sy = (H - padT - padB) / maxY;
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="chart-svg" role="img" aria-label="Scatter plot">
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="chart-svg" role="img" aria-label={title ? `Scatter plot of ${title}` : "Scatter plot"}>
+      <ChartTitle title={title} />
       <line x1={padL} y1={H - padB} x2={W - padR} y2={H - padB} stroke="var(--line)" />
       <line x1={padL} y1={padT} x2={padL} y2={H - padB} stroke="var(--line)" />
       {dataset.points.map((p, i) => (

@@ -1,7 +1,9 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { buildDataset } from "../logic/charts/aggregate.js";
 import { recommendChart } from "../logic/charts/advisor.js";
 import { excelChartSteps } from "../logic/charts/excelChart.js";
+import { buildChartTitle } from "../logic/charts/chartTitle.js";
+import { downloadChartPng } from "../logic/charts/downloadChartPng.js";
 import ChartPreview from "./ChartPreview.jsx";
 
 // Step 9 (build prompt §11): pick what to chart, and the app recommends ONE chart
@@ -10,9 +12,14 @@ import ChartPreview from "./ChartPreview.jsx";
 // options are offered but collapsed.
 export default function ChartsPanel({ sheet }) {
   const columns = sheet.headers.map((h) => h.name);
+  // B9: the value dropdown used to list every column as "total X", including
+  // text ones — picking a text column then quietly fell back to a count.
+  // Filter to numeric columns so the label is never a lie.
+  const numericColumns = sheet.headers.filter((h) => h.type === "number").map((h) => h.name);
   const [labelCol, setLabelCol] = useState("");
   const [valueCol, setValueCol] = useState("");
   const [chosen, setChosen] = useState(null); // user override of the recommended type
+  const svgRef = useRef(null);
 
   const dataset = useMemo(() => {
     if (!labelCol) return null;
@@ -25,6 +32,7 @@ export default function ChartsPanel({ sheet }) {
     () => (dataset && chartType && chartType !== "none" ? excelChartSteps(chartType, dataset) : []),
     [dataset, chartType],
   );
+  const chartTitle = useMemo(() => buildChartTitle(dataset), [dataset]);
 
   return (
     <div className="charts-panel">
@@ -40,10 +48,13 @@ export default function ChartsPanel({ sheet }) {
           Value
           <select value={valueCol} onChange={(e) => { setValueCol(e.target.value); setChosen(null); }}>
             <option value="">how many of each (count)</option>
-            {columns.map((c) => <option key={c} value={c}>total {c}</option>)}
+            {numericColumns.map((c) => <option key={c} value={c}>total {c}</option>)}
           </select>
         </label>
       </div>
+      {valueCol === "" && numericColumns.length === 0 && labelCol && (
+        <p className="hint">No numeric columns to total — showing a count of rows per {labelCol} instead.</p>
+      )}
 
       {rec && rec.type === "none" && <p className="hint">{rec.reason}</p>}
 
@@ -74,7 +85,14 @@ export default function ChartsPanel({ sheet }) {
             </details>
           )}
 
-          <ChartPreview chartType={chartType} dataset={dataset} />
+          <ChartPreview chartType={chartType} dataset={dataset} title={chartTitle} svgRef={svgRef} />
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={() => downloadChartPng(svgRef.current, `${chartTitle.replace(/[^\w -]/g, "").trim() || "chart"}.png`)}
+          >
+            Download chart as image
+          </button>
           {dataset.sampled && (
             <p className="hint">
               Showing a sample of {dataset.points.length.toLocaleString()} of {dataset.totalPoints.toLocaleString()} points, spread evenly through the data, so the preview stays readable and fast.

@@ -122,6 +122,11 @@ export function buildDataset(sheet, labelCol, valueCol) {
         .sort((a, b) => a.k - b.k)
         .map(({ p }) => p);
     }
+  } else {
+    // B9: the bar Excel step already suggests sorting largest-to-smallest —
+    // the in-app preview should model the same thing instead of leaving
+    // categories in first-appearance order.
+    points = [...points].sort((a, b) => b.value - a.value);
   }
   return {
     kind: "categorical",
