@@ -1,0 +1,3 @@
+#!/bin/sh
+# Runs the save-time guardrail that flags top-level notes with no home.
+sh scripts/check-root-notes.sh
