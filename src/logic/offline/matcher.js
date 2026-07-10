@@ -13,7 +13,9 @@ import { foldKey } from "../checkup/normalizers.js";
 import { lookupDefinition } from "./definitions.js";
 import {
   detectIntent, detectComparator, splitNestedLevels, COHORT_MARKERS, GROUP_WORDS,
+  expandClinicalSynonyms,
 } from "./synonyms.js";
+import { findValueCandidates, findColumnCandidates, nearestSuggestions } from "./valueMatch.js";
 
 // Words that carry no filter meaning — stripped before a term is resolved.
 const STOP = new Set([
@@ -119,10 +121,69 @@ function resolveAggregationTarget(text, intentPhrase, headers) {
   return null;
 }
 
+// W2c: recognize a trailing column hint like "in urine", "under Urine
+// Organisms", "from ward", or "<phrase> column". Returns { columns, hintText,
+// stretched } when the hint resolves to one or more real headers, or null. Only
+// the LAST such phrase is treated as a column scope, since it's the natural
+// place a scope lands ("... E. coli in urine"). If the hinted phrase is itself a
+// cell value, we do NOT scope on it — the caller then treats it as a value, so
+// nothing is double-counted.
+function resolveColumnScope(clause, headers, index) {
+  const text = String(clause);
+  // "<phrase> column" — an explicit column word.
+  let m = /\b([a-z0-9][a-z0-9 _-]*?)\s+column\b/i.exec(text);
+  let hintPhrase = null;
+  let hintText = null;
+  if (m) { hintPhrase = m[1].trim(); hintText = m[0]; }
+  if (!hintPhrase) {
+    // "in|under|from|within <phrase>" — take the last occurrence.
+    const re = /\b(?:in|under|from|within)\s+([a-z0-9][a-z0-9 _-]*)$/i;
+    const mm = re.exec(text.trim());
+    if (mm) { hintPhrase = mm[1].trim(); hintText = mm[0]; }
+  }
+  if (!hintPhrase) return null;
+
+  const phrase = termWords(hintPhrase).join(" ");
+  if (!phrase) return null;
+
+  // If the hint phrase is itself a cell value somewhere, it's a value, not a
+  // scope — leave it for the value scan (current behavior), never double-count.
+  const asValue = findValueCandidates(phrase, headers, index);
+  if (asValue.some((c) => c.exact)) return null;
+
+  // Exact header match first (no stretch), then the token-subset tier.
+  const exact = fuzzyColumn(phrase, headers);
+  if (exact) return { columns: [exact], hintText, hintPhrase, stretched: false };
+  const fuzzy = findColumnCandidates(phrase, headers);
+  if (fuzzy.length) return { columns: fuzzy, hintText, hintPhrase, stretched: true };
+  return null;
+}
+
+// Turn a resolved value candidate into a value condition, carrying the real cell
+// value so every downstream surface (execution, Excel steps, transform) stays
+// identical to a plain exact match. `stretched`/`candidates` drive the middle-
+// path "Did you mean…?" confirmation upstream.
+function valueCondition(candidate, term, { stretched, candidates, via, scopeWords } = {}) {
+  return {
+    kind: "value", column: candidate.column, op: "=", value: candidate.value,
+    source: "value", term,
+    stretched: Boolean(stretched),
+    ...(candidates && candidates.length > 1 ? { candidates } : {}),
+    ...(via ? { via } : {}),
+    // W2c: words consumed by a column scope ("in urine"), so the residue check
+    // in resolveConditions doesn't treat them as a leftover second condition.
+    ...(scopeWords && scopeWords.length ? { scopeWords } : {}),
+  };
+}
+
 // Resolve a single filter phrase into a condition, trying (in order): a threshold
-// ("... over 7"), a value present in the data (value scan), then the Definitions
-// sheet. Anything left over is a missing term the app must refuse to guess.
-function resolveCondition(clause, sheet, headers, index, defs) {
+// ("... over 7"), a column scope ("... in urine"), an exact/fuzzy value present
+// in the data (value scan), a clinical-abbreviation expansion, then the
+// Definitions sheet. Anything left over is a missing term the app must refuse to
+// guess — but it comes back with the nearest values/columns it CAN see, so the
+// user isn't just told to reach for AI. `aliasMap` remembers phrases the user
+// already confirmed this session, so the same stretch never asks twice.
+function resolveCondition(clause, sheet, headers, index, defs, aliasMap) {
   const compar = detectComparator(clause);
   const numMatch = String(clause).match(/-?\d+(?:\.\d+)?/);
 
@@ -136,23 +197,94 @@ function resolveCondition(clause, sheet, headers, index, defs) {
     }
   }
 
-  const phrase = termWords(clause).join(" ");
-  if (!phrase) return null;
+  // W2c: peel off a trailing "in <column>" / "<phrase> column" scope, and drop
+  // its words from the value phrase so "e coli in urine" searches for "e coli".
+  const scope = resolveColumnScope(clause, headers, index);
+  const scopeColumns = scope ? scope.columns : null;
+  const scopeStretched = scope ? scope.stretched : false;
+  let valueClause = clause;
+  let scopeWords = [];
+  if (scope && scope.hintText) {
+    valueClause = String(clause).replace(scope.hintText, " ");
+    // Every real word inside the scope hint ("urine organisms" from "in urine
+    // organisms") is consumed by the scope, not left over as a value.
+    scopeWords = termWords(scope.hintText);
+  }
 
-  // Value scan: the phrase (or a word in it) is an actual value in some column.
-  for (const h of headers) {
-    const m = index.get(h.name);
-    if (m.has(foldKey(phrase))) {
-      return { kind: "value", column: h.name, op: "=", value: m.get(foldKey(phrase)), source: "value", term: phrase };
+  const phrase = termWords(valueClause).join(" ");
+  if (!phrase) {
+    // The clause was ONLY a column scope with no value to look for — nothing to
+    // filter on. Let the caller report it as filler rather than a bad guess.
+    return null;
+  }
+
+  // W2d: a mapping the user already confirmed this session wins immediately, no
+  // stretch, no re-ask.
+  const aliasKey = foldKey(phrase);
+  if (aliasMap && aliasMap.has(aliasKey)) {
+    const a = aliasMap.get(aliasKey);
+    return valueCondition(a, phrase, { stretched: false, scopeWords });
+  }
+
+  const scanColumns = scopeColumns;
+
+  // Run a scan against the scoped column first (W2c); if it finds nothing there,
+  // fall back to all columns and flag the fall-back so it counts as a stretch.
+  // Returns { candidates, scopedFellBack }.
+  const scan = (text) => {
+    if (scanColumns) {
+      const scoped = findValueCandidates(text, headers, index, { columns: scanColumns });
+      if (scoped.length) return { candidates: scoped, scopedFellBack: false };
+      const all = findValueCandidates(text, headers, index);
+      return { candidates: all, scopedFellBack: all.length > 0 };
+    }
+    return { candidates: findValueCandidates(text, headers, index), scopedFellBack: false };
+  };
+
+  // Tier 1 — an exact whole-phrase value (or a single exact word of a longer
+  // clause). Both are the old, no-stretch behavior: answer directly. The word
+  // pass keeps "pyelonephritis" resolvable inside "UTI pyelonephritis" without
+  // demanding the whole clause be one value.
+  const whole = scan(phrase);
+  const wholeExact = whole.candidates.find((c) => c.exact);
+  if (wholeExact && !whole.scopedFellBack && !scopeStretched) {
+    return valueCondition(wholeExact, phrase, { stretched: false, scopeWords });
+  }
+  for (const w of termWords(valueClause)) {
+    const one = scan(w);
+    const oneExact = one.candidates.find((c) => c.exact);
+    if (oneExact && !one.scopedFellBack && !scopeStretched) {
+      return valueCondition(oneExact, w, { stretched: false, scopeWords });
     }
   }
-  // Try single significant words too ("pyelonephritis" inside a longer clause).
-  for (const w of termWords(clause)) {
-    for (const h of headers) {
-      const m = index.get(h.name);
-      if (m.has(foldKey(w))) {
-        return { kind: "value", column: h.name, op: "=", value: m.get(foldKey(w)), source: "value", term: w };
-      }
+
+  // Tier 2 — the token-subset / prefix tier (W2a): "e coli" -> "ESCHERICHIA
+  // COLI", or a scoped/ambiguous match. Anything here is a stretch to confirm.
+  const { candidates, scopedFellBack } = scan(phrase);
+  if (candidates.length) {
+    const top = candidates[0];
+    const strongTies = candidates.filter((c) => c.score === top.score);
+    return valueCondition(top, phrase, {
+      stretched: true, candidates: strongTies.slice(0, 3), scopeWords,
+    });
+  }
+
+  // W2b: try clinical-abbreviation expansions ("e coli" -> "escherichia coli"),
+  // still restricted to the scoped column first. An expansion is ALWAYS a
+  // stretch (confirm before answering).
+  for (const expanded of expandClinicalSynonyms(phrase)) {
+    let exCands = scanColumns
+      ? findValueCandidates(expanded, headers, index, { columns: scanColumns })
+      : [];
+    if (!exCands.length) exCands = findValueCandidates(expanded, headers, index);
+    if (exCands.length) {
+      const top = exCands[0];
+      return valueCondition(top, phrase, {
+        stretched: true,
+        candidates: exCands.filter((c) => c.score === top.score).slice(0, 3),
+        via: `expanded "${phrase}" to "${expanded}"`,
+        scopeWords,
+      });
     }
   }
 
@@ -172,7 +304,9 @@ function resolveCondition(clause, sheet, headers, index, defs) {
     return { kind: "set", column, op: "in", values: def.values, source: "definition", term: def.term };
   }
 
-  return { kind: "missing", term: phrase, reason: "unknown" };
+  // W2e: nothing resolved. Refuse to guess, but hand back the nearest values and
+  // columns so the UI can offer them as chips instead of just "use AI".
+  return { kind: "missing", term: phrase, reason: "unknown", nearest: nearestSuggestions(phrase, headers, index) };
 }
 
 // A2: resolveCondition's single-significant-word fallback can match just one
@@ -183,13 +317,15 @@ function resolveCondition(clause, sheet, headers, index, defs) {
 // their own. If that succeeds, both conditions are kept (AND-ed, like a
 // nested "of those" level). If it fails, refuse rather than silently drop the
 // residue — the caller turns this into a "partial" result.
-function resolveConditions(clause, sheet, headers, index, defs) {
-  const condition = resolveCondition(clause, sheet, headers, index, defs);
+function resolveConditions(clause, sheet, headers, index, defs, aliasMap) {
+  const condition = resolveCondition(clause, sheet, headers, index, defs, aliasMap);
   if (!condition) return [];
   if (condition.kind !== "value" || condition.source !== "value") return [condition];
 
   const fullWords = termWords(clause);
-  const matchedWords = new Set(words(condition.term));
+  // W2c: words consumed by the value phrase AND by any column scope ("in urine")
+  // are accounted for — only genuinely leftover words count as residue.
+  const matchedWords = new Set([...words(condition.term), ...(condition.scopeWords || [])]);
   const residue = fullWords.filter((w) => !matchedWords.has(w));
   if (residue.length === 0) return [condition]; // the whole clause was the value phrase
 
@@ -201,7 +337,7 @@ function resolveConditions(clause, sheet, headers, index, defs) {
   );
   if (residue.length < 2 && !residueHasComparator) return [condition]; // a stray leftover word, not worth blocking
 
-  const second = resolveCondition(residue.join(" "), sheet, headers, index, defs);
+  const second = resolveCondition(residue.join(" "), sheet, headers, index, defs, aliasMap);
   if (second && (second.kind === "threshold" || second.kind === "value" || second.kind === "set")) {
     return [condition, second];
   }
@@ -301,10 +437,46 @@ function detectGrain(request, sheet, headers) {
   };
 }
 
+// W2d: if any resolved stage is a stretch (abbreviation, prefix/token-subset
+// value match, fuzzy column scope, or a tie between candidates), return a
+// "needs_confirm" result the UI turns into a "Did you mean…?" box. The first
+// stretched stage is the one to confirm; its `candidates` (already the top 2–3)
+// become the answer buttons, and `phrase` is the exact wording the user typed
+// so the confirmed choice can be remembered against it. An exact, single,
+// unstretched match returns null → answer immediately.
+// Strip the W2-only annotation fields (stretched/candidates/via/scopeWords) off
+// a resolved condition once it's confirmed, so the executed plan and its
+// serialized transform stay byte-for-byte what they were before W2 — the
+// execution surfaces only ever read kind/column/op/value/values/when.
+function cleanCondition(c) {
+  const { stretched, candidates, via, scopeWords, ...rest } = c;
+  void stretched; void candidates; void via; void scopeWords;
+  return rest;
+}
+function cleanStages(stages) {
+  return stages.map((s) => ({ ...s, condition: cleanCondition(s.condition) }));
+}
+
+function buildConfirmation(stages, request) {
+  const stretchedStage = stages.find((s) => s.condition.kind === "value" && s.condition.stretched);
+  if (!stretchedStage) return null;
+  const c = stretchedStage.condition;
+  const candidates = (c.candidates && c.candidates.length ? c.candidates : [{ column: c.column, value: c.value }])
+    .map((x) => ({ column: x.column, value: x.value }));
+  return {
+    status: "needs_confirm",
+    phrase: c.term,
+    candidates,
+    via: c.via || null,
+    request,
+  };
+}
+
 // Public: read a request. options.grainMode = "row" | "group-then-test" | null.
 // Returns a result whose `status` drives the UI:
 //   "none"             — nothing recognizable; offer Claude / decline, log a miss
 //   "needs_definitions"— a clinical term is undefined; block and ask for it
+//   "needs_confirm"    — the app stretched to reach a value; confirm before answering
 //   "grain"            — per-entity question over repeating rows; ask to combine
 //   "confident"        — understood; run it, but always show `lookedFor`
 export function matchRequest(request, workbook, defs, options = {}) {
@@ -312,6 +484,12 @@ export function matchRequest(request, workbook, defs, options = {}) {
   if (!sheet) return { status: "none", reason: "no-data" };
   const headers = sheet.headers;
   const index = valueIndex(sheet);
+  // W2d: phrase (folded) -> confirmed { column, value } from an earlier "Did you
+  // mean…?" answer this session, so the same stretch never asks twice. Passed
+  // in by runOffline from App-level session state.
+  const aliasMap = options.aliasMap instanceof Map
+    ? options.aliasMap
+    : new Map(Object.entries(options.aliasMap || {}));
 
   const intent = detectIntent(request);
 
@@ -339,7 +517,7 @@ export function matchRequest(request, workbook, defs, options = {}) {
     if (!targetColumn) {
       return { status: "none", reason: `unsupported-${intent.intent}`, request };
     }
-    return matchAggregation(request, intent, targetColumn, cohort, groupBy, sheet, headers, index, defs);
+    return matchAggregation(request, intent, targetColumn, cohort, groupBy, sheet, headers, index, defs, aliasMap);
   }
 
   // A cohort question needs either a counting word ("how many", "what share")
@@ -366,7 +544,7 @@ export function matchRequest(request, workbook, defs, options = {}) {
   }
 
   const stages = rawStages
-    .flatMap((s) => resolveConditions(s.text, sheet, headers, index, defs).map((condition) => ({ ...s, condition })))
+    .flatMap((s) => resolveConditions(s.text, sheet, headers, index, defs, aliasMap).map((condition) => ({ ...s, condition })))
     .filter((s) => s.condition); // drop stages that were pure filler
 
   const partial = stages.find((s) => s.condition.kind === "partial");
@@ -402,6 +580,12 @@ export function matchRequest(request, workbook, defs, options = {}) {
     return { status: "none", reason: "no-conditions", request };
   }
 
+  // W2d middle path: if the app had to STRETCH to reach any value (an
+  // abbreviation, a prefix/token-subset match, a column-scope fuzzy match, or
+  // more than one equally-strong candidate), confirm before answering.
+  const confirm = buildConfirmation(stages, request);
+  if (confirm) return confirm;
+
   // A group-by breakdown counts rows per group directly; the per-patient grain
   // question ("combine each patient's rows first?") is about a plain count,
   // not a breakdown, so skip it once a group-by has already been resolved.
@@ -411,14 +595,15 @@ export function matchRequest(request, workbook, defs, options = {}) {
     return { status: "grain", grain, request };
   }
 
+  const cleanedStages = cleanStages(stages);
   return {
     status: "confident",
     intent: intent?.intent || "count",
-    stages,
+    stages: cleanedStages,
     groupColumn: groupBy?.column || null,
     grain: grainMode === "group-then-test" ? grain : null,
     grainMode: grainMode || "row",
-    lookedFor: describeLookedFor(stages, intent, grainMode, grain, groupBy),
+    lookedFor: describeLookedFor(cleanedStages, intent, grainMode, grain, groupBy),
     sheetName: sheet.name,
   };
 }
@@ -427,12 +612,12 @@ export function matchRequest(request, workbook, defs, options = {}) {
 // pinned down. Reuses the same cohort/filter machinery a plain count uses —
 // nested "of those" nesting is out of scope for an aggregation, so only the
 // cohort clause (if any) becomes a filter stage.
-function matchAggregation(request, intent, targetColumn, cohort, groupBy, sheet, headers, index, defs) {
+function matchAggregation(request, intent, targetColumn, cohort, groupBy, sheet, headers, index, defs, aliasMap) {
   const rawStages = [];
   if (cohort) rawStages.push({ text: cohort.termText, role: "cohort" });
 
   const stages = rawStages
-    .flatMap((s) => resolveConditions(s.text, sheet, headers, index, defs).map((condition) => ({ ...s, condition })))
+    .flatMap((s) => resolveConditions(s.text, sheet, headers, index, defs, aliasMap).map((condition) => ({ ...s, condition })))
     .filter((s) => s.condition);
 
   const partial = stages.find((s) => s.condition.kind === "partial");
@@ -456,13 +641,17 @@ function matchAggregation(request, intent, targetColumn, cohort, groupBy, sheet,
     };
   }
 
+  const confirm = buildConfirmation(stages, request);
+  if (confirm) return confirm;
+
+  const cleanedStages = cleanStages(stages);
   return {
     status: "confident",
     intent: intent.intent,
     aggregation: { targetColumn, groupColumn: groupBy?.column || null },
-    stages,
+    stages: cleanedStages,
     grainMode: "row",
-    lookedFor: describeLookedForAggregation(intent.intent, targetColumn, stages, groupBy),
+    lookedFor: describeLookedForAggregation(intent.intent, targetColumn, cleanedStages, groupBy),
     sheetName: sheet.name,
   };
 }

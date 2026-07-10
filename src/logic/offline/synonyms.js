@@ -35,6 +35,46 @@ export const NESTED_MARKERS = ["and of those", "of those", "of these", "and of t
 // Words that mark the base cohort ("of patients with…", "among patients who…").
 export const COHORT_MARKERS = ["of patients with", "of patients who", "among patients with", "among patients who", "for patients with", "in patients with", "patients with", "patients who", "of people with", "people with"];
 
+// W2b: a short, built-in table of everyday clinical shorthand -> the long forms
+// that actually appear in lab/organism/drug columns. This lets "E. coli" find
+// "ESCHERICHIA COLI" with no Definitions round-trip. It is deliberately small
+// (~15 common bugs and their abbreviations) and only ever EXPANDS a phrase into
+// candidate spellings — it never decides an answer on its own, and any answer
+// reached through an expansion is always flagged as a stretch to confirm. The
+// user's own Definitions editor remains the extension point for anything not
+// here. Keys and values are folded loosely (case/spacing/punctuation) at lookup.
+export const CLINICAL_SYNONYMS = {
+  "e coli": ["escherichia coli"],
+  "ecoli": ["escherichia coli"],
+  "escherichia": ["escherichia coli"],
+  "staph": ["staphylococcus", "staphylococcus aureus"],
+  "staph aureus": ["staphylococcus aureus"],
+  "mrsa": ["methicillin resistant staphylococcus aureus", "staphylococcus aureus"],
+  "mssa": ["methicillin susceptible staphylococcus aureus", "staphylococcus aureus"],
+  "strep": ["streptococcus"],
+  "gbs": ["group b streptococcus", "streptococcus agalactiae"],
+  "vre": ["vancomycin resistant enterococcus", "enterococcus"],
+  "esbl": ["extended spectrum beta lactamase"],
+  "klebs": ["klebsiella", "klebsiella pneumoniae"],
+  "pseudomonas": ["pseudomonas aeruginosa"],
+  "psa": ["pseudomonas aeruginosa"],
+  "c diff": ["clostridioides difficile", "clostridium difficile"],
+  "cdiff": ["clostridioides difficile", "clostridium difficile"],
+};
+
+// Fold a term the same loose way the synonym table keys are written, so
+// "E. coli", "E.Coli" and "e  coli" all reach the "e coli" key.
+function foldSynonymKey(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+// W2b: return the long-form spellings a shorthand phrase expands to, or [] if
+// the phrase isn't a known abbreviation. Never guesses — only the curated table.
+export function expandClinicalSynonyms(phrase) {
+  const key = foldSynonymKey(phrase);
+  return CLINICAL_SYNONYMS[key] ? [...CLINICAL_SYNONYMS[key]] : [];
+}
+
 const lower = (s) => String(s || "").toLowerCase();
 
 // Find the intent a request expresses, or null. Longest phrase wins so a request
