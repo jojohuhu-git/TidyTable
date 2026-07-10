@@ -16,6 +16,7 @@ import {
   expandClinicalSynonyms,
 } from "./synonyms.js";
 import { findValueCandidates, findColumnCandidates, nearestSuggestions } from "./valueMatch.js";
+import { conceptColumnCandidates, valueContentCandidates, isConceptWord } from "./concepts.js";
 
 // Words that carry no filter meaning — stripped before a term is resolved.
 const STOP = new Set([
@@ -58,6 +59,77 @@ function fuzzyColumn(phrase, headers) {
   return hit ? hit.name : null;
 }
 
+// Phase 3: filler verbs that describe WHAT happened to a patient but carry no
+// filter value of their own ("treated for more than 7 days", "prescribed
+// amoxicillin"). They must stay OUT of the STOP set — the concept layer reads
+// them to find a column ("treated" -> Duration_days) — but once a real
+// condition is resolved they must not count as leftover residue that blocks.
+// Some overlap with STOP words that are already dropped; listing them here is
+// harmless and keeps the intent explicit.
+const FILLER_VERBS = new Set([
+  "treated", "treat", "treating", "prescribed", "prescribing", "administered",
+  "administering", "lasting", "lasted", "staying", "stayed", "seen", "managed",
+  "started", "continued", "using", "used",
+]);
+
+// Phase 3: resolve a spoken column phrase to a real header, in honesty order:
+//   1. a learned/confirmed COLUMN alias (this file's shape) — exact, no chip.
+//   2. an exact/contained header name (fuzzyColumn) — exact, no chip.
+//   3. a concept match ("treatment length" -> Duration_days) — a STRETCH,
+//      returned with ranked candidates so the caller confirms before trusting it.
+//   4. a value-content hint ("antibiotics" -> the drug column) — also a stretch.
+// Returns { column, stretched, candidates?, via? } or null. `numericOnly` drops
+// non-numeric candidates (used for average/sum targets, which need numbers).
+// `aliasMap` may hold column-type entries ({ kind: "column", column }) seeded
+// from a just-confirmed chip or the persistent per-file alias store.
+function resolveColumnRef(phrase, headers, { aliasMap, index, numericOnly = false } = {}) {
+  const clean = String(phrase || "").trim();
+  if (!clean) return null;
+
+  // 1. Learned/confirmed column alias.
+  const aliasK = foldKey(clean);
+  if (aliasMap && aliasMap.has(aliasK)) {
+    const a = aliasMap.get(aliasK);
+    if (a && a.kind === "column" && a.column && headers.some((h) => h.name === a.column)) {
+      return { column: a.column, stretched: false, via: null };
+    }
+  }
+
+  // 2. Exact / contained header name.
+  const exact = fuzzyColumn(clean, headers);
+  if (exact) return { column: exact, stretched: false, via: null };
+
+  const numeric = (name) => {
+    const h = headers.find((x) => x.name === name);
+    return h && h.type && NUMERIC_COLUMN_TYPES.has(h.type);
+  };
+
+  // Gate: reach for the concept layer only when the phrase is "clean" — every
+  // non-stop word is either a concept word or a recognized filler verb (no
+  // foreign word like "uti" or "per" glued on), and at least one concept word is
+  // present. This keeps stray words from forcing a low-signal confirm: "uti
+  // duration" and "duration per" fall through to the exact/value/compound
+  // machinery, while "treated" (filler AND a duration concept) still resolves.
+  const nonStop = words(clean).filter((w) => !STOP.has(w) && !/^\d+$/.test(w));
+  const foreign = nonStop.filter((w) => !isConceptWord(w) && !FILLER_VERBS.has(w));
+  if (foreign.length || !nonStop.some(isConceptWord)) return null;
+
+  // 3. Concept match.
+  let cands = conceptColumnCandidates(clean, headers);
+  // 4. Value-content hint, if a value index is available.
+  if (index) {
+    const byValues = valueContentCandidates(clean, headers, index);
+    for (const c of byValues) {
+      if (!cands.some((x) => x.column === c.column)) cands.push(c);
+    }
+  }
+  if (numericOnly) cands = cands.filter((c) => numeric(c.column));
+  if (!cands.length) return null;
+
+  const candidates = cands.slice(0, 3).map((c) => ({ kind: "column", column: c.column, via: c.via }));
+  return { column: cands[0].column, stretched: true, candidates, via: cands[0].via };
+}
+
 // Precompute, per column, the set of folded cell values so a value scan is quick.
 function valueIndex(sheet) {
   const index = new Map(); // header name -> Map(foldedValue -> original value)
@@ -86,7 +158,7 @@ function termWords(clause) {
 // grouping column) and is left for resolveCondition to handle as before.
 // Longest marker first so "grouped by"/"broken down by" win over a bare "by"
 // inside them.
-function resolveGroupBy(text, headers) {
+function resolveGroupBy(text, headers, { aliasMap, index } = {}) {
   const markers = [...GROUP_WORDS].sort((a, b) => b.length - a.length);
   for (const marker of markers) {
     const re = new RegExp(`(^|[^a-z])${marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`, "i");
@@ -99,8 +171,16 @@ function resolveGroupBy(text, headers) {
     const phraseText = stop === -1 ? rest : rest.slice(0, stop);
     const phrase = termWords(phraseText).join(" ");
     if (!phrase) continue;
-    const column = fuzzyColumn(phrase, headers);
-    if (column) return { column, start, end: end + (stop === -1 ? rest.length : stop) };
+    // Phase 3: exact header OR a concept match ("per condition" -> Diagnosis).
+    // A concept match is a stretch the caller confirms before grouping.
+    const ref = resolveColumnRef(phrase, headers, { aliasMap, index });
+    if (ref) {
+      return {
+        column: ref.column, phrase,
+        stretched: ref.stretched, candidates: ref.candidates, via: ref.via,
+        start, end: end + (stop === -1 ? rest.length : stop),
+      };
+    }
   }
   return null;
 }
@@ -120,17 +200,21 @@ function singularize(word) {
 // — "average duration_days" -> "Duration_days", "total cost" -> "Cost", "how
 // many different diagnoses" -> "Diagnosis". Looks at the words right after the
 // matched intent phrase first (the common order), then the words before it.
-function resolveAggregationTarget(text, intentPhrase, headers) {
+function resolveAggregationTarget(text, intentPhrase, headers, { aliasMap, index, numericOnly = false } = {}) {
   const lower = text.toLowerCase();
   const idx = lower.indexOf(intentPhrase);
   if (idx === -1) return null;
   const after = text.slice(idx + intentPhrase.length);
   const before = text.slice(0, idx);
   for (const candidate of [after, before]) {
-    const tw = termWords(candidate);
+    const tw = termWords(candidate).filter((w) => !/^\d+$/.test(w));
     if (!tw.length) continue;
-    const column = fuzzyColumn(tw.join(" "), headers) || fuzzyColumn(tw.map(singularize).join(" "), headers);
-    if (column) return column;
+    // Exact/contained header first (also try a light singular), then Phase 3's
+    // concept + value-content resolution — which returns a stretch to confirm.
+    const direct = fuzzyColumn(tw.join(" "), headers) || fuzzyColumn(tw.map(singularize).join(" "), headers);
+    if (direct) return { column: direct, stretched: false };
+    const ref = resolveColumnRef(tw.join(" "), headers, { aliasMap, index, numericOnly });
+    if (ref) return { ...ref, phrase: tw.join(" ") };
   }
   return null;
 }
@@ -257,9 +341,31 @@ function resolveCondition(clause, sheet, headers, index, defs, aliasMap) {
     const op = negBefore ? invertOp(compar.op) : compar.op;
     const colBefore = negBefore ? before.slice(0, negBefore.index) : before;
     const colPhrase = termWords(colBefore).join(" ");
-    const column = fuzzyColumn(colPhrase, headers) || fuzzyColumn(termWords(clause).join(" "), headers);
+    // Phase 3 (filler cleanup): a filler verb glued to the column word
+    // ("treated with duration_days over 7") used to defeat the exact match —
+    // dropping known filler verbs first lets "duration" resolve exactly.
+    const colPhraseCore = termWords(colBefore).filter((w) => !FILLER_VERBS.has(w)).join(" ");
+    let column = fuzzyColumn(colPhrase, headers)
+      || fuzzyColumn(colPhraseCore, headers)
+      || fuzzyColumn(termWords(clause).join(" "), headers);
+    let colStretch = null;
+    if (!column) {
+      // Phase 3: no exact column word ("treated for more than 7 days"). Try the
+      // concept layer, numeric-only (a threshold compares a number). A concept
+      // hit is a STRETCH the caller confirms; its spoken phrase (colPhrase) is
+      // what an accepted chip is remembered against.
+      const hint = colPhrase || termWords(clause).filter((w) => !/^\d+$/.test(w)).join(" ");
+      const ref = resolveColumnRef(hint, headers, { aliasMap, index, numericOnly: true });
+      if (ref) {
+        column = ref.column;
+        if (ref.stretched) colStretch = { candidates: ref.candidates, via: ref.via, colPhrase: hint };
+      }
+    }
     if (column) {
-      return { kind: "threshold", column, op, value: Number(numMatch[0]), source: "column", term: clause.trim() };
+      return {
+        kind: "threshold", column, op, value: Number(numMatch[0]), source: "column", term: clause.trim(),
+        ...(colStretch ? { stretched: true, colStretch: true, candidates: colStretch.candidates, via: colStretch.via, colPhrase: colStretch.colPhrase } : {}),
+      };
     }
   }
 
@@ -289,7 +395,12 @@ function resolveCondition(clause, sheet, headers, index, defs, aliasMap) {
   const aliasKey = foldKey(phrase);
   if (aliasMap && aliasMap.has(aliasKey)) {
     const a = aliasMap.get(aliasKey);
-    return valueCondition(a, phrase, { stretched: false, scopeWords });
+    // Only VALUE aliases resolve here; a column alias ({ kind: "column" }) is
+    // for a column reference (aggregation target / group-by / threshold), not a
+    // cell-value filter, so it is left for resolveColumnRef.
+    if (a && a.kind !== "column" && a.value != null) {
+      return valueCondition(a, phrase, { stretched: false, scopeWords });
+    }
   }
 
   const scanColumns = scopeColumns;
@@ -414,7 +525,10 @@ function resolveConditions(clause, sheet, headers, index, defs, aliasMap) {
   // are accounted for — as are negation words ("not", "never") the condition
   // absorbed — only genuinely leftover words count as residue.
   const matchedWords = new Set([...words(condition.term), ...(condition.scopeWords || []), ...(condition.negWords || [])]);
-  const residue = fullWords.filter((w) => !matchedWords.has(w));
+  // Phase 3: a recognized filler verb ("treated", "prescribed") next to a
+  // resolved condition names WHAT happened, not a second thing to filter on — so
+  // it must not count as leftover residue that blocks the answer.
+  const residue = fullWords.filter((w) => !matchedWords.has(w) && !FILLER_VERBS.has(w));
   if (residue.length === 0) return [condition]; // the whole clause was the value phrase
 
   const compar = detectComparator(clause);
@@ -544,18 +658,37 @@ function detectGrain(request, sheet, headers) {
 function cleanCondition(c) {
   // `negated` and the flipped op are NOT stripped — they are semantic, not
   // annotation; execution and the worker transform key off them.
-  const { stretched, candidates, via, scopeWords, negWords, ...rest } = c;
-  void stretched; void candidates; void via; void scopeWords; void negWords;
+  const { stretched, candidates, via, scopeWords, negWords, colStretch, colPhrase, ...rest } = c;
+  void stretched; void candidates; void via; void scopeWords; void negWords; void colStretch; void colPhrase;
   return rest;
 }
 function cleanStages(stages) {
   return stages.map((s) => ({ ...s, condition: cleanCondition(s.condition) }));
 }
 
+// A "did you mean this COLUMN?" confirmation — Phase 3's stretch chip for an
+// aggregation target, group-by, or threshold column resolved by concept rather
+// than by an exact header name. Candidates carry kind:"column" so the UI and
+// the alias store treat them as a column mapping, never a cell value.
+function columnConfirm(phrase, candidates, via, request) {
+  return {
+    status: "needs_confirm",
+    phrase,
+    candidates: (candidates || []).map((x) => ({ kind: "column", column: x.column, via: x.via })),
+    via: via || null,
+    request,
+  };
+}
+
 function buildConfirmation(stages, request) {
-  const stretchedStage = stages.find((s) => s.condition.kind === "value" && s.condition.stretched);
+  const stretchedStage = stages.find((s) => s.condition.stretched);
   if (!stretchedStage) return null;
   const c = stretchedStage.condition;
+  // A threshold/column stretch confirms the COLUMN; a value stretch confirms the
+  // cell value. They render and remember differently, so tag which one it is.
+  if (c.colStretch) {
+    return columnConfirm(c.colPhrase || c.term, c.candidates, c.via, request);
+  }
   const candidates = (c.candidates && c.candidates.length ? c.candidates : [{ column: c.column, value: c.value }])
     .map((x) => ({ column: x.column, value: x.value }));
   return {
@@ -583,8 +716,17 @@ export function matchRequest(request, workbook, defs, options = {}) {
   // mean…?" answer this session, so the same stretch never asks twice. Passed
   // in by runOffline from App-level session state.
   const aliasMap = options.aliasMap instanceof Map
-    ? options.aliasMap
+    ? new Map(options.aliasMap)
     : new Map(Object.entries(options.aliasMap || {}));
+
+  // Phase 3: fold the persistent, per-file learned COLUMN aliases in on top of
+  // the session map (as column-type entries), so a phrase the owner confirmed in
+  // an earlier session ("treatment length" -> Duration_days) is an exact hit now
+  // with no chip. Cell-value aliases are never persisted (privacy), so only
+  // column entries arrive here.
+  for (const [k, col] of Object.entries(options.columnAliases || {})) {
+    if (!aliasMap.has(k) && col) aliasMap.set(k, { kind: "column", column: col });
+  }
 
   const intent = detectIntent(request);
 
@@ -594,7 +736,12 @@ export function matchRequest(request, workbook, defs, options = {}) {
   // or "how many"), so resolving it first would swallow a trailing group-by
   // phrase as if it were part of the filter term (e.g. "of patients with UTI
   // per drug" would otherwise read "UTI per drug" as one filter phrase).
-  const groupBy = resolveGroupBy(request, headers);
+  const groupBy = resolveGroupBy(request, headers, { aliasMap, index });
+  // Phase 3: a group-by column reached by concept ("per condition" -> Diagnosis)
+  // is a stretch — confirm the column before breaking the answer down by it.
+  if (groupBy && groupBy.stretched) {
+    return columnConfirm(groupBy.phrase, groupBy.candidates, groupBy.via, request);
+  }
   const preCohortText = groupBy ? (request.slice(0, groupBy.start) + " " + request.slice(groupBy.end)).trim() : request;
   const cohort = extractCohort(preCohortText);
 
@@ -608,11 +755,18 @@ export function matchRequest(request, workbook, defs, options = {}) {
     // UTI") stripped out too, so its words don't get glued onto the target
     // phrase and break the fuzzy column match.
     const targetSearchText = cohort ? (preCohortText.slice(0, cohort.start) + " " + preCohortText.slice(cohort.end)).trim() : preCohortText;
-    const targetColumn = resolveAggregationTarget(targetSearchText, intent.phrase, headers);
-    if (!targetColumn) {
+    // average/sum need a numeric column; a distinct count works on any type.
+    const numericOnly = intent.intent !== "distinct";
+    const targetRef = resolveAggregationTarget(targetSearchText, intent.phrase, headers, { aliasMap, index, numericOnly });
+    if (!targetRef) {
       return { status: "none", reason: `unsupported-${intent.intent}`, request };
     }
-    return matchAggregation(request, intent, targetColumn, cohort, groupBy, sheet, headers, index, defs, aliasMap);
+    // Phase 3: a target reached by concept ("average treatment length" ->
+    // Duration_days) is a stretch — confirm the column, then compute on re-run.
+    if (targetRef.stretched) {
+      return columnConfirm(targetRef.phrase || targetSearchText.trim(), targetRef.candidates, targetRef.via, request);
+    }
+    return matchAggregation(request, intent, targetRef.column, cohort, groupBy, sheet, headers, index, defs, aliasMap);
   }
 
   // A cohort question needs either a counting word ("how many", "what share")
