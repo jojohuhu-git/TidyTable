@@ -73,6 +73,26 @@ export function deidentifyStep(column) {
   return { type: "deidentify", column, label: `Swap the names in "${column}" for stable codes` };
 }
 
+// W3: a successful, offline-answered Step 3 question is recorded as a routine
+// step too, the same way a checkup fix is — so the routine IS the running
+// results list. `match` is the "confident" result from matchRequest (see
+// matcher.js), carrying the resolved column names/values so replay can
+// re-resolve it against a new file without re-parsing the original English
+// question. `answer` is the plain one-line answer shown on the results card
+// at record time (e.g. "14 patients"), kept only for display in the routine
+// steps list — replay always recomputes its own answer from the new file.
+export function questionStep(request, match, answer) {
+  return { type: "question", request, match, answer, label: `Answered: "${request}"` };
+}
+
+// W3: a friendly default routine name derived from the uploaded file, e.g.
+// "DC antibiotics.xlsx" -> "DC antibiotics — monthly". Falls back to the
+// generic default when there is no usable file name.
+export function defaultRoutineName(fileName) {
+  const base = String(fileName == null ? "" : fileName).replace(/\.[^./\\]+$/, "").trim();
+  return base ? `${base} — monthly` : "Monthly cleanup";
+}
+
 export function reportCardsStep({ personColumn, valueColumn, groupColumn }) {
   return {
     type: "reportCards",

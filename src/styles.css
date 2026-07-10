@@ -427,15 +427,31 @@ body {
 /* B2: try-it-with-example-data next to the dropzone. */
 .try-example-row { margin: 0.7rem 0 0; }
 
-/* B3: session history chips and the result label above Step 4's result. */
-.run-history { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-bottom: 0.8rem; }
-.history-chip {
-  border: 1px solid var(--line); background: var(--bg); border-radius: var(--rad);
-  font-size: 0.8rem; padding: 0.25rem 0.6rem; cursor: pointer; color: var(--ink-soft);
+/* W3: "Your results so far" (Step 4) — an accumulating list of result cards,
+   replacing the old single-result view and session-history chips. */
+.results-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+.result-card { border: 1px solid var(--line); border-radius: var(--rad); background: var(--bg); overflow: hidden; }
+.result-card-open { border-color: var(--accent); }
+.result-card-head { display: flex; align-items: center; gap: 0.6rem; padding: 0.6rem 0.8rem; flex-wrap: wrap; }
+.result-card-toggle {
+  flex: 1; min-width: 12rem; display: flex; flex-direction: column; align-items: flex-start; gap: 0.15rem;
+  background: none; border: none; padding: 0; cursor: pointer; text-align: left; font: inherit; color: var(--ink);
 }
-.history-chip:hover { background: var(--accent-soft); color: var(--ink); }
-.history-chip-active { border-color: var(--accent); color: var(--ink); font-weight: 600; }
-.result-label { margin: 0 0 0.6rem; font-weight: 600; color: var(--ink-soft); font-size: 0.92rem; }
+.result-card-label { font-weight: 600; font-size: 0.92rem; }
+.result-card-answer { color: var(--accent); font-weight: 600; font-size: 0.95rem; }
+.result-card-time { white-space: nowrap; font-size: 0.8rem; }
+.result-card-badge {
+  font-size: 0.78rem; color: var(--accent); background: var(--accent-soft);
+  border-radius: var(--rad); padding: 0.2rem 0.5rem; white-space: nowrap;
+}
+.result-card-badge-muted { color: var(--ink-soft); background: var(--bg); border: 1px solid var(--line); }
+.result-card-body { border-top: 1px solid var(--line); padding: 0.8rem; background: var(--card); }
+
+/* W3: the collapsed "Optional extras" fold in the routine panel (step 5). */
+.recipe-extras { border-top: 1px solid var(--line); padding-top: 0.6rem; margin-bottom: 0.9rem; }
+.recipe-extras > summary { cursor: pointer; font-weight: 600; color: var(--ink-soft); font-size: 0.92rem; padding: 0.2rem 0; }
+.recipe-extras[open] > summary { margin-bottom: 0.4rem; }
+.recipe-extras .recipe-add { border-top: none; padding-top: 0; }
 
 /* B4: undo / start-over controls for the checkup step. */
 .workbook-actions { display: flex; gap: 0.6rem; margin-top: 1rem; border-top: 1px solid var(--line); padding-top: 1rem; }

@@ -4,10 +4,12 @@ import {
 } from "../logic/recipes/recipe.js";
 import { downloadText } from "../logic/workbook.js";
 
-// Step 5 (build prompt §7): build a reusable monthly recipe. The cleaning steps
-// you applied above are recorded automatically; here you can add the two steps
-// that make a monthly report — swap names for codes, and make report cards — then
-// save the recipe so you can replay it on next month's file.
+// Step 5 (W3 rename — "Save this routine"): the checkup fixes and questions you
+// answered above are recorded automatically as routine steps; here you can add
+// two optional extras — swap names for codes, and make report cards — then save
+// the whole routine with one click, to replay it on next month's file in step 6.
+// (The word "routine" is UI copy only — the underlying object stays a "recipe"
+// in code/localStorage to limit churn; see docs/agent notes.)
 export default function RecipePanel({ recipe, sheet, onChange, onSaved }) {
   const [name, setName] = useState(recipe.name);
   const [idCol, setIdCol] = useState("");
@@ -61,16 +63,16 @@ export default function RecipePanel({ recipe, sheet, onChange, onSaved }) {
 
   function exportFile() {
     const toSave = { ...recipe, name: name.trim() || "Monthly cleanup" };
-    downloadText(serializeRecipe(toSave), `${toSave.name.replace(/[^\w -]/g, "").trim() || "recipe"}.tidytable-recipe.json`);
+    downloadText(serializeRecipe(toSave), `${toSave.name.replace(/[^\w -]/g, "").trim() || "routine"}.tidytable-routine.json`);
   }
 
   return (
     <div className="recipe-panel">
       {recipe.steps.length === 0 ? (
         <p className="empty-state">
-          Nothing recorded yet. Apply a fix in the checkup above and it will be added here as a
-          step. You can then add a step that swaps names for codes and a final step that makes
-          report cards, and save the whole thing to reuse next month.
+          Nothing recorded yet. Apply a fix in the checkup above, or ask a question in step 3 —
+          both are added here automatically as routine steps. You can also add the optional
+          extras below, then save the whole routine to reuse next month.
         </p>
       ) : (
         <ol className="recipe-steps">
@@ -83,61 +85,64 @@ export default function RecipePanel({ recipe, sheet, onChange, onSaved }) {
         </ol>
       )}
 
-      <div className="recipe-add">
-        <div className="recipe-add-row">
-          <label>
-            Swap names for codes in
-            <select value={idCol} onChange={(e) => setIdCol(e.target.value)}>
-              <option value="">choose a column…</option>
-              {columns.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </label>
-          <button type="button" className="btn" onClick={addDeidentify} disabled={!idCol}>Add this step</button>
-        </div>
-        <p className="dim">
-          The real names are kept only in a private code list on this computer. Reports show codes,
-          never names, and the codes stay the same each month so you can follow each person over time.
-        </p>
+      <details className="recipe-extras">
+        <summary>Optional extras</summary>
+        <div className="recipe-add">
+          <div className="recipe-add-row">
+            <label>
+              Swap names for codes in
+              <select value={idCol} onChange={(e) => setIdCol(e.target.value)}>
+                <option value="">choose a column…</option>
+                {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+            <button type="button" className="btn" onClick={addDeidentify} disabled={!idCol}>Add this step</button>
+          </div>
+          <p className="dim">
+            The real names are kept only in a private code list on this computer. Reports show codes,
+            never names, and the codes stay the same each month so you can follow each person over time.
+          </p>
 
-        <div className="recipe-add-row">
-          <label>
-            Report cards, one per person in
-            <select value={personCol} onChange={(e) => setPersonCol(e.target.value)}>
-              <option value="">choose a column…</option>
-              {columns.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </label>
-          <label>
-            measured by
-            <select value={valueCol} onChange={(e) => setValueCol(e.target.value)}>
-              <option value="">how many rows each has</option>
-              {numericColumns.map((c) => <option key={c} value={c}>total {c}</option>)}
-            </select>
-          </label>
-          <label>
-            grouped by
-            <select value={groupCol} onChange={(e) => setGroupCol(e.target.value)}>
-              <option value="">no grouping</option>
-              {columns.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </label>
-          <button type="button" className="btn" onClick={setReportCards} disabled={!personCol}>
-            {terminal ? "Update report cards" : "Add report cards"}
-          </button>
+          <div className="recipe-add-row">
+            <label>
+              Report cards, one per person in
+              <select value={personCol} onChange={(e) => setPersonCol(e.target.value)}>
+                <option value="">choose a column…</option>
+                {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+            <label>
+              measured by
+              <select value={valueCol} onChange={(e) => setValueCol(e.target.value)}>
+                <option value="">how many rows each has</option>
+                {numericColumns.map((c) => <option key={c} value={c}>total {c}</option>)}
+              </select>
+            </label>
+            <label>
+              grouped by
+              <select value={groupCol} onChange={(e) => setGroupCol(e.target.value)}>
+                <option value="">no grouping</option>
+                {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+            <button type="button" className="btn" onClick={setReportCards} disabled={!personCol}>
+              {terminal ? "Update report cards" : "Add report cards"}
+            </button>
+          </div>
         </div>
-      </div>
+      </details>
 
       <div className="recipe-save-row">
         <label className="recipe-name">
-          Recipe name
+          Routine name
           <input value={name} onChange={(e) => { setName(e.target.value); setSaved(false); }} placeholder="Monthly cleanup" />
         </label>
-        <button type="button" className="btn btn-primary" onClick={save} disabled={recipe.steps.length === 0}>Save to this browser</button>
+        <button type="button" className="btn btn-primary" onClick={save} disabled={recipe.steps.length === 0}>Save this routine</button>
         <button type="button" className="btn btn-ghost" onClick={exportFile} disabled={recipe.steps.length === 0}>Export to a file</button>
         {saved && (
           <span className="dim">
             {renamedOnSave
-              ? `"${renamedOnSave.requested}" was already taken by another recipe — saved as "${renamedOnSave.actual}" instead.`
+              ? `"${renamedOnSave.requested}" was already taken by another routine — saved as "${renamedOnSave.actual}" instead.`
               : "Saved."}
           </span>
         )}

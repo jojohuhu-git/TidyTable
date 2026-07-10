@@ -23,7 +23,10 @@ export function runOffline(request, workbook, options = {}) {
 
   if (match.status === "confident") {
     const { plan, resultRows, exec } = fillPlan(match, workbook);
-    return { kind: "answer", plan, resultRows, lookedFor: match.lookedFor, exec };
+    // W3: `match` is handed back too, so a successful offline answer can be
+    // recorded as a replayable "question" step (see recipe.js questionStep) —
+    // it carries the resolved columns/values, not just the plan text.
+    return { kind: "answer", plan, resultRows, lookedFor: match.lookedFor, exec, match };
   }
 
   if (match.status === "needs_definitions") {
