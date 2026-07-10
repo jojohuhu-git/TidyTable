@@ -6,9 +6,11 @@ import { serializeKeyStore, persistKeyStore } from "../logic/recipes/keyStore.js
 import { formatCleaningLog, makeLogEvent } from "../logic/checkup/cleaningLog.js";
 import ReportCardsView from "./ReportCardsView.jsx";
 
-// Step 6 (build prompt §7): replay a saved recipe on next month's file. Runs the
-// recorded rules, then reports what happened and — loudly — anything the rules did
-// not cover. Nothing is guessed silently and no data is dropped without saying so.
+// Step 6 (build prompt §7; W3 rename — "Run a saved routine…"): replay a saved
+// routine on next month's file. Runs the recorded rules, then reports what
+// happened and — loudly — anything the rules did not cover. Nothing is
+// guessed silently and no data is dropped without saying so. (The underlying
+// object is still a "recipe" in code, per the W3 UI-copy-only rename.)
 export default function ReplayPanel({ keyStore, onKeyStore }) {
   const [saved, setSaved] = useState(() => listRecipes());
   const [recipe, setRecipe] = useState(null);
@@ -40,7 +42,7 @@ export default function ReplayPanel({ keyStore, onKeyStore }) {
     try {
       setRecipe(parseRecipe(await file.text()));
     } catch (err) {
-      setError(err.message || "That recipe file could not be read.");
+      setError(err.message || "That routine file could not be read.");
     }
   }
 
@@ -78,18 +80,18 @@ export default function ReplayPanel({ keyStore, onKeyStore }) {
     <div className="replay-panel">
       <div className="replay-inputs">
         <div>
-          <p className="dim">1. Choose the recipe to replay.</p>
+          <p className="dim">1. Choose the routine to run.</p>
           {saved.length > 0 && (
             <select
               value={recipe && saved.some((r) => r.name === recipe.name) ? recipe.name : ""}
               onChange={(e) => pickSaved(e.target.value)}
             >
-              <option value="">a saved recipe…</option>
+              <option value="">a saved routine…</option>
               {saved.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
             </select>
           )}
           <button type="button" className="btn btn-ghost" onClick={() => recipeInput.current?.click()}>
-            or open a recipe file
+            or open a routine file
           </button>
           <input ref={recipeInput} type="file" accept=".json" hidden onChange={onRecipeFile} />
           {recipe && <p className="dim">Ready: “{recipe.name}” ({recipe.steps.length} steps).</p>}
@@ -105,7 +107,7 @@ export default function ReplayPanel({ keyStore, onKeyStore }) {
         </div>
 
         <button type="button" className="btn btn-primary" onClick={run} disabled={!recipe || !sheet}>
-          Replay on this file
+          Run the routine on this file
         </button>
       </div>
 

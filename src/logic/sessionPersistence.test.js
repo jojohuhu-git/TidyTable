@@ -9,7 +9,14 @@ describe("B5 — session log/recipe survive a refresh via localStorage", () => {
     const sessionLog = [{ at: "2026-07-09T00:00:00.000Z", fileName: "m.xlsx", sheet: "Sheet1", entries: [] }];
     const recipe = { version: 1, name: "Monthly cleanup", createdAt: "2026-07-09T00:00:00.000Z", steps: [] };
     saveSession({ sessionLog, recipe });
-    expect(loadSession()).toEqual({ sessionLog, recipe });
+    expect(loadSession()).toEqual({ sessionLog, recipe, results: [] });
+  });
+
+  // W3: "Your results so far" (Step 4) persists alongside the log/recipe.
+  it("round-trips the results-so-far list", () => {
+    const results = [{ id: "1", kind: "question", label: "Result of: your question \"x\"", answer: "2 rows", timestamp: 1 }];
+    saveSession({ sessionLog: [], recipe: null, results });
+    expect(loadSession().results).toEqual(results);
   });
 
   it("returns null when nothing has been saved yet", () => {

@@ -420,6 +420,24 @@ function fillAggregationPlan(match, workbook, sheet) {
   return { plan, resultRows, exec };
 }
 
+// W3: a plain one-line answer for a confident match's execution — used for the
+// "results so far" cards (e.g. "14 patients", "5 groups", "312.5") and, on
+// replay, to build the plain-report line for an auto-recorded question step.
+// Never a guess: it just reads the same `exec` shape fillPlan already builds.
+export function summarizeAnswer(match, exec) {
+  if (match.aggregation) {
+    if (exec.mode === "group") {
+      return `${exec.results.length} group${exec.results.length === 1 ? "" : "s"}`;
+    }
+    return exec.value == null ? "no readable numbers" : String(exec.value);
+  }
+  if (exec.mode === "group-by") {
+    return `${exec.total} rows across ${exec.groupResults.length} group${exec.groupResults.length === 1 ? "" : "s"}`;
+  }
+  const last = exec.levels[exec.levels.length - 1];
+  return last ? `${last.count} ${exec.unit}` : `${exec.total} ${exec.unit}`;
+}
+
 // Public: build the plan and the ready-to-show result rows for a confident match.
 export function fillPlan(match, workbook) {
   const sheet = workbook.sheets.find((s) => s.name === match.sheetName) || workbook.sheets[0];

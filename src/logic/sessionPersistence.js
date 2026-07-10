@@ -8,9 +8,12 @@
 
 const STORAGE_KEY = "tidytable_session_v1";
 
-export function saveSession({ sessionLog, recipe }) {
+// W3: `results` is the "Your results so far" list (see App.jsx) — callers
+// pass a version with plan/resultRows already stripped, since those can be as
+// large as the workbook itself; only the small display fields survive here.
+export function saveSession({ sessionLog, recipe, results }) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ sessionLog, recipe }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ sessionLog, recipe, results }));
   } catch {
     // Storage can be full or disabled (private browsing); losing the
     // refresh-survival nicety is not worth surfacing an error for.
@@ -26,6 +29,7 @@ export function loadSession() {
     return {
       sessionLog: Array.isArray(parsed.sessionLog) ? parsed.sessionLog : [],
       recipe: parsed.recipe || null,
+      results: Array.isArray(parsed.results) ? parsed.results : [],
     };
   } catch {
     return null;

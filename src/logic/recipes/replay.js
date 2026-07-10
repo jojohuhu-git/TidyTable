@@ -17,6 +17,7 @@ import {
 import { matchColumn } from "./recipe.js";
 import { applyCodesToColumn } from "./keyStore.js";
 import { buildReportCards } from "./reportCards.js";
+import { fillPlan, summarizeAnswer } from "../offline/fillPlan.js";
 
 const CELL_FNS = { coerceNumbers, sentinelBlanks, parseDates, epochSerialToNumber, stripUnitSuffix };
 
@@ -44,6 +45,60 @@ function applyMergeAndDetect(rows, column, map) {
   return unmerged;
 }
 
+// W3: replay a recorded "question" step (see recipe.js questionStep). The
+// recorded `match` names its columns by the header names seen when the
+// question was first answered — a rename is exactly the kind of surprise
+// replay must never guess past, so every column the match touches is
+// fuzzy-matched against the CURRENT headers first, the same way every other
+// step type resolves its columns. Any column that no longer matches anything
+// stops this step cold (no partial/guessed answer); a value that no longer
+// appears in its column is reported too, but the step still runs — a
+// COUNTIFS in Excel would honestly return 0 for it as well, not refuse.
+function remapColumn(name, headers, missing) {
+  const hit = matchColumn(name, headers);
+  if (!hit) missing.push(name);
+  return hit || name;
+}
+
+function remapCondition(cond, headers, missing) {
+  const next = { ...cond, column: remapColumn(cond.column, headers, missing) };
+  if (cond.when) next.when = { ...cond.when, column: remapColumn(cond.when.column, headers, missing) };
+  return next;
+}
+
+function remapMatch(match, headers, missing) {
+  const next = { ...match, stages: match.stages.map((s) => ({ ...s, condition: remapCondition(s.condition, headers, missing) })) };
+  if (match.groupColumn) next.groupColumn = remapColumn(match.groupColumn, headers, missing);
+  if (match.aggregation) {
+    next.aggregation = {
+      targetColumn: remapColumn(match.aggregation.targetColumn, headers, missing),
+      groupColumn: match.aggregation.groupColumn ? remapColumn(match.aggregation.groupColumn, headers, missing) : null,
+    };
+  }
+  if (match.grain?.entityColumn) {
+    next.grain = { ...match.grain, entityColumn: remapColumn(match.grain.entityColumn, headers, missing) };
+  }
+  return next;
+}
+
+// Every value/set condition the question's match resolved, checked against
+// the CURRENT rows — reported plainly (not guessed past) when a value the
+// question was built on no longer appears anywhere in its column.
+function findMissingValues(match, rows) {
+  const missing = [];
+  for (const stage of match.stages) {
+    const c = stage.condition;
+    if (c.kind === "value") {
+      const want = foldKey(c.value);
+      if (!rows.some((r) => r[c.column] != null && foldKey(r[c.column]) === want)) missing.push({ column: c.column, value: c.value });
+    } else if (c.kind === "set") {
+      const wanted = new Set(c.values.map(foldKey));
+      if (!rows.some((r) => r[c.column] != null && wanted.has(foldKey(r[c.column])))) missing.push({ column: c.column, value: c.values.join(", ") });
+    }
+  }
+  return missing;
+}
+
 // recipe: from recipe.js. sheet: { name, headers, rows }. keyStore: from
 // keyStore.js (or null to start fresh). Returns a full replay result.
 export function replayRecipe(recipe, sheet, keyStore) {
@@ -54,6 +109,7 @@ export function replayRecipe(recipe, sheet, keyStore) {
   const surprises = [];
   const logEntries = [];
   const newPeople = [];
+  const questionAnswers = [];
   let reportCards = null;
 
   const record = (label, before, after, extra) =>
@@ -163,6 +219,44 @@ export function replayRecipe(recipe, sheet, keyStore) {
       continue;
     }
 
+    if (step.type === "question") {
+      const missingColumns = [];
+      const remapped = remapMatch(step.match, headers, missingColumns);
+      if (missingColumns.length) {
+        const uniq = [...new Set(missingColumns)];
+        surprises.push({
+          type: "missingColumn",
+          column: uniq[0],
+          message: `The question "${step.request}" could not be answered: this file has no column matching ${uniq.map((m) => `"${m}"`).join(", ")}. It may have been renamed or removed. Nothing was computed for this step.`,
+        });
+        record(step.label, before, before, { skipped: true, note: `column not found — step skipped` });
+        continue;
+      }
+      remapped.sheetName = sheet.name;
+      const missingValues = findMissingValues(remapped, rows);
+      for (const mv of missingValues) {
+        surprises.push({
+          type: "missingValue",
+          column: mv.column,
+          message: `The question "${step.request}" looks for "${mv.value}" in "${mv.column}", but this file has no matching value there. The count for this step is 0, not guessed.`,
+        });
+      }
+      try {
+        const { resultRows, exec } = fillPlan(remapped, { sheets: [{ name: sheet.name, rows, headers }] });
+        const answer = summarizeAnswer(remapped, exec);
+        record(step.label, before, before, { note: answer });
+        logEntries.push({ action: `Answered: "${step.request}"`, column: null, cellsChanged: 0, rowsBefore: before, rowsAfter: before });
+        questionAnswers.push({ request: step.request, answer, resultRows });
+      } catch (err) {
+        surprises.push({
+          type: "questionFailed",
+          message: `The question "${step.request}" could not be answered on this file: ${err?.message || "something went wrong"}. Nothing was guessed.`,
+        });
+        record(step.label, before, before, { skipped: true, note: "could not be answered — step skipped" });
+      }
+      continue;
+    }
+
     if (step.type === "reportCards") {
       const person = matchColumn(step.personColumn, headers);
       if (!person) {
@@ -213,7 +307,7 @@ export function replayRecipe(recipe, sheet, keyStore) {
     record(step.label || "Unknown step", before, before, { skipped: true });
   }
 
-  return { rows, keyStore: store, steps, surprises, newPeople, reportCards, logEntries };
+  return { rows, keyStore: store, steps, surprises, newPeople, reportCards, logEntries, questionAnswers };
 }
 
 // Plain-language replay report for on-screen display and export.

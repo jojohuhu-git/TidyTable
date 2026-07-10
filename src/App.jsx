@@ -3,7 +3,7 @@ import ApiKeyPanel from "./components/ApiKeyPanel.jsx";
 import UploadPanel from "./components/UploadPanel.jsx";
 import CheckupPanel from "./components/CheckupPanel.jsx";
 import PromptPanel from "./components/PromptPanel.jsx";
-import ResultsPanel from "./components/ResultsPanel.jsx";
+import ResultsListPanel from "./components/ResultsListPanel.jsx";
 import RecipePanel from "./components/RecipePanel.jsx";
 import ReplayPanel from "./components/ReplayPanel.jsx";
 import {
@@ -14,11 +14,13 @@ import {
 } from "./logic/claude.js";
 import { runTransform } from "./logic/runTransform.js";
 import { deriveSheet, downloadText, downloadWorkbookAsXlsx } from "./logic/workbook.js";
+import { foldKey } from "./logic/checkup/normalizers.js";
 import { buildFixPlan } from "./logic/checkup/buildFixPlan.js";
 import { makeLogEvent, formatCleaningLog } from "./logic/checkup/cleaningLog.js";
-import { newRecipe, addStep, checkupStep } from "./logic/recipes/recipe.js";
+import { newRecipe, addStep, checkupStep, questionStep, defaultRoutineName } from "./logic/recipes/recipe.js";
 import { loadKeyStore } from "./logic/recipes/keyStore.js";
 import { runOffline } from "./logic/offline/runOffline.js";
+import { summarizeAnswer } from "./logic/offline/fillPlan.js";
 import { buildExampleWorkbook } from "./logic/exampleWorkbook.js";
 import { saveSession, loadSession } from "./logic/sessionPersistence.js";
 import ClarifyBox from "./components/ClarifyBox.jsx";
@@ -32,7 +34,10 @@ import DefinitionsPanel from "./components/DefinitionsPanel.jsx";
 import { privacyBadgeText } from "./logic/privacyBadge.js";
 import { emptyDefinitionsStore, addDefinitionEntry } from "./logic/offline/definitionsStore.js";
 
-const MAX_RUN_HISTORY = 8;
+// W3: how many result cards "Your results so far" keeps per session, oldest
+// dropped first — the same bounded-history spirit the old run-history chips
+// used, now applied to the full accumulating list.
+const MAX_RESULTS = 20;
 
 // W1: "DC antibiotics.xlsx" -> "DC antibiotics (cleaned).xlsx". Drops any
 // original extension (csv/xls/xlsx/tsv) and always writes a real .xlsx, since
@@ -56,23 +61,37 @@ export default function App() {
   const [error, setError] = useState("");
   const [plan, setPlan] = useState(null);
   const [resultRows, setResultRows] = useState(null);
-  const [resultLabel, setResultLabel] = useState(""); // B3: "Result of: ..."
-  const [runHistory, setRunHistory] = useState([]); // B3: this session's past runs
-  const [activeHistoryId, setActiveHistoryId] = useState(null); // B3: which run history chip is showing
   const [undoSnapshot, setUndoSnapshot] = useState(null); // B4: state just before the last apply
   // B5: the workbook itself is not restored (it may be large or sensitive), but
-  // the small, JSON-safe log/recipe trail survives a refresh.
+  // the small, JSON-safe log/recipe/results trail survives a refresh.
   const savedSession = useMemo(() => loadSession(), []);
   const [sessionLog, setSessionLog] = useState(() => savedSession?.sessionLog || []);
   const [checkupVersion, setCheckupVersion] = useState(0);
   const [recipe, setRecipe] = useState(() => savedSession?.recipe || newRecipe());
+  // W3 (Step 4 — "Your results so far"): every checkup-fix apply and every
+  // answered question accumulates here, newest first, instead of the old
+  // single "most recent result" view. Each entry: { id, kind, label, answer,
+  // timestamp, plan, resultRows, savedToRoutine }. `plan`/`resultRows` are not
+  // persisted (they can be as large as the workbook) — after a refresh a card
+  // still shows its label/answer, but expanding it explains detail isn't
+  // available rather than showing stale or missing data.
+  const [results, setResults] = useState(() => savedSession?.results || []);
+  const [expandedResultId, setExpandedResultId] = useState(null);
   const [keyStore, setKeyStore] = useState(() => loadKeyStore());
   const [notice, setNotice] = useState(""); // plain, non-error message (e.g. "add a definition")
   const [pendingGrain, setPendingGrain] = useState(null); // { grain, request } awaiting a combine-rows answer
   // B7: in-app definitions, merged on top of a real Definitions sheet if the
   // workbook has one; resets with the workbook, like excluded columns.
   const [definitionsStore, setDefinitionsStore] = useState(() => emptyDefinitionsStore());
-  const [pendingDefinitions, setPendingDefinitions] = useState(null); // { missingTerms, message, request }
+  const [pendingDefinitions, setPendingDefinitions] = useState(null); // { missingTerms, message, request, nearest }
+  // W2d: "Did you mean…?" middle-path confirmation when the offline matcher
+  // had to stretch (an abbreviation, a partial value match, a fuzzy column
+  // scope, or a tie between candidates) to reach a value.
+  const [pendingConfirm, setPendingConfirm] = useState(null); // { phrase, candidates, via, request }
+  // W2d: phrase (folded) -> the confirmed { column, value } candidate, so the
+  // same stretch never asks twice in this session. Session-only, like the
+  // rest of the in-memory state — cleared on a fresh upload.
+  const [aliasMap, setAliasMap] = useState(() => new Map());
   // B8: the privacy badge must stay true — track every actual send to Claude
   // this session (mode at send time), instead of a permanent claim that never
   // updates once a full-mode request has gone out.
@@ -88,11 +107,13 @@ export default function App() {
     return buildDataContext(workbook, { excluded, privacyMode });
   }, [workbook, excluded, privacyMode]);
 
-  // B5: persist the log/recipe trail (small JSON) so an accidental refresh
-  // doesn't erase the record of what happened this session.
+  // B5/W3: persist the log/recipe/results trail (small JSON — results are
+  // stripped of plan/resultRows first, see recordResult) so an accidental
+  // refresh doesn't erase the record of what happened this session.
   useEffect(() => {
-    saveSession({ sessionLog, recipe });
-  }, [sessionLog, recipe]);
+    const persistableResults = results.map(({ plan: _plan, resultRows: _resultRows, ...rest }) => rest);
+    saveSession({ sessionLog, recipe, results: persistableResults });
+  }, [sessionLog, recipe, results]);
 
   // B5: warn before an accidental refresh/close loses the loaded workbook.
   useEffect(() => {
@@ -102,42 +123,71 @@ export default function App() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [workbook]);
 
-  // B3: a fresh result should be easy to find on a long page, and labeled with
-  // what produced it so an earlier answer isn't mistaken for the new one.
-  function recordResult(label, newPlan, newResultRows) {
+  // B3/W3: a fresh result should be easy to find on a long page. Every result
+  // — a checkup-fix apply or an answered question, offline or AI — becomes a
+  // new card at the top of "Your results so far" (Step 4), which doubles as
+  // this session's undo-able history (the old chip-based run history is
+  // folded into this one list). `kind` is "checkup" or "question"; a question
+  // answered by the offline engine is also recorded into the routine
+  // (`savedToRoutine: true`) by the caller.
+  function recordResult({ label, answer, plan: newPlan, resultRows: newResultRows, kind, savedToRoutine }) {
     const id = `${Date.now()}-${Math.random()}`;
     setPlan(newPlan);
     setResultRows(newResultRows);
-    setResultLabel(label);
-    setActiveHistoryId(id);
-    setRunHistory((h) => [...h, { id, label, plan: newPlan, resultRows: newResultRows }].slice(-MAX_RUN_HISTORY));
+    setResults((r) => [
+      { id, kind, label, answer, timestamp: Date.now(), plan: newPlan, resultRows: newResultRows, savedToRoutine: Boolean(savedToRoutine) },
+      ...r,
+    ].slice(0, MAX_RESULTS));
+    setExpandedResultId(id);
     requestAnimationFrame(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
 
-  function selectHistoryEntry(entry) {
-    setPlan(entry.plan);
-    setResultRows(entry.resultRows);
-    setResultLabel(entry.label);
-    setActiveHistoryId(entry.id);
-    resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  // W3: per-card "Remove" in "Your results so far" — takes the card out of
+  // the visible list only. It does not undo a checkup fix already applied to
+  // the workbook and does not remove a recorded routine step (removing a
+  // routine step is done in the routine panel itself, step 5) — the two
+  // lists can diverge on purpose, since a result card is a record of what
+  // happened, not a live control over the routine.
+  function removeResult(id) {
+    setResults((r) => r.filter((entry) => entry.id !== id));
+    setExpandedResultId((cur) => (cur === id ? null : cur));
   }
 
   // Every request tries the offline engine first (build prompt §3.3). A confident
   // answer needs no key; an undefined clinical term blocks plainly (B7: with an
   // in-app way to define it, not just the Definitions-sheet round-trip); a
-  // per-patient question over repeating rows asks before answering; anything
-  // out of range declines and, if a key exists, is offered to Claude.
+  // per-patient question over repeating rows asks before answering; a
+  // stretched value match (W2d) asks "Did you mean…?" before answering;
+  // anything out of range declines and, if a key exists, is offered to Claude.
   // `storeOverride` lets a just-added definition be used immediately, without
-  // waiting a render for `definitionsStore` state to update.
-  async function runOfflineFlow(request, options, storeOverride) {
-    const res = runOffline(request, workbook, { ...options, definitionsStore: storeOverride || definitionsStore });
+  // waiting a render for `definitionsStore` state to update. `aliasOverride`
+  // does the same for a just-confirmed "Did you mean…?" answer.
+  async function runOfflineFlow(request, options, storeOverride, aliasOverride) {
+    const res = runOffline(request, workbook, {
+      ...options,
+      definitionsStore: storeOverride || definitionsStore,
+      aliasMap: aliasOverride || aliasMap,
+    });
     if (res.kind === "answer") {
-      recordResult(`Result of: your question "${request}"`, res.plan, res.resultRows);
+      // W3: an offline answer is deterministic, so it is safe to replay later
+      // without the AI — record it into the routine as a "question" step
+      // (original wording + the resolved match), the same way a checkup fix
+      // already is.
+      const answer = summarizeAnswer(res.match, res.exec);
+      recordResult({
+        label: `Result of: your question "${request}"`,
+        answer,
+        plan: res.plan,
+        resultRows: res.resultRows,
+        kind: "question",
+        savedToRoutine: true,
+      });
+      setRecipe((r) => addStep(r, questionStep(request, res.match, answer)));
       return;
     }
     if (res.kind === "block") {
       if (res.missingTerms) {
-        setPendingDefinitions({ missingTerms: res.missingTerms, message: res.message, request });
+        setPendingDefinitions({ missingTerms: res.missingTerms, message: res.message, request, nearest: res.nearest || [] });
       } else {
         setNotice(res.message);
       }
@@ -147,12 +197,32 @@ export default function App() {
       setPendingGrain({ grain: res.grain, request });
       return;
     }
+    if (res.kind === "confirm-value") {
+      setPendingConfirm({ phrase: res.phrase, candidates: res.candidates, via: res.via, request });
+      return;
+    }
     // res.kind === "decline"
     if (!apiKey) {
       setNotice(res.message);
       return;
     }
     await runViaClaude(request, res.claudeHint);
+  }
+
+  // W2d: the user picked one of the "Did you mean…?" candidates (or typed
+  // something else and picked "Something else", which just cancels). Remember
+  // the mapping for the rest of the session so the same stretch never asks
+  // twice, then re-run the same request — it now resolves immediately via the
+  // alias, with no further stretch to confirm.
+  function answerConfirm(candidate) {
+    const phrase = pendingConfirm?.phrase;
+    const request = pendingConfirm?.request;
+    setPendingConfirm(null);
+    if (!phrase || !request) return;
+    const next = new Map(aliasMap);
+    next.set(foldKey(phrase), candidate);
+    setAliasMap(next);
+    runOfflineFlow(request, {}, null, next);
   }
 
   // B7: record the typed definition and immediately re-run the question that
@@ -198,7 +268,18 @@ export default function App() {
       setStatus("Running the extraction on your full data (inside your browser)…");
       const sheetsByName = Object.fromEntries(workbook.sheets.map((s) => [s.name, s.rows]));
       const rows = await runTransform(newPlan.transform_code, sheetsByName);
-      recordResult(`Result of: your question "${request}"`, newPlan, rows);
+      // W3: an AI answer is not deterministic the way the offline engine is —
+      // it is still shown as a results card, but it is NOT recorded into the
+      // routine, since replay never calls the AI and would otherwise have to
+      // guess. The card says so plainly (see ResultsListPanel).
+      recordResult({
+        label: `Result of: your question "${request}"`,
+        answer: `${rows.length} row${rows.length === 1 ? "" : "s"}`,
+        plan: newPlan,
+        resultRows: rows,
+        kind: "question",
+        savedToRoutine: false,
+      });
       setStatus("");
       setRetryInfo(null);
     } catch (err) {
@@ -228,6 +309,7 @@ export default function App() {
     setNotice("");
     setPendingGrain(null);
     setPendingDefinitions(null);
+    setPendingConfirm(null);
     setRetryInfo(null);
     await runOfflineFlow(prompt, {});
   }
@@ -246,19 +328,21 @@ export default function App() {
     setExcluded(new Set());
     setPlan(null);
     setResultRows(null);
-    setResultLabel("");
-    setRunHistory([]);
-    setActiveHistoryId(null);
+    setResults([]); // W3: a fresh file starts a fresh "results so far" list
+    setExpandedResultId(null);
     setUndoSnapshot(null);
     setError("");
     setNotice("");
     setPendingGrain(null);
     setPendingDefinitions(null);
+    setPendingConfirm(null);
+    setAliasMap(new Map()); // W2d: a session-level alias map, fresh per workbook
     setDefinitionsStore(emptyDefinitionsStore());
     setAiSends([]); // B8: the badge tracks this workbook's sends, not a prior file's
     setRetryInfo(null);
     setSessionLog([]);
-    setRecipe(newRecipe());
+    // W3: pre-fill the routine name from the file, e.g. "DC antibiotics — monthly".
+    setRecipe(newRecipe(defaultRoutineName(wb.fileName)));
     setCheckupVersion((v) => v + 1);
   }
 
@@ -285,9 +369,8 @@ export default function App() {
     setUndoSnapshot(null);
     setPlan(null);
     setResultRows(null);
-    setResultLabel("");
-    setActiveHistoryId(null);
-    setRunHistory((h) => h.slice(0, -1)); // the undone apply's result no longer applies
+    setResults((r) => r.slice(1)); // newest-first: the undone apply's card no longer applies
+    setExpandedResultId(null);
     setCheckupVersion((v) => v + 1);
   }
 
@@ -313,7 +396,14 @@ export default function App() {
       // on next month's file (build prompt §7).
       setRecipe((r) => fixes.reduce((acc, fix) => addStep(acc, checkupStep(fix)), r));
       setCheckupVersion((v) => v + 1);
-      recordResult(`Result of: ${fixes.length} checkup fix${fixes.length === 1 ? "" : "es"}`, fixPlan, rows);
+      recordResult({
+        label: `Result of: ${fixes.length} checkup fix${fixes.length === 1 ? "" : "es"}`,
+        answer: `${rows.length} row${rows.length === 1 ? "" : "s"} cleaned`,
+        plan: fixPlan,
+        resultRows: rows,
+        kind: "checkup",
+        savedToRoutine: true,
+      });
       setStatus("");
     } catch (err) {
       setUndoSnapshot(null);
@@ -472,13 +562,36 @@ export default function App() {
                 onCancel={() => setPendingGrain(null)}
               />
             )}
+            {pendingConfirm && (
+              <ClarifyBox
+                question={
+                  pendingConfirm.candidates.length === 1
+                    ? `Did you mean "${pendingConfirm.candidates[0].value}" in "${pendingConfirm.candidates[0].column}"?`
+                    : `"${pendingConfirm.phrase}" could mean a few things — which one?`
+                }
+                options={pendingConfirm.candidates.map((c, i) => ({
+                  value: String(i),
+                  label: String(c.value),
+                  detail: `in "${c.column}"`,
+                }))}
+                onAnswer={(i) => answerConfirm(pendingConfirm.candidates[Number(i)])}
+                onCancel={() => setPendingConfirm(null)}
+                cancelLabel="Something else"
+              />
+            )}
             {pendingDefinitions && (
               <DefinitionsEditor
                 missingTerms={pendingDefinitions.missingTerms}
                 message={pendingDefinitions.message}
+                nearest={pendingDefinitions.nearest}
                 columns={workbook.sheets[0].headers.map((h) => h.name)}
                 onAdd={addDefinitionAndRerun}
                 onCancel={() => setPendingDefinitions(null)}
+                onSendToClaude={apiKey ? () => {
+                  const request = pendingDefinitions.request;
+                  setPendingDefinitions(null);
+                  if (request) runViaClaude(request, "A local pre-check found an undefined clinical term and the user chose to ask the AI instead of defining it.");
+                } : null}
               />
             )}
             {notice && <div className="notice-box" role="status" aria-live="polite">{notice}</div>}
@@ -499,36 +612,19 @@ export default function App() {
 
         {workbook && (
           <section className="card" ref={resultsRef}>
-            <h2><span className="step-label">Step 4</span> — Your results</h2>
+            <h2><span className="step-label">Step 4</span> — Your results so far</h2>
             <p className="section-intro">
-              When you apply checkup fixes or run a request, your cleaned data appears here,
-              along with two ways to check it yourself: an Excel recipe and an RStudio script.
+              Every fix you apply and every question you ask lands here as a card, newest first.
+              Click a card for the full result: a table, an Excel recipe, and an RStudio script.
+              Questions answered on this computer (no AI needed) are saved into your routine
+              automatically — see step 5 below.
             </p>
-            {runHistory.length > 1 && (
-              <div className="run-history">
-                <span className="dim">This session: </span>
-                {runHistory.map((entry) => (
-                  <button
-                    key={entry.id}
-                    className={`history-chip ${entry.id === activeHistoryId ? "history-chip-active" : ""}`}
-                    onClick={() => selectHistoryEntry(entry)}
-                  >
-                    {entry.label.replace(/^Result of: /, "")}
-                  </button>
-                ))}
-              </div>
-            )}
-            {plan && resultRows ? (
-              <>
-                {resultLabel && <p className="result-label">{resultLabel}</p>}
-                <ResultsPanel plan={plan} rows={resultRows} />
-              </>
-            ) : (
-              <p className="empty-state">
-                Nothing to show yet. Apply a fix in step 2, or describe what you want in step 3
-                and run it — the result and the ways to check it will appear here.
-              </p>
-            )}
+            <ResultsListPanel
+              results={results}
+              expandedId={expandedResultId}
+              onToggle={(id) => setExpandedResultId((cur) => (cur === id ? null : id))}
+              onRemove={removeResult}
+            />
           </section>
         )}
 
@@ -538,22 +634,23 @@ export default function App() {
             yet, so it's offered separately below without step numbering. */}
         {workbook && (
           <details className="step-group">
-            <summary>Monthly routine — save this cleanup as a recipe, replay it next month</summary>
+            <summary>Monthly routine — save this cleanup as a routine, replay it next month</summary>
             <section className="card">
-              <h2><span className="step-label">Step 5</span> — Save a monthly recipe</h2>
+              <h2><span className="step-label">Step 5</span> — Save this routine</h2>
               <p className="section-intro">
-                If this is a file you clean every month, save the steps as a recipe and replay them
-                next month in step 6. The checkup fixes you applied are recorded below. You can also
-                add a step that swaps names for stable codes and a final step that makes report cards.
+                If this is a file you clean every month, save these steps as a routine and run it
+                on next month's file in step 6. The checkup fixes and questions you answered above
+                are recorded automatically. Optional extras — swapping names for stable codes and
+                making report cards — are folded below.
               </p>
               <RecipePanel recipe={recipe} sheet={workbook.sheets[0]} onChange={setRecipe} />
             </section>
             <section className="card">
-              <h2><span className="step-label">Step 6</span> — Replay on next month's file</h2>
+              <h2><span className="step-label">Step 6</span> — Run a saved routine on next month's file</h2>
               <p className="section-intro">
-                Pick a saved recipe and next month's file. The recorded steps run again, and you get a
+                Pick a saved routine and next month's file. The recorded steps run again, and you get a
                 plain report of what happened — including anything new the rules did not cover, said
-                plainly rather than guessed. Report cards, if the recipe makes them, show codes only.
+                plainly rather than guessed. Report cards, if the routine makes them, show codes only.
               </p>
               <ReplayPanel keyStore={keyStore} onKeyStore={setKeyStore} />
             </section>
@@ -562,9 +659,9 @@ export default function App() {
 
         {!workbook && (
           <section className="card">
-            <h2>Already have a saved recipe?</h2>
+            <h2>Already have a saved routine?</h2>
             <p className="section-intro">
-              Pick a saved recipe and a file to replay it on. The recorded steps run again, and you
+              Pick a saved routine and a file to run it on. The recorded steps run again, and you
               get a plain report of what happened — including anything new the rules did not cover.
             </p>
             <ReplayPanel keyStore={keyStore} onKeyStore={setKeyStore} />

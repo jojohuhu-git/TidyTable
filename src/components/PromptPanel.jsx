@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { estimateTokens, estimateCostUSD } from "../logic/claude.js";
-import { buildOfflineExample } from "../logic/offline/exampleQuestion.js";
+import { buildExamplePrompts, OFFLINE_INTENTS } from "../logic/offline/examplePrompts.js";
 
 // A4: these are all things the offline engine cannot compute (a
 // missing-value + threshold filter, a sum-per-group, a duplicate scan, a
@@ -28,9 +28,12 @@ export default function PromptPanel({
   const tokens = estimateTokens(dataContext + prompt);
   const cost = estimateCostUSD(model, tokens);
   const tooBig = dataContext.length > 2_500_000;
-  // Built from the real uploaded data and verified through the same matcher
-  // the actual run uses, so this one is guaranteed to answer with no key.
-  const offlineExample = useMemo(() => buildOfflineExample(workbook), [workbook]);
+  // W2f: 4-6 examples built from the real uploaded data's own headers/values,
+  // one per offline-supported question pattern, each verified through the
+  // same matchRequest() the real run uses — so every chip is guaranteed to
+  // answer (or at most ask a one-click "Did you mean…?") with no key needed.
+  // Clicking a chip only fills the box; it never runs on its own.
+  const offlineExamples = useMemo(() => buildExamplePrompts(workbook), [workbook]);
 
   return (
     <div>
@@ -42,18 +45,33 @@ export default function PromptPanel({
         onChange={(e) => setPrompt(e.target.value)}
         disabled={busy}
       />
-      {offlineExample && (
+      {offlineExamples.length > 0 && (
         <div className="example-row">
           <span className="dim example-row-label">Answered on this computer, no key needed:</span>
-          <button
-            type="button"
-            className="example-chip example-chip-offline"
-            onClick={() => setPrompt(offlineExample)}
-            disabled={busy}
-          >
-            {offlineExample.length > 60 ? offlineExample.slice(0, 57) + "…" : offlineExample}
-          </button>
+          {offlineExamples.map((ex) => (
+            <button
+              key={ex.text}
+              type="button"
+              className="example-chip example-chip-offline"
+              onClick={() => setPrompt(ex.text)}
+              disabled={busy}
+            >
+              {ex.text.length > 60 ? ex.text.slice(0, 57) + "…" : ex.text}
+            </button>
+          ))}
         </div>
+      )}
+      {workbook && (
+        <details className="offline-cheatsheet">
+          <summary>What kinds of questions work without AI</summary>
+          <ul>
+            {OFFLINE_INTENTS.map((i) => (
+              <li key={i.intent}>
+                <strong>{i.intent}</strong> — {i.plain}. <span className="dim">e.g. "{i.example}"</span>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
       <div className="example-row">
         <span className="dim example-row-label">Need the AI:</span>
