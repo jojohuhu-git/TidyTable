@@ -33,6 +33,9 @@ import DefinitionsEditor from "./components/DefinitionsEditor.jsx";
 import DefinitionsPanel from "./components/DefinitionsPanel.jsx";
 import { privacyBadgeText } from "./logic/privacyBadge.js";
 import { emptyDefinitionsStore, addDefinitionEntry } from "./logic/offline/definitionsStore.js";
+import {
+  loadAliasStore, persistAliasStore, rememberColumnAlias, columnAliasesFor, fileSignature,
+} from "./logic/offline/aliasStore.js";
 
 // W3: how many result cards "Your results so far" keeps per session, oldest
 // dropped first — the same bounded-history spirit the old run-history chips
@@ -46,6 +49,21 @@ function fixedFileName(originalName) {
   const name = originalName || "TidyTable_workbook";
   const base = name.replace(/\.(xlsx|xls|csv|tsv)$/i, "").trim() || "TidyTable_workbook";
   return `${base} (cleaned).xlsx`;
+}
+
+// Plain-English wording for the "Did you mean…?" box, for a value chip (W2d) or
+// a Phase 3 column chip. Column chips ask which column an everyday word means.
+function confirmQuestion(pending) {
+  const cands = pending.candidates || [];
+  const first = cands[0];
+  if (first?.kind === "column") {
+    return cands.length === 1
+      ? `Do you mean the "${first.column}" column?`
+      : `Which column do you mean by "${pending.phrase}"?`;
+  }
+  return cands.length === 1
+    ? `Did you mean "${first?.value}" in "${first?.column}"?`
+    : `"${pending.phrase}" could mean a few things — which one?`;
 }
 
 export default function App() {
@@ -92,6 +110,11 @@ export default function App() {
   // same stretch never asks twice in this session. Session-only, like the
   // rest of the in-memory state — cleared on a fresh upload.
   const [aliasMap, setAliasMap] = useState(() => new Map());
+  // Phase 3: PERSISTENT learned column aliases ("treatment length" ->
+  // Duration_days), filed per file shape and stored in localStorage. Unlike the
+  // session aliasMap above, this survives reloads AND holds only column names —
+  // never a cell value (see aliasStore.js privacy boundary).
+  const [aliasStore, setAliasStore] = useState(() => loadAliasStore());
   // B8: the privacy badge must stay true — track every actual send to Claude
   // this session (mode at send time), instead of a permanent claim that never
   // updates once a full-mode request has gone out.
@@ -106,6 +129,18 @@ export default function App() {
     if (!workbook) return "";
     return buildDataContext(workbook, { excluded, privacyMode });
   }, [workbook, excluded, privacyMode]);
+
+  // Phase 3: the current file's shape (its folded column set) and the column
+  // aliases learned for that shape, so a previously-confirmed everyday word is
+  // an exact hit again this visit.
+  const signature = useMemo(
+    () => (workbook ? fileSignature(workbook.sheets[0].headers) : ""),
+    [workbook],
+  );
+  const columnAliases = useMemo(
+    () => columnAliasesFor(aliasStore, signature),
+    [aliasStore, signature],
+  );
 
   // B5/W3: persist the log/recipe/results trail (small JSON — results are
   // stripped of plan/resultRows first, see recordResult) so an accidental
@@ -162,11 +197,14 @@ export default function App() {
   // `storeOverride` lets a just-added definition be used immediately, without
   // waiting a render for `definitionsStore` state to update. `aliasOverride`
   // does the same for a just-confirmed "Did you mean…?" answer.
-  async function runOfflineFlow(request, options, storeOverride, aliasOverride) {
+  async function runOfflineFlow(request, options, storeOverride, aliasOverride, columnAliasesOverride) {
     const res = runOffline(request, workbook, {
       ...options,
       definitionsStore: storeOverride || definitionsStore,
       aliasMap: aliasOverride || aliasMap,
+      // Phase 3: learned per-file column aliases (persistent). The override lets
+      // a just-confirmed column chip apply immediately, before state re-renders.
+      columnAliases: columnAliasesOverride || columnAliases,
     });
     if (res.kind === "answer") {
       // W3: an offline answer is deterministic, so it is safe to replay later
@@ -222,7 +260,18 @@ export default function App() {
     const next = new Map(aliasMap);
     next.set(foldKey(phrase), candidate);
     setAliasMap(next);
-    runOfflineFlow(request, {}, null, next);
+    // Phase 3: a COLUMN chip (kind: "column") is a durable everyday-word ->
+    // column mapping — remember it PERSISTENTLY for this file shape so it's an
+    // exact hit next visit. Only the column name is stored, never a cell value,
+    // so a value chip stays session-only (in aliasMap above). The override
+    // carries the new alias into the immediate re-run before state re-renders.
+    let columnAliasesOverride;
+    if (candidate?.kind === "column" && candidate.column && signature) {
+      const nextStore = rememberColumnAlias(aliasStore, signature, phrase, candidate.column);
+      setAliasStore(persistAliasStore(nextStore));
+      columnAliasesOverride = columnAliasesFor(nextStore, signature);
+    }
+    runOfflineFlow(request, {}, null, next, columnAliasesOverride);
   }
 
   // B7: record the typed definition and immediately re-run the question that
@@ -564,16 +613,13 @@ export default function App() {
             )}
             {pendingConfirm && (
               <ClarifyBox
-                question={
-                  pendingConfirm.candidates.length === 1
-                    ? `Did you mean "${pendingConfirm.candidates[0].value}" in "${pendingConfirm.candidates[0].column}"?`
-                    : `"${pendingConfirm.phrase}" could mean a few things — which one?`
-                }
-                options={pendingConfirm.candidates.map((c, i) => ({
-                  value: String(i),
-                  label: String(c.value),
-                  detail: `in "${c.column}"`,
-                }))}
+                question={confirmQuestion(pendingConfirm)}
+                options={pendingConfirm.candidates.map((c, i) => (
+                  c.kind === "column"
+                    // Phase 3: a "did you mean this COLUMN?" chip.
+                    ? { value: String(i), label: `the "${c.column}" column`, detail: c.via || "" }
+                    : { value: String(i), label: String(c.value), detail: `in "${c.column}"` }
+                ))}
                 onAnswer={(i) => answerConfirm(pendingConfirm.candidates[Number(i)])}
                 onCancel={() => setPendingConfirm(null)}
                 cancelLabel="Something else"

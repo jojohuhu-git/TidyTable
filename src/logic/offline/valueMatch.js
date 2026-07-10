@@ -8,10 +8,19 @@
 // than a silent guess. Nothing here executes a filter; it only proposes what a
 // phrase most likely means, tagged with how far the app had to stretch.
 
+import { foldWord } from "./wordforms.js";
+
 // Split any text into lowercase alphanumeric word tokens.
 export function tokens(s) {
   return String(s == null ? "" : s).toLowerCase().split(/[^a-z0-9]+/i).filter(Boolean);
 }
+
+// Phase 3: word-forms are folded ONLY for column-CONCEPT matching (concepts.js),
+// never for cell-VALUE scoring below. Folding a value scan is where the
+// never-guess promise is most at risk — e.g. "patients" would deplural to
+// "patient" and hijack a "PatientID" column — so scoreTokenMatch deliberately
+// compares raw tokens. foldWord stays imported for callers that opt in.
+void foldWord;
 
 // Score how well a set of query tokens matches a set of value tokens, or return
 // null for no match. Higher is a better/closer match:
