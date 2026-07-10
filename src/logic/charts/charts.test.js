@@ -54,6 +54,43 @@ describe("aggregate", () => {
     );
     expect(ds.points.map((p) => p.label)).toEqual(["Q1 2024", "Q2 2024", "Q3 2024"]);
   });
+
+  // Phase 2 warm-up honesty fix (2026-07-10): a group whose target column was
+  // ALL unreadable text ("N/A") used to average to 0 — indistinguishable from a
+  // real zero. It must be dropped from the plotted points and named instead.
+  it("drops a group with no readable numbers from an average chart instead of drawing 0", () => {
+    const ds = buildDataset(
+      sheet([
+        { Diagnosis: "UTI", Duration_days: 10 },
+        { Diagnosis: "UTI", Duration_days: 6 },
+        { Diagnosis: "cystitis", Duration_days: "N/A" },
+        { Diagnosis: "cystitis", Duration_days: "N/A" },
+      ]),
+      "Diagnosis", "Duration_days", { aggMode: "average" },
+    );
+    expect(ds.points).toEqual([{ label: "UTI", value: 8 }]);
+    expect(ds.noDataGroups).toEqual(["cystitis"]);
+  });
+
+  it("does not flag noDataGroups when every group has at least one readable number", () => {
+    const ds = buildDataset(
+      sheet([{ Diagnosis: "UTI", Duration_days: 10 }, { Diagnosis: "cystitis", Duration_days: 3 }]),
+      "Diagnosis", "Duration_days", { aggMode: "average" },
+    );
+    expect(ds.noDataGroups).toBeUndefined();
+  });
+
+  it("does not flag noDataGroups for a sum chart — a sum of nothing is honestly 0, unlike an average", () => {
+    const ds = buildDataset(
+      sheet([
+        { Diagnosis: "UTI", Duration_days: 10 },
+        { Diagnosis: "cystitis", Duration_days: "N/A" },
+      ]),
+      "Diagnosis", "Duration_days", { aggMode: "sum" },
+    );
+    expect(ds.noDataGroups).toBeUndefined();
+    expect(ds.points.find((p) => p.label === "cystitis")).toEqual({ label: "cystitis", value: 0 });
+  });
 });
 
 describe("advisor is opinionated", () => {

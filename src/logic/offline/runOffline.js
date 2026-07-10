@@ -80,12 +80,27 @@ const UNSUPPORTED_LEAD = {
   "unsupported-average": "This asks for an average, but I couldn't tell which column of numbers to average. Name the column directly (e.g. \"average Duration_days\").",
   "unsupported-sum": "This asks for a total/sum, but I couldn't tell which column of numbers to add up. Name the column directly (e.g. \"total Duration_days\").",
   "unsupported-groupby": "This asks for a per-group breakdown, but I couldn't tell which column to group by. Name it directly (e.g. \"per Diagnosis\").",
+  "unsupported-median": "This asks for a median, but I couldn't tell which column of numbers. Name the column directly (e.g. \"median Duration_days\").",
+  "unsupported-quartiles": "This asks for quartiles, but I couldn't tell which column of numbers. Name the column directly (e.g. \"quartiles of Duration_days\").",
+  "unsupported-stdev": "This asks for a standard deviation, but I couldn't tell which column of numbers. Name the column directly (e.g. \"standard deviation of Duration_days\").",
+  "unsupported-min": "This asks for a minimum, but I couldn't tell which column of numbers. Name the column directly (e.g. \"minimum Duration_days\").",
+  "unsupported-max": "This asks for a maximum, but I couldn't tell which column of numbers. Name the column directly (e.g. \"maximum Duration_days\").",
+  "unsupported-range": "This asks for a range, but I couldn't tell which column of numbers. Name the column directly (e.g. \"range of Duration_days\").",
+  "unsupported-describe": "This asks to describe/summarize a column, but I couldn't tell which one. Name the column directly (e.g. \"describe Duration_days\").",
+};
+
+// Phase 2: the verb used in the non-numeric-target decline for each stat
+// intent — "add up" for sum, "find the median of" for median, etc.
+const NON_NUMERIC_VERB = {
+  sum: "add up", median: "find the median of", quartiles: "find the quartiles of",
+  stdev: "find the standard deviation of", min: "find the minimum of",
+  max: "find the maximum of", range: "find the range of", describe: "describe",
 };
 
 function buildDeclineMessage(match) {
   // Honesty bug 1 (2026-07-10): averaging a text column refuses plainly.
   if (match.reason === "non-numeric-target") {
-    const verb = match.aggIntent === "sum" ? "add up" : "average";
+    const verb = NON_NUMERIC_VERB[match.aggIntent] || "average";
     return (
       `"${match.targetColumn}" contains words, not numbers — I can't ${verb} it. ` +
       `Name a numeric column instead (e.g. "average Duration_days"), or rephrase as a count ` +

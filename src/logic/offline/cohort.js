@@ -176,12 +176,66 @@ export function executeCohort(match, workbook) {
   return { unit: "rows", total, levels, mode: "row", matchedRows: current };
 }
 
-// A3 Level 2: compute one number per group (or one overall) for an average,
-// sum, or distinct-count aggregation. Any filter stages run first — same
-// predicate() machinery as a plain count — then the aggregate is taken over
-// the resolved target column, per group when a group-by column was resolved.
-// A row that has no readable number in the target column is not counted as 0;
-// it is tallied separately so the summary can say plainly it was skipped.
+function round2(x) {
+  return Math.round(x * 100) / 100;
+}
+
+// Phase 2: the full descriptive-statistics bundle for one array of readable
+// numbers — mean, sample standard deviation, median, quartiles/IQR, min, max,
+// range. Quartiles use the same "linear interpolation between closest ranks"
+// method Excel's QUARTILE.INC uses (equivalent to R's/numpy's default "type 7"
+// quantile), so the app's number and the Excel step's number always agree —
+// median is just quantile(0.5) under the same method, which also matches
+// Excel's MEDIAN() for both even and odd counts. Standard deviation is the
+// SAMPLE statistic (n-1 denominator, matching Excel's STDEV.S), chosen because
+// almost every row in a real clinical file is a sample of a larger population,
+// never the population itself.
+// n === 0: every field comes back null — there is nothing to report, not a
+// silent 0 (the Phase 1/aggregate.js "N/A group defaults to 0" bug this phase
+// deliberately does not repeat). n === 1: mean/median/min/max/range are the
+// single value; sd is null (a spread needs at least two points).
+export function computeNumericStats(nums) {
+  const n = nums.length;
+  if (n === 0) {
+    return { n: 0, mean: null, sd: null, median: null, q1: null, q3: null, iqr: null, min: null, max: null, range: null };
+  }
+  const sorted = [...nums].sort((a, b) => a - b);
+  const sum = sorted.reduce((a, b) => a + b, 0);
+  const mean = sum / n;
+  let sd = null;
+  if (n >= 2) {
+    const sq = sorted.reduce((a, x) => a + (x - mean) ** 2, 0);
+    sd = Math.sqrt(sq / (n - 1));
+  }
+  const quantile = (p) => {
+    const idx = (n - 1) * p;
+    const lo = Math.floor(idx);
+    const hi = Math.ceil(idx);
+    if (lo === hi) return sorted[lo];
+    const frac = idx - lo;
+    return sorted[lo] + frac * (sorted[hi] - sorted[lo]);
+  };
+  const median = quantile(0.5);
+  const q1 = quantile(0.25);
+  const q3 = quantile(0.75);
+  const min = sorted[0];
+  const max = sorted[n - 1];
+  return {
+    n, mean: round2(mean), sd: sd == null ? null : round2(sd),
+    median: round2(median), q1: round2(q1), q3: round2(q3), iqr: round2(q3 - q1),
+    min, max, range: round2(max - min),
+  };
+}
+
+// A3 Level 2 / Phase 2: compute one number (or, for "describe", the full
+// stats bundle) per group (or one overall) for a sum, average, distinct-count,
+// median, quartiles, standard-deviation, min, max, range, or describe
+// aggregation. Any filter stages run first — same predicate() machinery as a
+// plain count — then the aggregate is taken over the resolved target column,
+// per group when a group-by column was resolved. A row that has no readable
+// number in the target column is not counted as 0; it is tallied separately
+// (`skipped`) so the summary can say plainly it was skipped — never silently
+// averaged/summed as if it were zero.
 export function aggregateOne(rowsIn, targetColumn, aggIntent) {
   if (aggIntent === "distinct") {
     const seen = new Set();
@@ -192,17 +246,28 @@ export function aggregateOne(rowsIn, targetColumn, aggIntent) {
     }
     return { value: seen.size, skipped: 0, n: rowsIn.length };
   }
-  let sum = 0;
-  let n = 0;
+  const nums = [];
   let skipped = 0;
   for (const r of rowsIn) {
     const num = toNumber(r[targetColumn]);
     if (num == null) { skipped++; continue; }
-    sum += num;
-    n++;
+    nums.push(num);
   }
-  const value = aggIntent === "sum" ? sum : (n ? Math.round((sum / n) * 100) / 100 : null);
-  return { value, skipped, n };
+  const stats = computeNumericStats(nums);
+  // "sum" stays the exact running total (unrounded) — the original A3 Level 2
+  // behavior, unchanged, so existing sum answers/tests keep their same number.
+  const sum = nums.reduce((a, b) => a + b, 0);
+  const VALUE_BY_INTENT = {
+    sum, average: stats.mean, median: stats.median, stdev: stats.sd,
+    min: stats.min, max: stats.max, range: stats.range,
+  };
+  const value = aggIntent in VALUE_BY_INTENT ? VALUE_BY_INTENT[aggIntent] : null;
+  return {
+    value, skipped, n: stats.n,
+    mean: stats.mean, sd: stats.sd, median: stats.median,
+    q1: stats.q1, q3: stats.q3, iqr: stats.iqr,
+    min: stats.min, max: stats.max, range: stats.range,
+  };
 }
 
 // match: a "confident" match with match.aggregation set (see matcher.js).

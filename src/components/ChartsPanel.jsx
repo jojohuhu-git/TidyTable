@@ -204,6 +204,11 @@ export default function ChartsPanel({ sheet }) {
               Showing a sample of {dataset.points.length.toLocaleString()} of {dataset.totalPoints.toLocaleString()} points, spread evenly through the data, so the preview stays readable and fast.
             </p>
           )}
+          {dataset.noDataGroups?.length > 0 && (
+            <p className="hint">
+              Not shown: {dataset.noDataGroups.join(", ")} — every value in {dataset.noDataGroups.length === 1 ? "that group" : "those groups"} was unreadable as a number, so there was nothing to average. Not the same as zero.
+            </p>
+          )}
 
           <h4 className="charts-steps-h">Make this chart in Excel</h4>
           <ol className="excel-steps">

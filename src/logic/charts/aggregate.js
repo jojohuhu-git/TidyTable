@@ -5,6 +5,7 @@
 // prefer a line.
 
 import { foldKey } from "../checkup/normalizers.js";
+import { toNumber } from "../offline/cohort.js";
 
 const MONTHS = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i;
 const MONTH_INDEX = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
@@ -75,7 +76,16 @@ function labelsLookLikeTime(sheet, col) {
   });
 }
 
-const num = (v) => (typeof v === "number" ? v : Number(String(v).replace(/[^0-9.\-]/g, "")));
+// Honesty fix (2026-07-10): this used to strip every non-digit character and
+// hand the leftover to Number(), which silently turned pure text with no
+// digits at all ("N/A", "pending") into "" -> 0 — a real value, not "no data".
+// Reuse the offline engine's toNumber (already null-safe for exactly this
+// case) so a genuinely unreadable cell is excluded here the same honest way
+// it is everywhere else numbers get parsed.
+const num = (v) => {
+  const n = toNumber(v);
+  return n == null ? NaN : n;
+};
 
 // W4: apply an optional single-column equality filter before grouping — the
 // scoped-down "escherichia coli by ward" reading of a free-text chart request
@@ -130,18 +140,29 @@ export function buildDataset(sheet, labelCol, valueCol, options = {}) {
       g.value += 1;
     }
   }
+  // Honesty fix (2026-07-10, Phase 2 warm-up): a group whose values were ALL
+  // unreadable (e.g. every cell "N/A") used to average to 0 — indistinguishable
+  // from a real zero. Drop that group from the plotted points instead (never
+  // silently draw 0) and name it in `noDataGroups` so the panel can say plainly
+  // it has no readable numbers, not hide the gap.
+  const noDataGroups = [];
   // `n` (how many readable numbers went into each group) is internal to the
   // average calculation below — stripped from every point before it leaves
   // this function, so a plain count/sum dataset's points stay exactly
   // { label, value } as every existing caller (and test) expects.
-  let points = [...groups.values()].map(({ label, value, n }) => (
-    aggMode === "average"
-      // W4: an average is not a running total — divide by how many readable
-      // numbers actually went into it, not by every row in the group (a
-      // blank/non-numeric cell is skipped, not counted as a zero).
-      ? { label, value: n ? Math.round((value / n) * 100) / 100 : 0 }
-      : { label, value }
-  ));
+  let points = [...groups.values()]
+    .filter(({ label, n }) => {
+      if (aggMode === "average" && n === 0) { noDataGroups.push(label); return false; }
+      return true;
+    })
+    .map(({ label, value, n }) => (
+      aggMode === "average"
+        // W4: an average is not a running total — divide by how many readable
+        // numbers actually went into it, not by every row in the group (a
+        // blank/non-numeric cell is skipped, not counted as a zero).
+        ? { label, value: n ? Math.round((value / n) * 100) / 100 : 0 }
+        : { label, value }
+    ));
   const labelIsTime = labelsLookLikeTime(sheet, labelCol);
   if (labelIsTime) {
     const keys = points.map((p) => timeSortKey(p.label));
@@ -167,6 +188,7 @@ export function buildDataset(sheet, labelCol, valueCol, options = {}) {
     valueName,
     labelName: labelCol,
     filter,
+    ...(noDataGroups.length ? { noDataGroups } : {}),
   };
 }
 

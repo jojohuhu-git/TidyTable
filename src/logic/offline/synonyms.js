@@ -6,13 +6,33 @@
 // --- intents ---------------------------------------------------------------
 // Each intent lists the phrases that mean it. Longer phrases are checked first
 // so "how many" wins over a stray "many".
+// Phase 2 (2026-07-10): descriptive-statistics intents, alongside the original
+// count/sum/average/distinct/proportion family. Deliberately NO bare 3-letter
+// "min"/"max" phrases — a request like "patients under 5 min" uses "min" as a
+// time unit, not a request for the minimum, and detectIntent's longest-phrase
+// rule can't tell those apart on a short token; the false-positive risk (a
+// threshold question wrongly read as an aggregation request) outweighs the
+// convenience, per the "false positives worse than misses" rule from Phase 3.
 export const INTENTS = {
   count: ["how many", "number of", "count of", "count", "tally", "total number"],
   sum: ["total", "sum of", "sum", "add up", "added up", "combined"],
   average: ["average", "mean", "typical", "avg"],
   distinct: ["how many different", "how many unique", "distinct", "unique", "different"],
   proportion: ["what share", "what proportion", "what percent", "percentage of", "percent of", "proportion of", "share of", "what fraction", "fraction of"],
+  median: ["median"],
+  quartiles: ["interquartile range", "quartiles", "quartile", "iqr"],
+  stdev: ["standard deviation", "std dev", "stdev", "std. dev."],
+  min: ["minimum", "lowest value", "smallest value", "lowest", "smallest"],
+  max: ["maximum", "highest value", "largest value", "highest", "largest", "biggest"],
+  range: ["range of", "range"],
+  describe: ["descriptive statistics", "descriptive stats", "describe", "summarize", "summarise", "summary of"],
 };
+
+// Phase 2: the descriptive-statistics intents that need a resolved NUMERIC
+// target column, same as average/sum always have. "distinct" and "describe"
+// are handled separately (distinct works on any column type; describe gets
+// its own numeric-only gate with its own decline wording).
+export const NUMERIC_STAT_INTENTS = new Set(["sum", "average", "median", "quartiles", "stdev", "min", "max", "range"]);
 
 // --- comparators -----------------------------------------------------------
 // Order matters: multi-word phrases must be tried before single words so
