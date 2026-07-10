@@ -28,6 +28,7 @@ import ChartsPanel from "./components/ChartsPanel.jsx";
 import ShelfPanel from "./components/ShelfPanel.jsx";
 import ColumnProfileTable from "./components/ColumnProfileTable.jsx";
 import DefinitionsEditor from "./components/DefinitionsEditor.jsx";
+import DefinitionsPanel from "./components/DefinitionsPanel.jsx";
 import { emptyDefinitionsStore, addDefinitionEntry } from "./logic/offline/definitionsStore.js";
 
 const MAX_RUN_HISTORY = 8;
@@ -399,6 +400,7 @@ export default function App() {
               privacyMode={privacyMode}
               workbook={workbook}
             />
+            <DefinitionsPanel store={definitionsStore} onChange={setDefinitionsStore} />
             {pendingGrain && (
               <ClarifyBox
                 question={pendingGrain.grain.question}
