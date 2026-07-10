@@ -13,7 +13,7 @@ import { foldKey } from "../checkup/normalizers.js";
 import { lookupDefinition } from "./definitions.js";
 import {
   detectIntent, detectComparator, splitNestedLevels, COHORT_MARKERS, GROUP_WORDS,
-  expandClinicalSynonyms,
+  expandClinicalSynonyms, NUMERIC_STAT_INTENTS,
 } from "./synonyms.js";
 import { findValueCandidates, findColumnCandidates, nearestSuggestions } from "./valueMatch.js";
 import { conceptColumnCandidates, valueContentCandidates, isConceptWord } from "./concepts.js";
@@ -40,6 +40,11 @@ const words = (s) => String(s || "").toLowerCase().split(/[^a-z0-9]+/i).filter(B
 // The header types (see workbook.js inferType) an average/sum can honestly run
 // on. Same set textToChart.js uses for its numeric dropdown.
 const NUMERIC_COLUMN_TYPES = new Set(["number", "mixed (text + numbers)"]);
+
+// Phase 2: every intent that resolves a single target column and computes an
+// aggregate over it — the original sum/average/distinct plus the new
+// descriptive-statistics family and the "describe" panel intent.
+const AGGREGATION_INTENTS = new Set([...NUMERIC_STAT_INTENTS, "distinct", "describe"]);
 
 // Fuzzy-match a spoken column phrase to a real header. Exact fold first, then a
 // contained-key match so "duration" finds "Duration_days".
@@ -745,17 +750,19 @@ export function matchRequest(request, workbook, defs, options = {}) {
   const preCohortText = groupBy ? (request.slice(0, groupBy.start) + " " + request.slice(groupBy.end)).trim() : request;
   const cohort = extractCohort(preCohortText);
 
-  // A3 Level 2: average/sum/distinct try to resolve a real numeric/target
-  // column before anything else. Only decline outright (as Level 1 did) when
-  // no column can be pinned down — a genuinely unresolvable aggregation
-  // request still gets the honest capability message, but "average
-  // duration_days [for patients with X] [per Y]" now actually computes.
-  if (intent && (intent.intent === "average" || intent.intent === "sum" || intent.intent === "distinct")) {
+  // A3 Level 2 / Phase 2: average/sum/distinct/median/quartiles/stdev/min/max/
+  // range/describe try to resolve a real numeric/target column before anything
+  // else. Only decline outright (as Level 1 did) when no column can be pinned
+  // down — a genuinely unresolvable aggregation request still gets the honest
+  // capability message, but "average duration_days [for patients with X] [per
+  // Y]" now actually computes.
+  if (intent && AGGREGATION_INTENTS.has(intent.intent)) {
     // Search for the target column with any cohort clause ("for patients with
     // UTI") stripped out too, so its words don't get glued onto the target
     // phrase and break the fuzzy column match.
     const targetSearchText = cohort ? (preCohortText.slice(0, cohort.start) + " " + preCohortText.slice(cohort.end)).trim() : preCohortText;
-    // average/sum need a numeric column; a distinct count works on any type.
+    // A distinct count works on any column type; every other aggregation
+    // (including describe) needs a real numeric column.
     const numericOnly = intent.intent !== "distinct";
     const targetRef = resolveAggregationTarget(targetSearchText, intent.phrase, headers, { aliasMap, index, numericOnly });
     if (!targetRef) {
@@ -940,9 +947,17 @@ export function describeLookedFor(stages, intent, grainMode, grain, groupBy) {
   return `${lead}${where}${brokenDown}.`;
 }
 
-// A3 Level 2: the trust panel line for an average/sum/distinct request.
+// A3 Level 2 / Phase 2: the trust panel line for an average/sum/distinct/
+// descriptive-statistics request.
+const AGG_VERB = {
+  sum: "Adding up", average: "Averaging", distinct: "Counting the distinct values of",
+  median: "Finding the median of", quartiles: "Finding the quartiles of",
+  stdev: "Finding the standard deviation of", min: "Finding the minimum of",
+  max: "Finding the maximum of", range: "Finding the range of",
+  describe: "Describing",
+};
 export function describeLookedForAggregation(aggIntent, targetColumn, stages, groupBy) {
-  const verb = { sum: "Adding up", average: "Averaging", distinct: "Counting the distinct values of" }[aggIntent] || "Computing";
+  const verb = AGG_VERB[aggIntent] || "Computing";
   const parts = stages.map((s) => conditionPhrase(s.condition));
   const where = parts.length ? ` where ${parts.join(", then ")}` : "";
   const brokenDown = groupBy ? `, broken down by "${groupBy.column}"` : "";

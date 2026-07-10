@@ -47,6 +47,32 @@ describe("ChartsPanel — renders without crashing on a large scatter dataset", 
   });
 });
 
+// Phase 2 warm-up honesty fix (2026-07-10): a group whose values were ALL
+// unreadable ("N/A") used to be drawn as an average of 0 — indistinguishable
+// from a real zero. The panel must now leave it off the chart and say so.
+describe("ChartsPanel — a no-readable-numbers group is named, not drawn as 0", () => {
+  it("charts an average with an all-N/A group: no 0 bar, plain note instead", () => {
+    const sheet = deriveSheet("D", [
+      { Diagnosis: "UTI", Duration_days: 10 },
+      { Diagnosis: "UTI", Duration_days: 6 },
+      { Diagnosis: "cystitis", Duration_days: "N/A" },
+      { Diagnosis: "cystitis", Duration_days: "N/A" },
+    ]);
+    const { container } = render(<ChartsPanel sheet={sheet} />);
+
+    // Free-text request (the numeric dropdown only lists pure-number columns,
+    // and this column is "mixed" because of the N/A cells).
+    fireEvent.change(container.querySelector(".chart-text-input"), { target: { value: "average duration_days by diagnosis" } });
+    fireEvent.click(screen.getByRole("button", { name: /make this chart/i }));
+
+    // Only the group with readable numbers is drawn...
+    expect(container.querySelectorAll("rect").length).toBe(1);
+    // ...and the missing one is named with a plain explanation, not hidden.
+    expect(screen.getByText(/Not shown: cystitis/i)).toBeTruthy();
+    expect(screen.getByText(/Not the same as zero/i)).toBeTruthy();
+  });
+});
+
 describe("ChartPreview — P2-15 pie/bar edge cases", () => {
   it("draws a full circle (not an invisible zero-length arc) for a single 100% slice", () => {
     const dataset = { kind: "categorical", points: [{ label: "All", value: 10 }] };

@@ -106,6 +106,10 @@ export default function App() {
   // had to stretch (an abbreviation, a partial value match, a fuzzy column
   // scope, or a tie between candidates) to reach a value.
   const [pendingConfirm, setPendingConfirm] = useState(null); // { phrase, candidates, via, request }
+  // Phase 2 "anticipate & suggest": after a stat answer, its standard
+  // companion (mean <-> median, count -> n (%)) is offered as one chip.
+  // Deterministic — fillPlan computed it alongside the answer, no AI.
+  const [companionOffer, setCompanionOffer] = useState(null); // { companion, request, revealed? }
   // W2d: phrase (folded) -> the confirmed { column, value } candidate, so the
   // same stretch never asks twice in this session. Session-only, like the
   // rest of the in-memory state — cleared on a fresh upload.
@@ -221,6 +225,9 @@ export default function App() {
         savedToRoutine: true,
       });
       setRecipe((r) => addStep(r, questionStep(request, res.match, answer)));
+      // Phase 2: offer the deterministic companion (median (IQR) for a mean,
+      // mean (SD) for a median, n (%) for a count) as a one-click chip.
+      setCompanionOffer(res.plan.companion ? { companion: res.plan.companion, request } : null);
       return;
     }
     if (res.kind === "block") {
@@ -272,6 +279,33 @@ export default function App() {
       columnAliasesOverride = columnAliasesFor(nextStore, signature);
     }
     runOfflineFlow(request, {}, null, next, columnAliasesOverride);
+  }
+
+  // Phase 2: the user clicked the companion chip. A "swap-stat" companion
+  // (mean <-> median) is a full deterministic answer of its own — it becomes a
+  // normal result card AND a replayable routine step, exactly as if the user
+  // had asked for that stat directly. An "n-percent" companion is the same
+  // numbers restated in the clinical n (%) convention — no new computation, so
+  // it just reveals the formatted line in place.
+  function applyCompanion() {
+    if (!companionOffer) return;
+    const { companion, request } = companionOffer;
+    if (companion.kind === "n-percent") {
+      setCompanionOffer({ ...companionOffer, revealed: true });
+      return;
+    }
+    setCompanionOffer(null);
+    const statName = companion.intent === "median" ? "median (IQR)" : "mean (SD)";
+    const companionRequest = `${request} — as ${statName}`;
+    recordResult({
+      label: `Result of: your question "${request}" — ${statName} instead`,
+      answer: companion.answer,
+      plan: companion.plan,
+      resultRows: companion.resultRows,
+      kind: "question",
+      savedToRoutine: true,
+    });
+    setRecipe((r) => addStep(r, questionStep(companionRequest, companion.match, companion.answer)));
   }
 
   // B7: record the typed definition and immediately re-run the question that
@@ -359,6 +393,7 @@ export default function App() {
     setPendingGrain(null);
     setPendingDefinitions(null);
     setPendingConfirm(null);
+    setCompanionOffer(null);
     setRetryInfo(null);
     await runOfflineFlow(prompt, {});
   }
@@ -385,6 +420,7 @@ export default function App() {
     setPendingGrain(null);
     setPendingDefinitions(null);
     setPendingConfirm(null);
+    setCompanionOffer(null);
     setAliasMap(new Map()); // W2d: a session-level alias map, fresh per workbook
     setDefinitionsStore(emptyDefinitionsStore());
     setAiSends([]); // B8: the badge tracks this workbook's sends, not a prior file's
@@ -665,6 +701,20 @@ export default function App() {
               Questions answered on this computer (no AI needed) are saved into your routine
               automatically — see step 5 below.
             </p>
+            {companionOffer && (
+              companionOffer.revealed ? (
+                <div className="notice-box companion-offer" role="status" aria-live="polite">
+                  As n (%): {companionOffer.companion.answerText}. Same numbers as the card below — just the way a paper reports them.
+                </div>
+              ) : (
+                <div className="notice-box companion-offer" role="group" aria-label="Also available">
+                  <span>Also available, computed the same way on this computer: </span>
+                  <button type="button" className="btn btn-ghost" onClick={applyCompanion}>
+                    {companionOffer.companion.label}
+                  </button>
+                </div>
+              )
+            )}
             <ResultsListPanel
               results={results}
               expandedId={expandedResultId}

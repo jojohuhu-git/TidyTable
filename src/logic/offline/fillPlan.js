@@ -6,10 +6,40 @@
 
 import { executeCohort, executeAggregation, toNumber } from "./cohort.js";
 import { excelRowExtent, excelRowExtentNote } from "../workbook.js";
+import { describeLookedForAggregation } from "./matcher.js";
+import { formatMeanSD, formatMedianIQR, formatNPercent } from "./clinicalFormat.js";
+import { formatDurationLabel, inferColumnUnit } from "./units.js";
 
 const RESULT_KEYS = { checked: "What was checked", matched: "Matched", out: "Out of", share: "Share" };
-const AGG_LABEL = { sum: "Sum", average: "Average", distinct: "Distinct count" };
-const AGG_FORMULA = { sum: "SUMIFS", average: "AVERAGEIFS" };
+// Phase 2 (2026-07-10): descriptive-statistics labels alongside the original
+// sum/average/distinct.
+const AGG_LABEL = {
+  sum: "Sum", average: "Average", distinct: "Distinct count",
+  median: "Median", quartiles: "Quartiles", stdev: "Standard deviation",
+  min: "Minimum", max: "Maximum", range: "Range",
+};
+// Native Excel "...IFS" formulas that can filter and aggregate in one step.
+const IFS_FORMULA = { sum: "SUMIFS", average: "AVERAGEIFS", min: "MINIFS", max: "MAXIFS" };
+const DIRECT_FORMULA = { sum: "SUM", average: "AVERAGE", min: "MIN", max: "MAX" };
+// Phase 2: stats with NO native "...IFS" Excel function — MEDIANIFS,
+// STDEVIFS, and a QUARTILEIFS simply don't exist. Unfiltered, a single
+// sheet-wide formula still works directly; once a condition applies, the
+// honest fallback is the same "filter first, then compute" pattern already
+// used for a distinct count or a Definitions "set" condition.
+const NO_IFS_HINT = {
+  median: "MEDIAN", stdev: "STDEV.S (sample standard deviation)",
+  range: "MAX and MIN (range = MAX minus MIN)", quartiles: "QUARTILE.INC and MEDIAN",
+};
+// Deterministic "anticipate & suggest" companions (no AI): asked for a mean,
+// offer the median (better for skewed data); asked for a median, offer the
+// mean. Both directions reuse the exact same fillAggregationPlan code path on
+// the swapped intent, so the companion number is guaranteed consistent with
+// what that same question would answer directly.
+const COMPANION_OF = { average: "median", median: "average" };
+const COMPANION_LABEL = {
+  average: "median (IQR) instead — better for skewed or outlier-heavy data",
+  median: "mean (SD) instead — the standard summary for roughly symmetric data",
+};
 
 // P2-16: *, ?, ~ are wildcards in a COUNTIFS/SUMIFS/AVERAGEIFS criterion —
 // a cell value that literally contains one of them would otherwise be
@@ -249,24 +279,81 @@ function fillGroupCountPlan(match, workbook, sheet) {
   return { plan, resultRows, exec };
 }
 
-// A3 Level 2: sum/average/distinct over a resolved numeric (or, for
-// "distinct", any) column, optionally broken down per group. Filters run
-// first, same as a plain count.
+// Phase 2: the primary answer text for one aggregate result (either the
+// overall `exec` or one group's result — both carry the same full stats
+// bundle from cohort.js's aggregateOne), in clinical reporting format.
+// mean/median also get their companion spread stat (SD / IQR) folded into the
+// same string, per the plan's "the ask carries the format" rule. The headline
+// value is passed through units.js's unit-aware labeling — the clinical style
+// "10 days (IQR 7–14)": unit named once on the headline, parenthetical spread
+// numbers in the same (already-named) unit. `distinct` is exempt (its value
+// is a count of distinct values, not a duration-shaped number).
+function statDisplay(aggIntent, g, targetColumn) {
+  const label = (v) => formatDurationLabel(v, targetColumn);
+  if (aggIntent === "distinct") {
+    return { text: String(g.value), assumptionNote: null };
+  }
+  if (aggIntent === "average") {
+    if (g.mean == null) return { text: "no readable numbers", assumptionNote: null };
+    const meanLbl = label(g.mean);
+    if (g.sd == null) return { text: `${meanLbl.text} (SD not available — fewer than 2 readable numbers)`, assumptionNote: meanLbl.assumptionNote };
+    return { text: `${meanLbl.text} (SD ${g.sd})`, assumptionNote: meanLbl.assumptionNote };
+  }
+  if (aggIntent === "median") {
+    if (g.median == null) return { text: "no readable numbers", assumptionNote: null };
+    const medLbl = label(g.median);
+    if (g.q1 == null || g.q3 == null) return { text: `${medLbl.text} (IQR not available — fewer than 2 readable numbers)`, assumptionNote: medLbl.assumptionNote };
+    return { text: `${medLbl.text} (IQR ${g.q1}–${g.q3})`, assumptionNote: medLbl.assumptionNote };
+  }
+  if (aggIntent === "quartiles") {
+    if (g.q1 == null || g.q3 == null) return { text: "no readable numbers", assumptionNote: null };
+    const medLbl = label(g.median);
+    return {
+      text: `Q1 ${g.q1}, median ${medLbl.text}, Q3 ${g.q3} (IQR ${g.iqr})`,
+      assumptionNote: medLbl.assumptionNote,
+    };
+  }
+  if (aggIntent === "range") {
+    if (g.value == null) return { text: "no readable numbers", assumptionNote: null };
+    const rangeLbl = label(g.value);
+    return { text: `${rangeLbl.text} (from ${g.min} to ${g.max})`, assumptionNote: rangeLbl.assumptionNote };
+  }
+  if (g.value == null) return { text: "no readable numbers", assumptionNote: null };
+  return label(g.value);
+}
+
+// A group-mode sort key: by the primary value normally, or by the median for
+// quartiles (which has no single `.value`).
+function statSortKey(aggIntent, g) {
+  if (aggIntent === "quartiles") return g.median ?? -Infinity;
+  return g.value ?? -Infinity;
+}
+
+// A3 Level 2 / Phase 2: sum/average/distinct/median/quartiles/stdev/min/max/
+// range over a resolved numeric (or, for "distinct", any) column, optionally
+// broken down per group. Filters run first, same as a plain count. Clinical
+// formatting (mean (SD), median (IQR)) and unit-aware duration labeling are
+// applied by statDisplay above; any "I won't guess the unit" assumption is
+// stated once, in the answer line, never silently picked.
 function buildAggregationSummary(match, exec, label) {
   const lines = [match.lookedFor, ""];
+  const notes = new Set();
   if (exec.mode === "group") {
     lines.push(`Starting from ${exec.total} rows in "${match.sheetName}", broken down by "${exec.groupColumn}":`);
-    const sorted = [...exec.results].sort((a, b) => (b.value ?? -Infinity) - (a.value ?? -Infinity));
+    const sorted = [...exec.results].sort((a, b) => statSortKey(exec.aggIntent, b) - statSortKey(exec.aggIntent, a));
     for (const g of sorted) {
-      const val = g.value == null ? "no readable numbers" : g.value;
-      lines.push(`- ${g.label}: ${label.toLowerCase()} ${val} (from ${g.n} of ${g.rowCount} rows).`);
+      const disp = statDisplay(exec.aggIntent, g, exec.targetColumn);
+      if (disp.assumptionNote) notes.add(disp.assumptionNote);
+      lines.push(`- ${g.label}: ${label.toLowerCase()} ${disp.text} (from ${g.n} of ${g.rowCount} rows).`);
       if (g.skipped) lines.push(`  (${g.skipped} row${g.skipped === 1 ? "" : "s"} had no readable number in "${exec.targetColumn}" and were not counted.)`);
     }
   } else {
-    const val = exec.value == null ? "no rows had a readable number" : exec.value;
-    lines.push(`${label} of "${exec.targetColumn}" across ${exec.total} row${exec.total === 1 ? "" : "s"} in "${match.sheetName}": ${val}.`);
+    const disp = statDisplay(exec.aggIntent, exec, exec.targetColumn);
+    if (disp.assumptionNote) notes.add(disp.assumptionNote);
+    lines.push(`${label} of "${exec.targetColumn}" across ${exec.total} row${exec.total === 1 ? "" : "s"} in "${match.sheetName}": ${disp.text}.`);
     if (exec.skipped) lines.push(`(${exec.skipped} row${exec.skipped === 1 ? "" : "s"} had no readable number in "${exec.targetColumn}" and were not counted.)`);
   }
+  for (const note of notes) lines.push(note);
   lines.push("");
   lines.push("This was answered on your computer, with no data sent anywhere. The Excel steps reproduce the same result by hand.");
   return lines.join("\n");
@@ -286,9 +373,9 @@ function buildAggregationExcelSteps(match, exec, sheet, label) {
   }
   const hasSet = match.stages.some((s) => s.condition.kind === "set");
   const targetRange = range(exec.targetColumn);
-  const formulaName = AGG_FORMULA[exec.aggIntent];
 
-  if (exec.aggIntent === "distinct" || hasSet) {
+  // Distinct count: always the copy + Remove Duplicates pattern.
+  if (exec.aggIntent === "distinct") {
     const groupNote = exec.mode === "group" ? ` for each value of "${exec.groupColumn}"` : "";
     return withExtentNote([{
       title: label,
@@ -304,6 +391,69 @@ function buildAggregationExcelSteps(match, exec, sheet, label) {
     }], extent);
   }
 
+  // A Definitions "set" ("one of A, B, C") condition can't be a single ...IFS
+  // criterion for ANY stat — filter first, honestly, then run the plain
+  // (non-IFS) formula over the filtered rows. Generalizes the same fallback
+  // the distinct-count branch above already used, to whichever stat was asked
+  // for (this used to say "to get a distinct count" even for an average with
+  // a Definitions set condition — fixed here as part of the Phase 2 rewrite).
+  if (hasSet) {
+    const hint = NO_IFS_HINT[exec.aggIntent] || `${DIRECT_FORMULA[exec.aggIntent]}`;
+    const groupNote = exec.mode === "group" ? ` for each value of "${exec.groupColumn}"` : "";
+    return withExtentNote([{
+      title: label,
+      where: `Sheet "${sheet.name}"`,
+      formula: "",
+      instruction:
+        "A single formula can't check several accepted values at once, so filter first: turn on Data > Filter and filter to the conditions above. " +
+        `Then copy the "${exec.targetColumn}" column for the filtered rows to a new area${groupNote} and run ${hint} there. It should equal ` +
+        (exec.mode === "group" || exec.aggIntent === "quartiles" ? "the numbers in the result table." : `${exec.value}.`),
+    }], extent);
+  }
+
+  // Phase 2: stats with no native "...IFS" Excel function.
+  if (exec.aggIntent in NO_IFS_HINT) {
+    const hint = NO_IFS_HINT[exec.aggIntent];
+    if (exec.mode !== "group" && filterPairs.length === 0) {
+      // No conditions at all — a direct, sheet-wide formula (or formulas).
+      if (exec.aggIntent === "quartiles") {
+        return withExtentNote([
+          {
+            title: "Q1 (25th percentile)", where: "An empty cell", formula: `=QUARTILE.INC(${targetRange}, 1)`,
+            instruction: `It should equal ${exec.q1}.`,
+            teaches: "QUARTILE.INC finds a percentile using the same rank-interpolation method TidyTable uses, so the numbers always agree.",
+          },
+          { title: "Median (50th percentile)", where: "An empty cell", formula: `=MEDIAN(${targetRange})`, instruction: `It should equal ${exec.median}.` },
+          { title: "Q3 (75th percentile)", where: "An empty cell", formula: `=QUARTILE.INC(${targetRange}, 3)`, instruction: `It should equal ${exec.q3}. IQR = Q3 minus Q1 = ${exec.iqr}.` },
+        ], extent);
+      }
+      const formula = exec.aggIntent === "range" ? `=MAX(${targetRange})-MIN(${targetRange})` : `=${hint.split(" ")[0]}(${targetRange})`;
+      const value = exec.aggIntent === "range" ? exec.range : exec.aggIntent === "median" ? exec.median : exec.sd;
+      return withExtentNote([{
+        title: label,
+        where: "An empty cell",
+        formula,
+        instruction: `${label} of "${exec.targetColumn}". It should equal ${value}.`,
+        teaches: `${hint} — Excel has no "...IFS" version of this statistic, so it always runs on a whole range; filter the sheet first if you need it on a subset.`,
+      }], extent);
+    }
+    // Filtered and/or grouped, with no Definitions set: the same honest
+    // filter-first-then-compute fallback.
+    const groupNote = exec.mode === "group" ? ` for each value of "${exec.groupColumn}"` : "";
+    return withExtentNote([{
+      title: label,
+      where: `Sheet "${sheet.name}"`,
+      formula: "",
+      instruction:
+        `Excel has no "...IFS" version of ${hint}, so filter first: turn on Data > Filter and filter to the conditions above${exec.mode === "group" ? " (one group value at a time, plus the breakdown column)" : ""}. ` +
+        `Then copy the "${exec.targetColumn}" column for the filtered rows to a new area${groupNote} and run ${hint} there. It should equal ` +
+        (exec.mode === "group" || exec.aggIntent === "quartiles" ? "the numbers in the result table." : `${exec.value}.`),
+    }], extent);
+  }
+
+  // sum/average/min/max: a native "...IFS" formula.
+  const formulaName = IFS_FORMULA[exec.aggIntent];
+  const directName = DIRECT_FORMULA[exec.aggIntent];
   if (exec.mode === "group") {
     const steps = exec.results.map((g, i) => {
       const pairs = [`${range(exec.groupColumn)}, ${crit("=", g.label)}`, ...filterPairs];
@@ -313,11 +463,7 @@ function buildAggregationExcelSteps(match, exec, sheet, label) {
         formula: `=${formulaName}(${targetRange}, ${pairs.join(", ")})`,
         instruction: `${label} of "${exec.targetColumn}" where "${exec.groupColumn}" is ${g.label}${filterPairs.length ? " and every other condition above" : ""}. It should equal ${g.value}.`,
       };
-      if (i === 0) {
-        step.teaches = exec.aggIntent === "sum"
-          ? "SUMIFS adds up a numeric column, only counting rows that meet the given conditions."
-          : "AVERAGEIFS computes the mean of a numeric column, only over rows that meet the given conditions.";
-      }
+      if (i === 0) step.teaches = `${formulaName} computes the ${label.toLowerCase()} of a numeric column, only over rows that meet the given conditions.`;
       return step;
     });
     return withExtentNote(steps, extent);
@@ -328,13 +474,40 @@ function buildAggregationExcelSteps(match, exec, sheet, label) {
     where: "An empty cell",
     formula: filterPairs.length
       ? `=${formulaName}(${targetRange}, ${filterPairs.join(", ")})`
-      : `=${exec.aggIntent === "sum" ? "SUM" : "AVERAGE"}(${targetRange})`,
+      : `=${directName}(${targetRange})`,
     instruction: `${label} of "${exec.targetColumn}"${filterPairs.length ? " across the rows that meet the conditions above" : ""}. It should equal ${exec.value}.`,
-    teaches: exec.aggIntent === "sum"
-      ? "SUMIFS/SUM add up a numeric column, optionally only counting rows that meet given conditions."
-      : "AVERAGEIFS/AVERAGE compute the mean of a numeric column, optionally only over rows that meet given conditions.",
+    teaches: `${formulaName}/${directName} compute the ${label.toLowerCase()} of a numeric column, optionally only over rows that meet given conditions.`,
   }], extent);
 }
+
+// Phase 2: the ES5, self-contained (no closures beyond its own params) stats
+// block the worker transform inlines — median/quartiles/stdev/min/max/range,
+// matching cohort.js's computeNumericStats exactly (same rank-interpolation
+// quantile method, same sample-SD n-1 denominator, same round-to-2-decimals),
+// so a replayed transform reproduces the exact number the app already showed.
+const STATS_BLOCK = `
+var round2 = function (x) { return x == null ? null : Math.round(x * 100) / 100; };
+var computeStats = function (nums) {
+  var n = nums.length;
+  if (n === 0) return { n: 0, mean: null, sd: null, median: null, q1: null, q3: null, iqr: null, min: null, max: null, range: null };
+  var sorted = nums.slice().sort(function (a, b) { return a - b; });
+  var sum = 0; for (var i = 0; i < n; i++) sum += sorted[i];
+  var mean = sum / n;
+  var sd = null;
+  if (n >= 2) { var sq = 0; for (var j = 0; j < n; j++) { var d = sorted[j] - mean; sq += d * d; } sd = Math.sqrt(sq / (n - 1)); }
+  var quantile = function (p) {
+    var idx = (n - 1) * p; var lo = Math.floor(idx); var hi = Math.ceil(idx);
+    if (lo === hi) return sorted[lo];
+    var frac = idx - lo; return sorted[lo] + frac * (sorted[hi] - sorted[lo]);
+  };
+  var median = quantile(0.5), q1 = quantile(0.25), q3 = quantile(0.75);
+  return {
+    n: n, mean: round2(mean), sd: sd == null ? null : round2(sd),
+    median: round2(median), q1: round2(q1), q3: round2(q3), iqr: round2(q3 - q1),
+    min: sorted[0], max: sorted[n - 1], range: round2(sorted[n - 1] - sorted[0]),
+  };
+};
+`;
 
 function buildAggregationTransformCode(match, label) {
   const stages = match.stages.map((s) => s.condition);
@@ -342,6 +515,7 @@ function buildAggregationTransformCode(match, label) {
   return `
 var foldKey = function (v) { return String(v).trim().toLowerCase().replace(/\\s+/g, " "); };
 ${toNumber.toString()}
+${STATS_BLOCK}
 var cmp = function (n, op, t) { switch (op) { case ">": return n > t; case ">=": return n >= t; case "<": return n < t; case "<=": return n <= t; case "<>": return n !== t; default: return n === t; } };
 var STAGES = ${JSON.stringify(stages)};
 var TARGET = ${JSON.stringify(targetColumn)};
@@ -364,45 +538,69 @@ var aggOne = function (rs) {
     for (var i2 = 0; i2 < rs.length; i2++) { var v2 = rs[i2][TARGET]; if (v2 == null || String(v2).trim() === "") continue; var k2 = foldKey(v2); if (!seen[k2]) { seen[k2] = 1; cnt++; } }
     return { value: cnt, n: rs.length, skipped: 0 };
   }
-  var sum = 0, n = 0, skipped = 0;
-  for (var i3 = 0; i3 < rs.length; i3++) { var num = toNumber(rs[i3][TARGET]); if (num == null) { skipped++; continue; } sum += num; n++; }
-  var value = AGG === "sum" ? sum : (n ? Math.round(sum / n * 100) / 100 : null);
-  return { value: value, n: n, skipped: skipped };
+  var nums = [];
+  for (var i3 = 0; i3 < rs.length; i3++) { var num = toNumber(rs[i3][TARGET]); if (num != null) nums.push(num); }
+  var skipped = rs.length - nums.length;
+  var stats = computeStats(nums);
+  var sum = 0; for (var i4 = 0; i4 < nums.length; i4++) sum += nums[i4];
+  var VALUE = { sum: sum, average: stats.mean, median: stats.median, stdev: stats.sd, min: stats.min, max: stats.max, range: stats.range };
+  var value = (AGG in VALUE) ? VALUE[AGG] : null;
+  return {
+    value: value, n: stats.n, skipped: skipped,
+    mean: stats.mean, sd: stats.sd, median: stats.median, q1: stats.q1, q3: stats.q3, iqr: stats.iqr,
+    min: stats.min, max: stats.max, range: stats.range,
+  };
+};
+var rowFor = function (res, extra) {
+  var row = {};
+  for (var k in extra) row[k] = extra[k];
+  if (AGG === "quartiles") { row["Q1"] = res.q1; row["Median"] = res.median; row["Q3"] = res.q3; row["IQR"] = res.iqr; }
+  else { row[LABEL] = res.value; }
+  row["Rows used"] = res.n;
+  if (res.skipped) row["Rows skipped"] = res.skipped;
+  return row;
 };
 var out = [];
 if (GROUP) {
   var groups = {}; var order = [];
   for (var j = 0; j < filtered.length; j++) { var gv = filtered[j][GROUP]; if (gv == null || String(gv).trim() === "") continue; var gk = foldKey(gv); if (!groups[gk]) { groups[gk] = { label: gv, rows: [] }; order.push(gk); } groups[gk].rows.push(filtered[j]); }
   out = order.map(function (gk) {
-    var g = groups[gk]; var res = aggOne(g.rows); var row = {};
-    row[GROUP] = g.label; row[LABEL] = res.value; row["Rows used"] = res.n; if (res.skipped) row["Rows skipped"] = res.skipped;
-    return row;
+    var g = groups[gk]; var res = aggOne(g.rows); var extra = {}; extra[GROUP] = g.label;
+    return rowFor(res, extra);
   });
 } else {
   var res2 = aggOne(filtered);
-  var row2 = {}; row2[LABEL] = res2.value; row2["Rows used"] = res2.n; if (res2.skipped) row2["Rows skipped"] = res2.skipped;
-  out = [row2];
+  out = [rowFor(res2, {})];
 }
 return out;
 `.trim();
 }
 
-function fillAggregationPlan(match, workbook, sheet) {
+// Phase 2: one result row for a stat, from either the overall `exec` or one
+// group's result. Quartiles has no single value — it gets its own Q1/Median/
+// Q3/IQR columns; every other stat keeps the original single [label] column.
+function statResultRow(aggIntent, label, g, extra = {}) {
+  if (aggIntent === "quartiles") {
+    return {
+      ...extra, Q1: g.q1, Median: g.median, Q3: g.q3, IQR: g.iqr,
+      "Rows used": g.n, ...(g.skipped ? { "Rows skipped (no readable number)": g.skipped } : {}),
+    };
+  }
+  return {
+    ...extra, [label]: g.value, "Rows used": g.n,
+    ...(g.skipped ? { "Rows skipped (no readable number)": g.skipped } : {}),
+  };
+}
+
+function fillAggregationPlan(match, workbook, sheet, opts = {}) {
   const exec = executeAggregation(match, workbook);
   const label = AGG_LABEL[exec.aggIntent] || "Value";
 
   const resultRows = exec.mode === "group"
-    ? [...exec.results].sort((a, b) => (b.value ?? -Infinity) - (a.value ?? -Infinity)).map((g) => ({
-        [exec.groupColumn]: g.label,
-        [label]: g.value,
-        "Rows used": g.n,
-        ...(g.skipped ? { "Rows skipped (no readable number)": g.skipped } : {}),
-      }))
-    : [{
-        [label]: exec.value,
-        "Rows used": exec.n,
-        ...(exec.skipped ? { "Rows skipped (no readable number)": exec.skipped } : {}),
-      }];
+    ? [...exec.results]
+      .sort((a, b) => statSortKey(exec.aggIntent, b) - statSortKey(exec.aggIntent, a))
+      .map((g) => statResultRow(exec.aggIntent, label, g, { [exec.groupColumn]: g.label }))
+    : [statResultRow(exec.aggIntent, label, exec)];
 
   const plan = {
     engine: "offline",
@@ -418,7 +616,47 @@ function fillAggregationPlan(match, workbook, sheet) {
       "This ran on your computer, so there is no R script to run for it yet. " +
       "Use the Excel steps to reproduce the same numbers by hand.",
   };
+
+  // Phase 2 "anticipate & suggest": offer the standard companion stat as a
+  // one-click chip. `opts.skipCompanion` stops the companion's own
+  // fillAggregationPlan call from recursively building a companion for ITS
+  // companion (average -> median -> average -> ...).
+  if (!opts.skipCompanion) {
+    const companion = buildCompanion(match, workbook, sheet);
+    if (companion) plan.companion = companion;
+  }
+
   return { plan, resultRows, exec };
+}
+
+// Deterministic, no AI: average <-> median. Reuses fillAggregationPlan on the
+// swapped intent, so the companion's number is guaranteed to be exactly what
+// asking that question directly would produce — never a separately-computed
+// approximation. The whole altMatch rides along so App.jsx can record the
+// companion into the routine as a normal, replayable question step.
+function buildCompanion(match, workbook, sheet) {
+  const altIntent = COMPANION_OF[match.intent];
+  if (!altIntent || !match.aggregation) return null;
+  const altMatch = {
+    ...match,
+    intent: altIntent,
+    lookedFor: describeLookedForAggregation(
+      altIntent,
+      match.aggregation.targetColumn,
+      match.stages,
+      match.aggregation.groupColumn ? { column: match.aggregation.groupColumn } : null,
+    ),
+  };
+  const { plan: altPlan, resultRows: altResultRows, exec: altExec } = fillAggregationPlan(altMatch, workbook, sheet, { skipCompanion: true });
+  return {
+    kind: "swap-stat",
+    label: COMPANION_LABEL[match.intent],
+    intent: altIntent,
+    plan: altPlan,
+    resultRows: altResultRows,
+    match: altMatch,
+    answer: summarizeAnswer(altMatch, altExec),
+  };
 }
 
 // W3: a plain one-line answer for a confident match's execution — used for the
@@ -426,9 +664,15 @@ function fillAggregationPlan(match, workbook, sheet) {
 // replay, to build the plain-report line for an auto-recorded question step.
 // Never a guess: it just reads the same `exec` shape fillPlan already builds.
 export function summarizeAnswer(match, exec) {
+  if (match.intent === "describe") {
+    return exec.n === 0 ? "no readable numbers" : `n=${exec.n}, mean ${exec.mean}, median ${exec.median}`;
+  }
   if (match.aggregation) {
     if (exec.mode === "group") {
       return `${exec.results.length} group${exec.results.length === 1 ? "" : "s"}`;
+    }
+    if (match.intent === "quartiles") {
+      return exec.q1 == null ? "no readable numbers" : `Q1 ${exec.q1}, median ${exec.median}, Q3 ${exec.q3}`;
     }
     return exec.value == null ? "no readable numbers" : String(exec.value);
   }
@@ -439,10 +683,209 @@ export function summarizeAnswer(match, exec) {
   return last ? `${last.count} ${exec.unit}` : `${exec.total} ${exec.unit}`;
 }
 
+// Phase 2 ("describe/summarize X"): one descriptive-statistics panel — n,
+// missing, mean (SD), median (IQR), min–max — optionally broken down per
+// group. Reuses the exact same executeAggregation/aggregateOne path every
+// other stat uses (aggregateOne always computes the full stats bundle
+// regardless of which single value an intent asks for), so a describe panel's
+// numbers are guaranteed consistent with asking for each stat individually.
+// "3–10 days": range in the clinical style, unit named once at the end (only
+// when the column name states it — units.js never guesses one).
+function minMaxText(g, targetColumn) {
+  if (!g.n) return { text: "no readable numbers", assumptionNote: null };
+  const maxLbl = formatDurationLabel(g.max, targetColumn);
+  return { text: `${g.min}–${maxLbl.text}`, assumptionNote: maxLbl.assumptionNote };
+}
+
+function describeRow(g, targetColumn, extra = {}) {
+  return {
+    ...extra,
+    n: g.n,
+    Missing: g.skipped,
+    "Mean (SD)": formatMeanSD(g.mean, g.sd),
+    "Median (IQR)": formatMedianIQR(g.median, g.q1, g.q3),
+    "Min–Max": minMaxText(g, targetColumn).text,
+  };
+}
+
+function buildDescribeSummary(match, exec) {
+  const lines = [match.lookedFor, ""];
+  const notes = new Set();
+  const describeLines = (g, prefix) => {
+    const minMax = minMaxText(g, exec.targetColumn);
+    if (minMax.assumptionNote) notes.add(minMax.assumptionNote);
+    lines.push(`${prefix}n = ${g.n}, missing = ${g.skipped}.`);
+    lines.push(`${prefix}Mean (SD): ${formatMeanSD(g.mean, g.sd)}. Median (IQR, the "typical range"): ${formatMedianIQR(g.median, g.q1, g.q3)}. Min–Max: ${minMax.text}.`);
+  };
+  if (exec.mode === "group") {
+    lines.push(`Describing "${exec.targetColumn}" in "${match.sheetName}", broken down by "${exec.groupColumn}":`);
+    const sorted = [...exec.results].sort((a, b) => b.n - a.n);
+    for (const g of sorted) {
+      lines.push("");
+      lines.push(`${g.label}:`);
+      describeLines(g, "  ");
+    }
+  } else {
+    lines.push(`Describing "${exec.targetColumn}" across ${exec.total} row${exec.total === 1 ? "" : "s"} in "${match.sheetName}":`);
+    describeLines(exec, "");
+  }
+  for (const note of notes) lines.push(note);
+  lines.push("");
+  lines.push("This was answered on your computer, with no data sent anywhere. The Excel steps reproduce the same numbers by hand.");
+  return lines.join("\n");
+}
+
+function buildDescribeExcelSteps(match, exec, sheet) {
+  const extent = excelRowExtent(sheet);
+  const lastRow = extent.lastRow;
+  const range = (col) => `'${sheet.name}'!${letterFor(sheet, col)}2:${letterFor(sheet, col)}${lastRow}`;
+  const crit = (op, value) => (op === "=" ? `"${escapeCriteria(value)}"` : `"${op}${escapeCriteria(value)}"`);
+  const filterPairs = [];
+  for (const stage of match.stages) {
+    const c = stage.condition;
+    if (c.kind === "set") continue;
+    filterPairs.push(`${range(c.column)}, ${crit(c.op, c.value)}`);
+    if (c.when) filterPairs.push(`${range(c.when.column)}, "${escapeCriteria(c.when.value)}"`);
+  }
+  const hasSet = match.stages.some((s) => s.condition.kind === "set");
+  const targetRange = range(exec.targetColumn);
+  const isFiltered = filterPairs.length > 0 || hasSet || exec.mode === "group";
+
+  if (isFiltered) {
+    const groupNote = exec.mode === "group" ? ` for each value of "${exec.groupColumn}"` : "";
+    return withExtentNote([{
+      title: "Descriptive statistics",
+      where: `Sheet "${sheet.name}"`,
+      formula: "",
+      instruction:
+        `Turn on Data > Filter and filter to the conditions above${exec.mode === "group" ? " (one group value at a time, plus the breakdown column)" : ""}. ` +
+        `Then copy the "${exec.targetColumn}" column for the filtered rows to a new area${groupNote}, and run COUNT (n), AVERAGE, STDEV.S, MEDIAN, QUARTILE.INC (1 and 3), MIN and MAX on it. ` +
+        "It should equal the numbers in the result table.",
+      teaches: "COUNT, AVERAGE, STDEV.S, MEDIAN, QUARTILE.INC, MIN and MAX together give n, the mean, the spread, the median, the typical range, and the extremes for a column.",
+    }], extent);
+  }
+
+  return withExtentNote([
+    { title: "n (readable numbers)", where: "An empty cell", formula: `=COUNT(${targetRange})`, instruction: `It should equal ${exec.n}.` },
+    {
+      title: "Missing / unreadable",
+      where: "An empty cell",
+      formula: `=ROWS(${targetRange})-COUNT(${targetRange})`,
+      instruction: `Rows in the range minus rows COUNT could read as a number — blank cells and unreadable text ("N/A", etc.) both count. It should equal ${exec.skipped}.`,
+    },
+    { title: "Mean", where: "An empty cell", formula: `=AVERAGE(${targetRange})`, instruction: `It should equal ${exec.mean}.` },
+    {
+      title: "Standard deviation",
+      where: "An empty cell",
+      formula: `=STDEV.S(${targetRange})`,
+      instruction: `It should equal ${exec.sd ?? "not available — fewer than 2 readable numbers"}.`,
+      teaches: "STDEV.S is the SAMPLE standard deviation (n-1 denominator) — the usual choice when your rows are a sample, not the whole population.",
+    },
+    { title: "Median", where: "An empty cell", formula: `=MEDIAN(${targetRange})`, instruction: `It should equal ${exec.median}.` },
+    {
+      title: "Q1 and Q3 (for the IQR)",
+      where: "An empty cell",
+      formula: `=QUARTILE.INC(${targetRange}, 1)`,
+      instruction: `Q1. For Q3, use =QUARTILE.INC(range, 3). Q1 should equal ${exec.q1}, Q3 should equal ${exec.q3} (IQR = ${exec.iqr}).`,
+    },
+    {
+      title: "Min and Max",
+      where: "An empty cell",
+      formula: `=MIN(${targetRange})`,
+      instruction: `Minimum. For the maximum, use =MAX(range). Min should equal ${exec.min}, Max should equal ${exec.max}.`,
+    },
+  ], extent);
+}
+
+function buildDescribeTransformCode(match) {
+  const stages = match.stages.map((s) => s.condition);
+  const { targetColumn, groupColumn } = match.aggregation;
+  // The unit suffix is decided HERE, at plan-build time, from the column name
+  // (units.js inferColumnUnit — never guessed) and inlined as a constant, so
+  // the replayed transform's "Min–Max" text is byte-for-byte what the app's
+  // result table showed.
+  const columnUnit = inferColumnUnit(targetColumn);
+  const unit = columnUnit ? ` ${columnUnit}` : "";
+  return `
+var foldKey = function (v) { return String(v).trim().toLowerCase().replace(/\\s+/g, " "); };
+${toNumber.toString()}
+${STATS_BLOCK}
+${formatMeanSD.toString()}
+${formatMedianIQR.toString()}
+var UNIT_SUFFIX = ${JSON.stringify(unit)};
+var cmp = function (n, op, t) { switch (op) { case ">": return n > t; case ">=": return n >= t; case "<": return n < t; case "<=": return n <= t; case "<>": return n !== t; default: return n === t; } };
+var STAGES = ${JSON.stringify(stages)};
+var TARGET = ${JSON.stringify(targetColumn)};
+var GROUP = ${JSON.stringify(groupColumn)};
+var SHEET = ${JSON.stringify(match.sheetName)};
+var rows = sheets[SHEET] || [];
+var pred = function (c) { return function (r) {
+  if (c.kind === "value") { if (c.op === "<>") { return r[c.column] == null || foldKey(r[c.column]) !== foldKey(c.value); } return r[c.column] != null && foldKey(r[c.column]) === foldKey(c.value); }
+  if (c.kind === "set") { var set = {}; for (var i = 0; i < c.values.length; i++) { set[foldKey(c.values[i])] = 1; } if (c.op === "not-in") { return r[c.column] == null || set[foldKey(r[c.column])] !== 1; } return r[c.column] != null && set[foldKey(r[c.column])] === 1; }
+  if (c.kind === "threshold") { if (c.when) { var wv = r[c.when.column]; if (wv == null || foldKey(wv) !== foldKey(c.when.value)) return false; } var n = toNumber(r[c.column]); if (n == null) return false; return cmp(n, c.op, c.value); }
+  return false;
+}; };
+var filtered = rows;
+for (var s = 0; s < STAGES.length; s++) { filtered = filtered.filter(pred(STAGES[s])); }
+var describeOne = function (rs) {
+  var nums = [];
+  for (var i2 = 0; i2 < rs.length; i2++) { var num = toNumber(rs[i2][TARGET]); if (num != null) nums.push(num); }
+  var skipped = rs.length - nums.length;
+  var stats = computeStats(nums);
+  return {
+    n: stats.n, missing: skipped,
+    meanSd: formatMeanSD(stats.mean, stats.sd),
+    medianIqr: formatMedianIQR(stats.median, stats.q1, stats.q3),
+    minMax: stats.n ? (stats.min + "–" + stats.max + UNIT_SUFFIX) : "no readable numbers",
+  };
+};
+var out = [];
+if (GROUP) {
+  var groups = {}; var order = [];
+  for (var j = 0; j < filtered.length; j++) { var gv = filtered[j][GROUP]; if (gv == null || String(gv).trim() === "") continue; var gk = foldKey(gv); if (!groups[gk]) { groups[gk] = { label: gv, rows: [] }; order.push(gk); } groups[gk].rows.push(filtered[j]); }
+  out = order.map(function (gk) {
+    var g = groups[gk]; var res = describeOne(g.rows); var row = {};
+    row[GROUP] = g.label; row["n"] = res.n; row["Missing"] = res.missing;
+    row["Mean (SD)"] = res.meanSd; row["Median (IQR)"] = res.medianIqr; row["Min–Max"] = res.minMax;
+    return row;
+  });
+} else {
+  var res2 = describeOne(filtered);
+  out = [{ n: res2.n, Missing: res2.missing, "Mean (SD)": res2.meanSd, "Median (IQR)": res2.medianIqr, "Min–Max": res2.minMax }];
+}
+return out;
+`.trim();
+}
+
+function fillDescribePlan(match, workbook, sheet) {
+  const exec = executeAggregation(match, workbook);
+
+  const resultRows = exec.mode === "group"
+    ? [...exec.results].sort((a, b) => b.n - a.n).map((g) => describeRow(g, exec.targetColumn, { [exec.groupColumn]: g.label }))
+    : [describeRow(exec, exec.targetColumn)];
+
+  const plan = {
+    engine: "offline",
+    looked_for: match.lookedFor,
+    summary: buildDescribeSummary(match, exec),
+    transform_code: buildDescribeTransformCode(match),
+    excel_steps: buildDescribeExcelSteps(match, exec, sheet),
+    r_script:
+      "# This descriptive panel was worked out inside TidyTable, on your computer.\n" +
+      "# The result table and the Excel steps above reproduce it exactly.\n" +
+      "# A full R version (e.g. summary()/psych::describe()) arrives with the statistics features.\n",
+    r_run_notes:
+      "This ran on your computer, so there is no R script to run for it yet. " +
+      "Use the Excel steps to reproduce the same numbers by hand.",
+  };
+  return { plan, resultRows, exec };
+}
+
 // Public: build the plan and the ready-to-show result rows for a confident match.
 export function fillPlan(match, workbook) {
   const sheet = workbook.sheets.find((s) => s.name === match.sheetName) || workbook.sheets[0];
 
+  if (match.intent === "describe") return fillDescribePlan(match, workbook, sheet);
   if (match.aggregation) return fillAggregationPlan(match, workbook, sheet);
   if (match.groupColumn) return fillGroupCountPlan(match, workbook, sheet);
 
@@ -468,5 +911,19 @@ export function fillPlan(match, workbook) {
       "This count ran on your computer, so there is no R script to run for it yet. " +
       "Use the Excel steps to reproduce the same numbers by hand.",
   };
+
+  // Phase 2 "anticipate & suggest": a count/share answer offers its final
+  // level restated in the clinical "n (%)" convention — same numbers the
+  // levels table already shows, formatted the way a paper reports them.
+  // Deterministic text, no new computation, so no plan/routine implications.
+  const last = exec.levels[exec.levels.length - 1];
+  if (last && last.denominator) {
+    plan.companion = {
+      kind: "n-percent",
+      label: "as n (%) — the way a paper reports it",
+      answerText: `${formatNPercent(last.count, last.denominator)} of ${last.denominator} ${last.unit || exec.unit}`,
+    };
+  }
+
   return { plan, resultRows, exec };
 }
