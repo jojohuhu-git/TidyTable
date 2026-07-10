@@ -77,15 +77,33 @@ function labelsLookLikeTime(sheet, col) {
 
 const num = (v) => (typeof v === "number" ? v : Number(String(v).replace(/[^0-9.\-]/g, "")));
 
+// W4: apply an optional single-column equality filter before grouping — the
+// scoped-down "escherichia coli by ward" reading of a free-text chart request
+// (see textToChart.js). foldKey-matched, same as everywhere else values are
+// compared loosely by spelling/case/spacing.
+function applyFilter(rows, filter) {
+  if (!filter) return rows;
+  const want = foldKey(filter.value);
+  return rows.filter((r) => r[filter.column] != null && foldKey(r[filter.column]) === want);
+}
+
 // sheet: { headers, rows }. valueCol may be null → count per label.
-export function buildDataset(sheet, labelCol, valueCol) {
+// options.aggMode: "sum" (default when valueCol is given) | "average" | "count".
+// options.filter: { column, value } — an optional equality filter applied to
+// the rows before grouping (W4), never silently: the resolved dataset's
+// `filter` field is always handed back so the UI/Excel steps can show it.
+export function buildDataset(sheet, labelCol, valueCol, options = {}) {
+  const { filter = null } = options;
+  const rows = applyFilter(sheet.rows, filter);
   const labelNum = isNumericColumn(sheet, labelCol);
   const valueNum = valueCol ? isNumericColumn(sheet, valueCol) : false;
+  const aggMode = options.aggMode || (valueCol && valueNum ? "sum" : "count");
 
-  // Two number columns → scatter of raw points.
+  // Two number columns → scatter of raw points (a filter/aggMode makes no
+  // sense here — an x/y scatter is always the raw points).
   if (valueCol && labelNum && valueNum) {
     const raw = [];
-    for (const r of sheet.rows) {
+    for (const r of rows) {
       const x = num(r[labelCol]);
       const y = num(r[valueCol]);
       if (Number.isFinite(x) && Number.isFinite(y)) raw.push({ x, y });
@@ -93,26 +111,37 @@ export function buildDataset(sheet, labelCol, valueCol) {
     const points = samplePoints(raw, SCATTER_POINT_CAP);
     return {
       kind: "xy", points, xName: labelCol, yName: valueCol,
-      totalPoints: raw.length, sampled: points.length < raw.length,
+      totalPoints: raw.length, sampled: points.length < raw.length, filter,
     };
   }
 
   // Otherwise group by the label column.
-  const groups = new Map(); // foldKey -> { label, value }
-  for (const r of sheet.rows) {
+  const groups = new Map(); // foldKey -> { label, value, n }
+  for (const r of rows) {
     const raw = r[labelCol];
     if (raw == null || String(raw).trim() === "") continue;
     const k = foldKey(raw);
-    if (!groups.has(k)) groups.set(k, { label: String(raw), value: 0 });
+    if (!groups.has(k)) groups.set(k, { label: String(raw), value: 0, n: 0 });
     const g = groups.get(k);
-    if (valueCol && valueNum) {
+    if (valueCol && valueNum && aggMode !== "count") {
       const v = num(r[valueCol]);
-      if (Number.isFinite(v)) g.value += v;
+      if (Number.isFinite(v)) { g.value += v; g.n += 1; }
     } else {
       g.value += 1;
     }
   }
-  let points = [...groups.values()];
+  // `n` (how many readable numbers went into each group) is internal to the
+  // average calculation below — stripped from every point before it leaves
+  // this function, so a plain count/sum dataset's points stay exactly
+  // { label, value } as every existing caller (and test) expects.
+  let points = [...groups.values()].map(({ label, value, n }) => (
+    aggMode === "average"
+      // W4: an average is not a running total — divide by how many readable
+      // numbers actually went into it, not by every row in the group (a
+      // blank/non-numeric cell is skipped, not counted as a zero).
+      ? { label, value: n ? Math.round((value / n) * 100) / 100 : 0 }
+      : { label, value }
+  ));
   const labelIsTime = labelsLookLikeTime(sheet, labelCol);
   if (labelIsTime) {
     const keys = points.map((p) => timeSortKey(p.label));
@@ -128,11 +157,40 @@ export function buildDataset(sheet, labelCol, valueCol) {
     // categories in first-appearance order.
     points = [...points].sort((a, b) => b.value - a.value);
   }
+  const valueName = aggMode === "average" ? `average ${valueCol}`
+    : aggMode === "sum" && valueCol && valueNum ? `total ${valueCol}`
+      : "count";
   return {
     kind: "categorical",
     points,
     labelIsTime,
-    valueName: valueCol && valueNum ? `total ${valueCol}` : "count",
+    valueName,
     labelName: labelCol,
+    filter,
   };
+}
+
+// W4: fold every category below `thresholdPct` of the dataset's total into a
+// single "Other" bucket — offered, never forced, and always reversible (the
+// caller just re-builds the dataset without this applied). Time-series
+// datasets are left alone (grouping months into "Other" would be dishonest
+// about when things happened); anything already at or under the pie-eligible
+// slice count is a no-op, since there is nothing worth collapsing.
+export function groupSmallIntoOther(dataset, thresholdPct = 2) {
+  if (!dataset || dataset.kind !== "categorical" || dataset.labelIsTime) return dataset;
+  const total = dataset.points.reduce((s, p) => s + Math.abs(p.value), 0) || 1;
+  const kept = [];
+  let otherValue = 0;
+  let otherCount = 0;
+  for (const p of dataset.points) {
+    if ((Math.abs(p.value) / total) * 100 < thresholdPct) {
+      otherValue += p.value;
+      otherCount += 1;
+    } else {
+      kept.push(p);
+    }
+  }
+  if (otherCount < 2) return dataset; // nothing meaningful to collapse
+  const points = [...kept, { label: `Other (${otherCount} smaller groups)`, value: otherValue }];
+  return { ...dataset, points, otherGrouped: otherCount };
 }

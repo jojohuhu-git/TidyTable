@@ -22,15 +22,28 @@ describe("ChartsPanel — renders without crashing on a large scatter dataset", 
     expect(screen.getByText(/showing a sample of/i)).toBeTruthy();
   });
 
-  it("declines plainly instead of rendering hundreds of bars", () => {
-    const rows = Array.from({ length: 200 }, (_, i) => ({ PatientID: `P${i}`, Cost: i }));
+  // W4 (owner's decision): many categories no longer refuse — they draw as a
+  // horizontal all-rows bar chart, every category labeled, so nothing is
+  // hidden. Grouping the smallest into "Other" is offered, never forced.
+  it("draws a horizontal all-rows bar chart for many categories instead of refusing", () => {
+    const rows = Array.from({ length: 40 }, (_, i) => ({ Ward: `Ward ${i}`, Cost: i + 1 }));
     const sheet = deriveSheet("D", rows);
-    render(<ChartsPanel sheet={sheet} />);
+    const { container } = render(<ChartsPanel sheet={sheet} />);
 
-    fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "PatientID" } });
+    fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "Ward" } });
 
-    expect(screen.getByText(/200 categories/)).toBeTruthy();
-    expect(screen.queryByRole("img")).toBeNull();
+    // A bar chart is drawn (not refused), and every one of the 40 categories
+    // gets its own bar rect — the SVG grows taller rather than dropping rows.
+    const img = screen.getByRole("img", { name: /bar chart/i });
+    expect(img).toBeTruthy();
+    expect(container.querySelectorAll("rect").length).toBe(40);
+    expect(Number(img.getAttribute("height"))).toBeGreaterThan(300);
+
+    // The recommendation names the horizontal layout, and "Other" grouping is
+    // offered as an optional, unchecked checkbox.
+    expect(screen.getByText(/Recommended: horizontal bar chart/i)).toBeTruthy();
+    const otherToggle = screen.getByRole("checkbox", { name: /Other/i });
+    expect(otherToggle.checked).toBe(false);
   });
 });
 
