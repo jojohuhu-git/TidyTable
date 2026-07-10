@@ -66,7 +66,7 @@ export default function StatsPanel({ sheet }) {
         <p className="hint">Pick two different columns to compare.</p>
       )}
 
-      {result && !result.ok && <div className="notice-box" role="status">{result.message}</div>}
+      {result && !result.ok && <div className="notice-box" role="status" aria-live="polite">{result.message}</div>}
 
       {result && result.ok && (
         <div className="stats-result">

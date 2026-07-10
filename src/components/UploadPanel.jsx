@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { parseWorkbookFile } from "../logic/workbook.js";
 import DataTable from "./DataTable.jsx";
+import { nextTabIndex } from "../logic/a11y/tabsKeyboard.js";
 
 export default function UploadPanel({
   workbook,
@@ -14,6 +15,16 @@ export default function UploadPanel({
   const [dragOver, setDragOver] = useState(false);
   const [parseError, setParseError] = useState("");
   const [activeSheet, setActiveSheet] = useState(0);
+  const sheetTabRefs = useRef([]);
+
+  // B12: standard tablist keyboard support for the sheet tabs.
+  function onSheetTabKeyDown(e, index, count) {
+    const next = nextTabIndex(e.key, index, count);
+    if (next == null) return;
+    e.preventDefault();
+    setActiveSheet(next);
+    sheetTabRefs.current[next]?.focus();
+  }
 
   async function handleFile(file) {
     if (!file) return;
@@ -75,10 +86,15 @@ export default function UploadPanel({
               {workbook.sheets.map((s, i) => (
                 <button
                   key={s.name}
+                  ref={(el) => (sheetTabRefs.current[i] = el)}
+                  id={`sheet-tab-${i}`}
                   role="tab"
                   aria-selected={i === activeSheet}
+                  aria-controls="sheet-preview-panel"
+                  tabIndex={i === activeSheet ? 0 : -1}
                   className={`tab ${i === activeSheet ? "tab-active" : ""}`}
                   onClick={() => setActiveSheet(i)}
+                  onKeyDown={(e) => onSheetTabKeyDown(e, i, workbook.sheets.length)}
                 >
                   {s.name} <span className="dim">({s.rowCount.toLocaleString()})</span>
                 </button>
@@ -86,6 +102,11 @@ export default function UploadPanel({
             </div>
           )}
 
+          <div
+            id="sheet-preview-panel"
+            role={workbook.sheets.length > 1 ? "tabpanel" : undefined}
+            aria-labelledby={workbook.sheets.length > 1 ? `sheet-tab-${activeSheet}` : undefined}
+          >
           <p className="hint">
             Preview of <strong>{sheet.name}</strong> — {sheet.rowCount.toLocaleString()} rows.
             Untick any sensitive column below to keep its values on your computer
@@ -154,6 +175,7 @@ export default function UploadPanel({
               </span>
             </label>
           </fieldset>
+          </div>
         </>
       )}
     </div>

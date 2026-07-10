@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import DataTable from "./DataTable.jsx";
 import RstudioGuide from "./RstudioGuide.jsx";
 import { downloadRowsAsXlsx, downloadRowsAsCsv, downloadText } from "../logic/workbook.js";
+import { nextTabIndex } from "../logic/a11y/tabsKeyboard.js";
 
 export function CopyButton({ text, label = "Copy" }) {
   const [copied, setCopied] = useState(false);
@@ -19,8 +20,27 @@ export function CopyButton({ text, label = "Copy" }) {
   );
 }
 
+const TAB_IDS = ["result", "excel", "r"];
+
 export default function ResultsPanel({ plan, rows }) {
   const [tab, setTab] = useState("result");
+  const tabRefs = useRef([]);
+
+  // B12: standard tablist keyboard support — Left/Right moves and selects,
+  // wrapping at the ends; Home/End jump to the first/last tab.
+  function onTabKeyDown(e, index) {
+    const next = nextTabIndex(e.key, index, TAB_IDS.length);
+    if (next == null) return;
+    e.preventDefault();
+    setTab(TAB_IDS[next]);
+    tabRefs.current[next]?.focus();
+  }
+
+  const tabLabel = {
+    result: `Result table (${rows.length.toLocaleString()} rows)`,
+    excel: "Check it in Excel",
+    r: "Check it in RStudio",
+  };
 
   return (
     <div>
@@ -38,19 +58,26 @@ export default function ResultsPanel({ plan, rows }) {
       </div>
 
       <div className="tabs" role="tablist">
-        <button role="tab" aria-selected={tab === "result"} className={`tab ${tab === "result" ? "tab-active" : ""}`} onClick={() => setTab("result")}>
-          Result table ({rows.length.toLocaleString()} rows)
-        </button>
-        <button role="tab" aria-selected={tab === "excel"} className={`tab ${tab === "excel" ? "tab-active" : ""}`} onClick={() => setTab("excel")}>
-          Check it in Excel
-        </button>
-        <button role="tab" aria-selected={tab === "r"} className={`tab ${tab === "r" ? "tab-active" : ""}`} onClick={() => setTab("r")}>
-          Check it in RStudio
-        </button>
+        {TAB_IDS.map((id, i) => (
+          <button
+            key={id}
+            ref={(el) => (tabRefs.current[i] = el)}
+            id={`results-tab-${id}`}
+            role="tab"
+            aria-selected={tab === id}
+            aria-controls={`results-panel-${id}`}
+            tabIndex={tab === id ? 0 : -1}
+            className={`tab ${tab === id ? "tab-active" : ""}`}
+            onClick={() => setTab(id)}
+            onKeyDown={(e) => onTabKeyDown(e, i)}
+          >
+            {tabLabel[id]}
+          </button>
+        ))}
       </div>
 
       {tab === "result" && (
-        <div>
+        <div id="results-panel-result" role="tabpanel" aria-labelledby="results-tab-result">
           <div className="row-end" style={{ marginBottom: "0.5rem" }}>
             <button className="btn btn-primary" onClick={() => downloadRowsAsXlsx(rows)} disabled={rows.length === 0}>
               Download Excel (.xlsx)
@@ -68,7 +95,7 @@ export default function ResultsPanel({ plan, rows }) {
       )}
 
       {tab === "excel" && (
-        <div>
+        <div id="results-panel-excel" role="tabpanel" aria-labelledby="results-tab-excel">
           <p className="hint">
             Follow these steps in your original Excel file to reproduce the same result by
             hand. If your numbers match the result table, the extraction is correct.
@@ -92,7 +119,7 @@ export default function ResultsPanel({ plan, rows }) {
       )}
 
       {tab === "r" && (
-        <div>
+        <div id="results-panel-r" role="tabpanel" aria-labelledby="results-tab-r">
           <RstudioGuide />
           <h3 className="r-heading">Your script</h3>
           {plan.r_run_notes && (

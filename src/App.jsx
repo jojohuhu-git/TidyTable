@@ -458,7 +458,7 @@ export default function App() {
                 onCancel={() => setPendingDefinitions(null)}
               />
             )}
-            {notice && <div className="notice-box" role="status">{notice}</div>}
+            {notice && <div className="notice-box" role="status" aria-live="polite">{notice}</div>}
             {error && (
               <div className="error-box" role="alert">
                 {error}

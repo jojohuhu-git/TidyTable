@@ -5,6 +5,7 @@
 
 import { foldKey } from "../logic/checkup/normalizers.js";
 import { maxOf } from "../logic/charts/aggregate.js";
+import { buildChartAriaSummary } from "../logic/charts/chartAriaSummary.js";
 
 export const CHART_W = 480;
 export const CHART_H = 300;
@@ -57,8 +58,13 @@ function BarChart({ dataset, fill, title, svgRef }) {
   const zeroX = padL + negMax * scale;
   const rowH = (H - padY - 16) / points.length;
   const barH = Math.min(rowH * 0.62, 34);
+  // B12: a data summary in the aria-label, not just the chart type, so a
+  // screen reader user gets the numbers without seeing the SVG.
+  const ariaLabel = title
+    ? `Bar chart of ${title}: ${buildChartAriaSummary(dataset)}`
+    : `Bar chart: ${buildChartAriaSummary(dataset)}`;
   return (
-    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="chart-svg" role="img" aria-label={title ? `Bar chart of ${title}` : "Bar chart"}>
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="chart-svg" role="img" aria-label={ariaLabel}>
       <ChartTitle title={title} />
       {negMax > 0 && <line x1={zeroX} y1={padY} x2={zeroX} y2={H - 16} stroke="var(--line)" />}
       {points.map((p, i) => {
@@ -124,8 +130,11 @@ function PieChart({ dataset, fill, title, svgRef }) {
   const total = dataset.points.reduce((s, p) => s + p.value, 0) || 1;
   let angle = -Math.PI / 2;
   const greys = ["var(--accent)", "var(--line)", "#c9d6d3", "#9fb7b2"];
+  const ariaLabel = title
+    ? `Pie chart of ${title}: ${buildChartAriaSummary(dataset)}`
+    : `Pie chart: ${buildChartAriaSummary(dataset)}`;
   return (
-    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="chart-svg" role="img" aria-label={title ? `Pie chart of ${title}` : "Pie chart"}>
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="chart-svg" role="img" aria-label={ariaLabel}>
       <ChartTitle title={title} />
       {dataset.points.map((p, i) => {
         const frac = p.value / total;

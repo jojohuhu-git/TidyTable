@@ -155,12 +155,12 @@ export default function ShelfPanel({ workbook }) {
         <div className="shelf-result">
           <p className="stats-testname"><strong>{result.rows.length} rows.</strong>{result.flagText}</p>
           {result.flagRows?.length > 0 && (
-            <div className="notice-box" role="status">
+            <div className="notice-box" role="status" aria-live="polite">
               {result.flagRows.length} row{result.flagRows.length === 1 ? "" : "s"} {result.flagLabel} — decide what to do with them. Nothing was dropped or guessed.
             </div>
           )}
           {result.collisionCount > 0 && (
-            <div className="notice-box" role="status">
+            <div className="notice-box" role="status" aria-live="polite">
               {result.collisionCount} value{result.collisionCount === 1 ? " was" : "s were"} overwritten because the same "{key}" had the same measure more than once — the last one won; check these before trusting the table.
             </div>
           )}

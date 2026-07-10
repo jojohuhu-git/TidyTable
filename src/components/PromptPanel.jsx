@@ -97,7 +97,7 @@ export default function PromptPanel({
           rows" above — the extraction still runs on all of your data, locally.
         </p>
       )}
-      {busy && status && <p className="status-line">{status}</p>}
+      {busy && status && <p className="status-line" aria-live="polite">{status}</p>}
     </div>
   );
 }
