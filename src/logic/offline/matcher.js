@@ -17,6 +17,7 @@ import {
 } from "./synonyms.js";
 import { findValueCandidates, findColumnCandidates, nearestSuggestions, findTypoCandidates } from "./valueMatch.js";
 import { conceptColumnCandidates, valueContentCandidates, isConceptWord } from "./concepts.js";
+import { parseQuantity, convertQuantityToColumn } from "./units.js";
 
 // Words that carry no filter meaning — stripped before a term is resolved.
 const STOP = new Set([
@@ -367,9 +368,14 @@ function valueCondition(candidate, term, { stretched, candidates, allCandidates,
 function resolveCondition(clause, sheet, headers, index, defs, aliasMap) {
   const compar = detectComparator(clause);
   const numMatch = String(clause).match(/-?\d+(?:\.\d+)?/);
+  // Phase 7.3: a "<number> <time-unit>" quantity ("a week", "2 weeks", "48
+  // hours") the digit-only parser can't read. Present it here so the threshold
+  // branch can convert it into the target column's unit.
+  const quantity = parseQuantity(clause);
 
-  // Threshold: a comparator and a number, on a named column.
-  if (compar && numMatch && compar.op !== "=") {
+  // Threshold: a comparator and a number (digit OR a number-word quantity), on
+  // a named column.
+  if (compar && (numMatch || quantity) && compar.op !== "=") {
     const before = String(clause).toLowerCase().split(compar.phrase)[0];
     // Honesty bug 3 (2026-07-10): "not more than 7" / "never over 7" — a
     // negation word right before the comparator flips it; it used to be
@@ -399,10 +405,25 @@ function resolveCondition(clause, sheet, headers, index, defs, aliasMap) {
       }
     }
     if (column) {
-      return {
-        kind: "threshold", column, op, value: Number(numMatch[0]), source: "column", term: clause.trim(),
-        ...(colStretch ? { stretched: true, colStretch: true, candidates: colStretch.candidates, allCandidates: colStretch.allCandidates, via: colStretch.via, colPhrase: colStretch.colPhrase } : {}),
-      };
+      // Phase 7.3: if the clause carried a unit quantity ("2 weeks", "48
+      // hours"), convert it into the column's own unit and remember the
+      // conversion so the answer line can state it. When the column's unit is
+      // unknown (convert returns null), we do NOT guess a raw number — fall
+      // through so the clause blocks/asks honestly instead.
+      let value;
+      let conversionNote = null;
+      if (quantity && quantity.unit) {
+        const conv = convertQuantityToColumn(quantity, column);
+        if (conv) { value = conv.value; conversionNote = conv.note; }
+      }
+      if (value == null && numMatch) value = Number(numMatch[0]);
+      if (value != null) {
+        return {
+          kind: "threshold", column, op, value, source: "column", term: clause.trim(),
+          ...(conversionNote ? { conversionNote } : {}),
+          ...(colStretch ? { stretched: true, colStretch: true, candidates: colStretch.candidates, allCandidates: colStretch.allCandidates, via: colStretch.via, colPhrase: colStretch.colPhrase } : {}),
+        };
+      }
     }
   }
 
@@ -1077,7 +1098,13 @@ function matchTopN(request, topInfo, sheet, headers, index, defs, aliasMap) {
 }
 
 export function conditionPhrase(c) {
-  if (c.kind === "threshold") return `"${c.column}" is ${opWord(c.op)} ${c.value}`;
+  if (c.kind === "threshold") {
+    // Phase 7.3: state the unit conversion in the trust line, so "more than a
+    // week" reads back as "over 7 (from 'a week = 7 days')" — the approximation
+    // is never hidden.
+    const note = c.conversionNote ? ` (from "${c.conversionNote}")` : "";
+    return `"${c.column}" is ${opWord(c.op)} ${c.value}${note}`;
+  }
   if (c.kind === "set") return `"${c.column}" is ${c.op === "not-in" ? "NONE of" : "one of"} ${c.values.join(", ")}`;
   // Bug 3: a negated condition states the negation back plainly, so the user
   // sees the app understood the "not" before trusting the number.

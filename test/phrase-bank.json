@@ -18,7 +18,8 @@
     "dxValue": ["UTI", "pneumonia", "cystitis"],
     "drugValue": ["amoxicillin", "cephalexin"],
     "drugTypo": ["amoxicilin", "amoxacillin", "cephalexn", "cefpodoxim"],
-    "dxTypo": ["pneumnia", "pnuemonia", "cystits"]
+    "dxTypo": ["pneumnia", "pnuemonia", "cystits"],
+    "durationSpoken": ["more than a week", "over 2 weeks", "at least three days", "under a month"]
   },
 
   "entries": [
@@ -161,6 +162,16 @@
       "templates": ["typical {durExact}"],
       "accept": ["answer", "ask"],
       "shape": { "intent": "average", "target": "Duration_days" }
+    },
+    {
+      "id": "spoken-duration-threshold",
+      "note": "Phase 7.3: a number-word + time-unit quantity ('more than a week') converts to a days threshold on Duration_days and answers; the trust line states the conversion. Never confidently the wrong column.",
+      "templates": [
+        "how many records with duration_days {durationSpoken}",
+        "how many records where duration_days is {durationSpoken}"
+      ],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "count", "filterColumn": "Duration_days" }
     },
     {
       "id": "typo-tolerance-asks",
