@@ -186,12 +186,14 @@ the honest Step-3-style message (and AI offer with a key).
 through the Phase-8 "one brain" path (textToChart calls matchRequest first).
 Re-test R6 after P1-3.
 
-**P3-2. Honest handling of two-column chart requests (R7).** (DECISION C)
-Option 1 (small): decline plainly — `That compares two things at once (Drug
-and Diagnosis). I can chart one at a time; pick one, or use Step 7.` Option 2
-(bigger): support grouped/stacked bars for exactly two categorical columns in
-aggregate.js + ChartPreview + Excel recipe + R script. Recommendation: Option
-1 now, Option 2 as its own later plan — it touches every chart surface.
+**P3-2. Honest handling of two-column chart requests (R7) — INTERIM.**
+Until P6-1 ships, decline plainly — `That compares two things at once (Drug
+and Diagnosis). I can chart one at a time for now; pick one, or use Step 7.`
+The silent-drop-and-claim-"exact" behavior is the bug; the decline is the
+stopgap. (Owner revised the original Decision C on 2026-07-11: two-variable
+charts ARE wanted — they are built properly in P6, and this decline is
+replaced by real support there. Do not skip the interim fix: R7's dishonest
+chart must stop at P3 time, before P6 lands.)
 
 **P3-3. Request-aware emphasis ("smartly highlight").**
 - "highlight X" / a value named in the request → that bar in accent color,
@@ -246,6 +248,79 @@ already record every miss and hit locally (Phase 6 bank fuel), but there is
 no UI to see them. A small "Questions I couldn't answer this session" list
 (with the honest reason) turns real usage into the teaching queue — she sees
 exactly which phrasings to teach or request as features next.
+
+## P6 — complex clinical graphics (owner request 2026-07-11: stacked data
+and richer figure types; example — "of patients diagnosed with cystitis,
+highlight the most common antibiotics prescribed or durations chosen")
+
+Scope note first: the owner's cystitis example is TWO different asks.
+(a) "Most common antibiotics among cystitis patients" = cohort filter +
+ranked bar + top-bar emphasis — this is ALREADY covered by P1-3 (plural
+matching), the existing single-value filter path, and P3-3 highlighting; add
+it as an acceptance test there, not new machinery. (b) "The drug MIX within
+each diagnosis" and "the durations chosen" need chart types that don't exist
+yet — that is what P6 builds. Every new type ships across ALL surfaces at
+once: aggregate.js dataset shape, advisor recommendation + plain-English
+reason, ChartPreview SVG, palette rules, chartAriaSummary, chart title,
+Excel chart recipe steps, ggplot2 code (P5-5), and all export paths (P5-1/2/4).
+Load the dataviz skill before each item.
+
+**P6-1. Grouped and stacked bars (two categorical columns).**
+Crosstab dataset in aggregate.js (label column × subgroup column → counts).
+Three layouts, advisor-chosen with the reason said out loud:
+- **Grouped (clustered)** when the question compares subgroup sizes across
+  categories.
+- **Stacked** when the question is composition ("what makes up each bar").
+- **100% stacked** when the request asks for shares/proportions ("mix",
+  "breakdown", "share of") — y-axis in %, n= per bar in the caption.
+Honesty guardrails: subgroups capped at the Okabe-Ito 8 (beyond that, keep
+the top 7 + "Other" with the existing groupSmallIntoOther pattern, stated in
+the caption); a legend is mandatory; per-patient vs per-row grain memory
+applies. Free-text routes (extend chartPlanFromMatch + local parser):
+"drug mix by diagnosis", "breakdown of Drug within each Diagnosis",
+"Drug by Diagnosis stacked", "compare drug use between diagnoses" (R7 —
+flips from the P3-2 interim decline to a real grouped chart). Two-column
+pickers appear under "…or pick by hand" (label + split-by dropdowns).
+
+**P6-2. Distribution charts for numeric columns.**
+- **Histogram** for "durations chosen", "distribution of Duration_days":
+  integer-friendly bins (small whole-number ranges bin at 1 unit — a
+  duration histogram must show 5, 7, 10 days as their own bars, never
+  "4.5–6.5"); bin rule stated in the caption.
+- **Box + dot plot** for numeric-by-group ("duration by diagnosis" as
+  spread, not just the mean): box for quartiles, jittered dots for the raw
+  values when n per group ≤ ~50 (dots are what reviewers trust), medians
+  labeled. The advisor OFFERS this as the alternative whenever an
+  average-by-group bar is drawn ("Averages hide spread — see the spread
+  instead"), and vice versa.
+- Reuses the quartiles/median math already in the stats layer — one brain,
+  no second implementation.
+
+**P6-3. Pareto option for ranked bars.** For any "most common X" ranked bar,
+a one-click "add cumulative % line" (bars sorted largest-first + a line
+showing running share of total, right axis in %). This is the stewardship
+staple for "which few drugs cover most use". Off by default; caption states
+"top 3 of 9 drugs account for 78%". Excel recipe: helper cumulative column +
+combo chart steps; ggplot: geom_col + geom_line/geom_point on a secondary
+axis (or the honest twin-plot alternative if a second axis misleads).
+
+**P6-4. Cohort-scoped charts get first-class wording.** "of cystitis
+patients, …" / "among patients with cystitis, …" chart requests must carry
+the cohort through: title says the cohort ("Antibiotics prescribed —
+cystitis patients only"), caption says n and the filter, and the P3-3
+highlight rules apply inside the cohort. Acceptance: the owner's example
+sentence produces a ranked bar of Drug filtered to cystitis with the top
+bar emphasized, and "durations chosen for cystitis" produces the P6-2
+histogram filtered to cystitis.
+
+**P6-5. Small multiples as the honesty escape hatch.** When a two-variable
+request has too many categories for one readable stacked/grouped chart
+(> ~12 labels × > 8 subgroups), the advisor recommends a grid of small
+single-variable charts (one panel per category, shared axis) instead of
+refusing or cramming. Panels cap at 12 with "…and N more" + the full table.
+
+Deferred (say so in the per-step panel, don't pretend): heatmaps, slope/
+dumbbell pre-post charts, survival curves. Revisit after P6 ships.
 
 ## P5 — publication-ready outputs (owner goal 2026-07-11: data and visuals
 that move cleanly to a PowerPoint slide, manuscript, or conference poster)
@@ -310,15 +385,18 @@ preview and every export path so what you see is what you paste.
 
 - **A. APPROVED**: build P1-1 list-rows intent offline.
 - **B. APPROVED**: Step-2 plain-English cleaning box (P2-3).
-- **C. APPROVED as recommended**: two-column chart requests get the honest
-  decline now; grouped bars are a separate later plan (do NOT build them in
-  this queue).
+- **C. REVISED by owner 2026-07-11 (same day, later message)**: two-variable
+  charts ARE in scope — stacked/grouped/100%-stacked bars, histograms,
+  box+dot plots, Pareto and small multiples are the P6 workstream. The P3-2
+  honest decline remains only as the interim state between P3 and P6.
 - **D. APPROVED as recommended**: pooled ranking counts occurrences by
   default, with the one-time remembered clarify.
 - **E. APPROVED**: all of P4-1 … P4-6, in the suggested order
   P4-1 → P4-2 → P4-6 → P4-4 → P4-3 → P4-5.
 - **P5 workstream APPROVED**, including the two lazy-loaded MIT dependencies
   (pptxgenjs, docx) in P5-4.
+- **P6 workstream APPROVED 2026-07-11** (owner: "showing stacked data is
+  helpful too… think about more complex graphics like these").
 
 No open decisions remain. If execution uncovers a new judgment call, ask the
 owner — do not default.
@@ -329,18 +407,28 @@ owner — do not default.
 2. **P1-1 → P1-2 → P1-3 → P1-4** — capability gaps, list-rows first.
 3. **P2-1 → P2-2 → P2-4 → P2-3** — Step 2 calm-down, per-step panels, then
    the cleaning box (the box builds on the panels' example-chip pattern).
-4. **P3-1 → P3-2 → P3-3** — Step 9 inherits Step 3, then smart highlighting.
-5. **P5-1 → P5-2 → P5-3 → P5-6** — publication exports, zero-dependency
-   parts first.
-6. **P4-1 → P4-2 → P4-6 → P4-4** — robustness/visibility improvements.
-7. **P5-4 (.docx first, which also delivers P4-5; then .pptx) → P5-5** —
-   Office exports and ggplot figures.
-8. **P4-3** — validation-list vocabularies (largest unknown, so last).
+4. **P3-1 → P3-2 (interim decline) → P3-3** — Step 9 inherits Step 3, then
+   smart highlighting. Acceptance here includes the owner's cystitis example
+   part (a): "of cystitis patients, most common antibiotics" → filtered
+   ranked bar, top bar highlighted.
+5. **P6-1 → P6-2 → P6-4 → P6-3 → P6-5** — complex graphics: stacked/grouped
+   first (flips the P3-2 decline to real support), then distributions, then
+   cohort wording, Pareto, small multiples.
+6. **P5-1 → P5-2 → P5-3 → P5-6** — publication exports, zero-dependency
+   parts first (every P6 type must ride these export paths).
+7. **P4-1 → P4-2 → P4-6 → P4-4** — robustness/visibility improvements.
+8. **P5-4 (.docx first, which also delivers P4-5; then .pptx) → P5-5** —
+   Office exports and ggplot figures (ggplot templates must cover the P6
+   types: geom_col position=stack/fill/dodge, geom_histogram, geom_boxplot
+   + geom_jitter).
+9. **P4-3** — validation-list vocabularies (largest unknown, so last).
 
-Rationale for the order: everything in 1–4 changes what the app can DO from
-plain English (the owner's first goal); 5 makes the outputs presentable
-(second goal); 6–8 are durability and reach. P4-5's Word report ships as part
-of P5-4 rather than separately — same dependency, same code path.
+Rationale for the order: 1–5 change what the app can DO from plain English
+and what it can draw (the owner's first goal, including stacked data); 6
+makes the outputs presentable (second goal); 7–9 are durability and reach.
+P6 lands before the export work so the new chart types are built once with
+export in mind, not retrofitted. P4-5's Word report ships as part of P5-4 —
+same dependency, same code path.
 
 ## Execution rules
 

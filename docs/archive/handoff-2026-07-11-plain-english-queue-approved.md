@@ -14,10 +14,14 @@ The folder is cloud-synced — commit locally often or work can silently revert.
    (live app + logic-layer node repros) produced a full fix spec:
    **`.claude/prompts/fix-2026-07-11-steps-2-3-9-plain-english.md`** (untracked;
    the next session should commit it first).
-2. **Owner approved EVERYTHING on 2026-07-11** ("yes to all"): decisions A–E
-   as recommended, all P4 items, and the P5 publication workstream including
-   two lazy-loaded MIT deps (pptxgenjs, docx). No open decisions remain; the
-   spec's DECISIONS section records each resolution.
+2. **Owner approved EVERYTHING on 2026-07-11** ("yes to all"): decisions A–E,
+   all P4 items, the P5 publication workstream including two lazy-loaded MIT
+   deps (pptxgenjs, docx), and — in a later message the same day — the **P6
+   complex-graphics workstream** (stacked/grouped/100%-stacked bars,
+   histograms, box+dot plots, Pareto, small multiples). Note: P6 REVISED
+   original Decision C — two-variable charts are now in scope; P3-2's honest
+   decline is only the interim state until P6-1 lands. No open decisions
+   remain; the spec's DECISIONS section records each resolution.
 3. Key verified findings (repro table R1–R8 in the spec, with exact wording):
    - "show me all / list all …" is mistaken for an undefined clinical term.
    - The teach form ("Remember this and ask again") is offered for declines
@@ -31,9 +35,12 @@ The folder is cloud-synced — commit locally often or work can silently revert.
 ## What's NOT done — the remaining queue
 
 Everything. Execute the spec top to bottom by its own **Execution order**
-section: P0-1…P0-4 → P1-1…P1-4 → P2-1/2/4/3 → P3-1…P3-3 → P5-1/2/3/6 →
-P4-1/2/6/4 → P5-4 (delivers P4-5)/P5-5 → P4-3. Item scopes, repro fixtures,
-and acceptance notes are all in the spec — do not re-derive them.
+section: P0-1…P0-4 → P1-1…P1-4 → P2-1/2/4/3 → P3-1…P3-3 → P6-1/2/4/3/5 →
+P5-1/2/3/6 → P4-1/2/6/4 → P5-4 (delivers P4-5)/P5-5 → P4-3. Item scopes,
+repro fixtures, and acceptance notes are all in the spec — do not re-derive
+them. The owner's acceptance sentence for the chart work: "of patients
+diagnosed with cystitis, highlight the most common antibiotics prescribed or
+durations chosen" — part (a) lands at P3-3, part (b) at P6-2/P6-4.
 
 ## Why this is a good stopping point
 
