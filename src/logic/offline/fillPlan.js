@@ -73,6 +73,11 @@ function buildSummary(match, exec) {
     if (lvl.skippedCount) {
       lines.push(`  (${lvl.skippedCount} row${lvl.skippedCount === 1 ? "" : "s"} had no readable number in "${lvl.skippedColumn}" and were not counted.)`);
     }
+    // Phase 7.6: denominator transparency — blanks in the filter column sit in
+    // the denominator but can never match, so the % is out of ALL of them.
+    if (lvl.blankInColumn) {
+      lines.push(`  (${lvl.blankInColumn} of those ${lvl.denominator} ${unit} were blank in "${lvl.blankColumn}", so the ${lvl.proportion}% is out of all ${lvl.denominator} — the blanks are in the denominator but can never match.)`);
+    }
   }
   lines.push("");
   lines.push("This was answered on your computer, with no data sent anywhere. The Excel steps reproduce the same counts by hand.");
@@ -1305,10 +1310,16 @@ export function fillPlan(match, workbook) {
   // Deterministic text, no new computation, so no plan/routine implications.
   const last = exec.levels[exec.levels.length - 1];
   if (last && last.denominator) {
+    // Phase 7.6: state the denominator in words, and note any blanks in the
+    // filter column that sit in that denominator (a novice's most common silent
+    // stats error — reading n (%) as if the blanks weren't there).
+    const blankNote = last.blankInColumn
+      ? `; ${last.blankInColumn} of them blank in "${last.blankColumn}" (still in the denominator)`
+      : "";
     plan.companion = {
       kind: "n-percent",
       label: "as n (%) — the way a paper reports it",
-      answerText: `${formatNPercent(last.count, last.denominator)} of ${last.denominator} ${last.unit || exec.unit}`,
+      answerText: `${formatNPercent(last.count, last.denominator)} of ${last.denominator} ${last.unit || exec.unit}${blankNote}`,
     };
   }
 
