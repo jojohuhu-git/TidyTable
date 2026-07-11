@@ -20,6 +20,8 @@ import { makeLogEvent, formatCleaningLog } from "./logic/checkup/cleaningLog.js"
 import { newRecipe, addStep, checkupStep, questionStep, defaultRoutineName } from "./logic/recipes/recipe.js";
 import { loadKeyStore } from "./logic/recipes/keyStore.js";
 import { runOffline } from "./logic/offline/runOffline.js";
+import { startRefinement, rejectShown, pickGroup } from "./logic/offline/refine.js";
+import { logRefinement } from "./logic/offline/missLog.js";
 import { summarizeAnswer } from "./logic/offline/fillPlan.js";
 import { buildExampleWorkbook } from "./logic/exampleWorkbook.js";
 import { saveSession, loadSession } from "./logic/sessionPersistence.js";
@@ -53,17 +55,26 @@ function fixedFileName(originalName) {
 
 // Plain-English wording for the "Did you mean…?" box, for a value chip (W2d) or
 // a Phase 3 column chip. Column chips ask which column an everyday word means.
+// Phase 5: a chips round reads its current `options` and the loop's `phrase`; a
+// group round supplies its own discriminating `question` directly.
 function confirmQuestion(pending) {
-  const cands = pending.candidates || [];
+  if (pending.mode === "group" && pending.question) return pending.question;
+  const cands = pending.options || [];
+  const phrase = pending.refine?.phrase;
   const first = cands[0];
   if (first?.kind === "column") {
     return cands.length === 1
       ? `Do you mean the "${first.column}" column?`
-      : `Which column do you mean by "${pending.phrase}"?`;
+      : `Which column do you mean by "${phrase}"?`;
   }
   return cands.length === 1
     ? `Did you mean "${first?.value}" in "${first?.column}"?`
-    : `"${pending.phrase}" could mean a few things — which one?`;
+    : `"${phrase}" could mean a few things — which one?`;
+}
+
+// Phase 5: capitalize the first letter of a plain-word group label for a chip.
+function capFirst(s) {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
 
 export default function App() {
@@ -243,7 +254,17 @@ export default function App() {
       return;
     }
     if (res.kind === "confirm-value") {
-      setPendingConfirm({ phrase: res.phrase, candidates: res.candidates, via: res.via, request });
+      // Phase 5: start a refinement loop. Round 1 renders exactly as before
+      // (same question + chips) but now carries a full ranked pool and a real
+      // "None of these" path that pages to better guesses instead of giving up.
+      const refine = startRefinement({
+        phrase: res.phrase,
+        candidates: res.candidates,
+        allCandidates: res.allCandidates,
+        via: res.via,
+        request,
+      });
+      setPendingConfirm({ refine, mode: "chips", options: refine.shown, groups: null, question: null });
       return;
     }
     // res.kind === "decline"
@@ -254,16 +275,25 @@ export default function App() {
     await runViaClaude(request, res.claudeHint);
   }
 
-  // W2d: the user picked one of the "Did you mean…?" candidates (or typed
-  // something else and picked "Something else", which just cancels). Remember
-  // the mapping for the rest of the session so the same stretch never asks
-  // twice, then re-run the same request — it now resolves immediately via the
-  // alias, with no further stretch to confirm.
+  // W2d: the user picked one of the "Did you mean…?" candidates. Remember the
+  // mapping for the rest of the session so the same stretch never asks twice,
+  // then re-run the same request — it now resolves immediately via the alias,
+  // with no further stretch to confirm.
+  // Phase 5: if this pick came after ≥1 "None of these" round, log the exchange
+  // (round count + rejected COLUMN names only) so the owner sees which questions
+  // needed more than one round.
   function answerConfirm(candidate) {
-    const phrase = pendingConfirm?.phrase;
-    const request = pendingConfirm?.request;
+    const refine = pendingConfirm?.refine;
+    const phrase = refine?.phrase;
+    const request = refine?.request;
     setPendingConfirm(null);
     if (!phrase || !request) return;
+    if (refine.round > 1) {
+      logRefinement({
+        request, phrase, rounds: refine.round, outcome: "refined-success",
+        rejectedColumns: refine.rejected.map((c) => c.column),
+      });
+    }
     const next = new Map(aliasMap);
     next.set(foldKey(phrase), candidate);
     setAliasMap(next);
@@ -279,6 +309,59 @@ export default function App() {
       columnAliasesOverride = columnAliasesFor(nextStore, signature);
     }
     runOfflineFlow(request, {}, null, next, columnAliasesOverride);
+  }
+
+  // Phase 5: "None of these" — reject the round's chips (or a whole group) and
+  // move to a smarter next question. A chips round pages the next best guesses;
+  // a large remainder gets a discriminating question ("the drug given, or the
+  // diagnosis?"). When nothing survives, the loop honestly stops and offers AI.
+  function refineReject() {
+    const pc = pendingConfirm;
+    if (!pc?.refine) return;
+    const step = rejectShown(pc.refine, { headers: workbook?.sheets?.[0]?.headers || [] });
+    if (step.done) {
+      finishRefinementExhausted(step.state);
+      return;
+    }
+    if (step.kind === "group") {
+      setPendingConfirm({ refine: step.state, mode: "group", options: null, groups: step.groups, question: step.question });
+    } else {
+      setPendingConfirm({ refine: step.state, mode: "chips", options: step.options, groups: null, question: null });
+    }
+  }
+
+  // Phase 5: the user picked one group of a discriminating question. Narrow the
+  // pool to that group and show its best guesses as chips — never an answer yet.
+  function refinePickGroup(groupKey) {
+    const pc = pendingConfirm;
+    if (!pc?.refine || !pc.groups) return;
+    const step = pickGroup(pc.refine, groupKey, pc.groups);
+    setPendingConfirm({ refine: step.state, mode: "chips", options: step.options, groups: null, question: null });
+  }
+
+  // Phase 5: every guess was shown and rejected. This is where the offline
+  // engine honestly stops — reading the sentence a different way needs the AI.
+  // Log the exhausted exchange, then show the honest-stop notice (and offer
+  // Claude if a key exists), reusing the existing decline machinery.
+  function finishRefinementExhausted(state) {
+    setPendingConfirm(null);
+    logRefinement({
+      request: state.request, phrase: state.phrase, rounds: state.round,
+      outcome: "refined-exhausted", rejectedColumns: state.rejected.map((c) => c.column),
+    });
+    const message =
+      `I showed you every guess I had for "${state.phrase}" and none of them fit. ` +
+      `This is where the offline engine honestly stops — understanding the sentence a ` +
+      `different way needs the AI.`;
+    if (apiKey) {
+      setNotice("");
+      runViaClaude(
+        state.request,
+        "A local pre-check offered its ranked guesses for an ambiguous reference and the user rejected all of them.",
+      );
+    } else {
+      setNotice(message);
+    }
   }
 
   // Phase 2: the user clicked the companion chip. A "swap-stat" companion
@@ -650,15 +733,34 @@ export default function App() {
             {pendingConfirm && (
               <ClarifyBox
                 question={confirmQuestion(pendingConfirm)}
-                options={pendingConfirm.candidates.map((c, i) => (
-                  c.kind === "column"
-                    // Phase 3: a "did you mean this COLUMN?" chip.
-                    ? { value: String(i), label: `the "${c.column}" column`, detail: c.via || "" }
-                    : { value: String(i), label: String(c.value), detail: `in "${c.column}"` }
-                ))}
-                onAnswer={(i) => answerConfirm(pendingConfirm.candidates[Number(i)])}
+                // Phase 5: a group round shows one option per concept/column
+                // group; a chips round shows candidate chips. Both append a real
+                // "None of these" that pages to a smarter question (chips) or
+                // ends the loop honestly (all guesses rejected).
+                options={
+                  pendingConfirm.mode === "group"
+                    ? [
+                        ...pendingConfirm.groups.map((g) => ({ value: `group:${g.key}`, label: capFirst(g.label) })),
+                        { value: "none", label: "None of these" },
+                      ]
+                    : [
+                        ...pendingConfirm.options.map((c, i) => (
+                          c.kind === "column"
+                            // Phase 3: a "did you mean this COLUMN?" chip.
+                            ? { value: `cand:${i}`, label: `the "${c.column}" column`, detail: c.via || "" }
+                            : { value: `cand:${i}`, label: String(c.value), detail: `in "${c.column}"` }
+                        )),
+                        { value: "none", label: "None of these" },
+                      ]
+                }
+                onAnswer={(value) => {
+                  if (value === "none") { refineReject(); return; }
+                  if (String(value).startsWith("group:")) { refinePickGroup(String(value).slice(6)); return; }
+                  const i = Number(String(value).slice(5)); // "cand:N"
+                  answerConfirm(pendingConfirm.options[i]);
+                }}
                 onCancel={() => setPendingConfirm(null)}
-                cancelLabel="Something else"
+                cancelLabel="Not now"
               />
             )}
             {pendingDefinitions && (

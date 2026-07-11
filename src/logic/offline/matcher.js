@@ -131,8 +131,13 @@ function resolveColumnRef(phrase, headers, { aliasMap, index, numericOnly = fals
   if (numericOnly) cands = cands.filter((c) => numeric(c.column));
   if (!cands.length) return null;
 
-  const candidates = cands.slice(0, 3).map((c) => ({ kind: "column", column: c.column, via: c.via }));
-  return { column: cands[0].column, stretched: true, candidates, via: cands[0].via };
+  // Phase 5: `candidates` stays the existing top-3 (round 1 must render byte-
+  // for-byte as before); `allCandidates` carries the FULL ranked list so the
+  // "None of these" refinement loop has real next-best guesses to page
+  // through instead of inventing new ones.
+  const allCandidates = cands.map((c) => ({ kind: "column", column: c.column, via: c.via }));
+  const candidates = allCandidates.slice(0, 3);
+  return { column: cands[0].column, stretched: true, candidates, allCandidates, via: cands[0].via };
 }
 
 // Precompute, per column, the set of folded cell values so a value scan is quick.
@@ -182,7 +187,7 @@ function resolveGroupBy(text, headers, { aliasMap, index } = {}) {
     if (ref) {
       return {
         column: ref.column, phrase,
-        stretched: ref.stretched, candidates: ref.candidates, via: ref.via,
+        stretched: ref.stretched, candidates: ref.candidates, allCandidates: ref.allCandidates, via: ref.via,
         start, end: end + (stop === -1 ? rest.length : stop),
       };
     }
@@ -335,12 +340,16 @@ function negateCondition(cond, negWords, scopeWords) {
 // value so every downstream surface (execution, Excel steps, transform) stays
 // identical to a plain exact match. `stretched`/`candidates` drive the middle-
 // path "Did you mean…?" confirmation upstream.
-function valueCondition(candidate, term, { stretched, candidates, via, scopeWords } = {}) {
+function valueCondition(candidate, term, { stretched, candidates, allCandidates, via, scopeWords } = {}) {
   return {
     kind: "value", column: candidate.column, op: "=", value: candidate.value,
     source: "value", term,
     stretched: Boolean(stretched),
     ...(candidates && candidates.length > 1 ? { candidates } : {}),
+    // Phase 5: the FULL ranked value-candidate list (not just the strong ties
+    // shown in round 1) — after "None of these", the lower-scored matches are
+    // the honest next guesses, not new candidates invented mid-loop.
+    ...(allCandidates && allCandidates.length > 1 ? { allCandidates } : {}),
     ...(via ? { via } : {}),
     // W2c: words consumed by a column scope ("in urine"), so the residue check
     // in resolveConditions doesn't treat them as a leftover second condition.
@@ -386,13 +395,13 @@ function resolveCondition(clause, sheet, headers, index, defs, aliasMap) {
       const ref = resolveColumnRef(hint, headers, { aliasMap, index, numericOnly: true });
       if (ref) {
         column = ref.column;
-        if (ref.stretched) colStretch = { candidates: ref.candidates, via: ref.via, colPhrase: hint };
+        if (ref.stretched) colStretch = { candidates: ref.candidates, allCandidates: ref.allCandidates, via: ref.via, colPhrase: hint };
       }
     }
     if (column) {
       return {
         kind: "threshold", column, op, value: Number(numMatch[0]), source: "column", term: clause.trim(),
-        ...(colStretch ? { stretched: true, colStretch: true, candidates: colStretch.candidates, via: colStretch.via, colPhrase: colStretch.colPhrase } : {}),
+        ...(colStretch ? { stretched: true, colStretch: true, candidates: colStretch.candidates, allCandidates: colStretch.allCandidates, via: colStretch.via, colPhrase: colStretch.colPhrase } : {}),
       };
     }
   }
@@ -491,7 +500,9 @@ function resolveCondition(clause, sheet, headers, index, defs, aliasMap) {
     const top = candidates[0];
     const strongTies = candidates.filter((c) => c.score === top.score);
     return valueCondition(top, phrase, {
-      stretched: true, candidates: strongTies.slice(0, 3), scopeWords,
+      // Round 1 stays exactly the strong ties (top score only, max 3) — the
+      // whole scored list (all scores) is `allCandidates`, kept for Phase 5.
+      stretched: true, candidates: strongTies.slice(0, 3), allCandidates: candidates, scopeWords,
     });
   }
 
@@ -508,6 +519,7 @@ function resolveCondition(clause, sheet, headers, index, defs, aliasMap) {
       return valueCondition(top, phrase, {
         stretched: true,
         candidates: exCands.filter((c) => c.score === top.score).slice(0, 3),
+        allCandidates: exCands,
         via: `expanded "${phrase}" to "${expanded}"`,
         scopeWords,
       });
@@ -686,8 +698,8 @@ function detectGrain(request, sheet, headers) {
 function cleanCondition(c) {
   // `negated` and the flipped op are NOT stripped — they are semantic, not
   // annotation; execution and the worker transform key off them.
-  const { stretched, candidates, via, scopeWords, negWords, colStretch, colPhrase, ...rest } = c;
-  void stretched; void candidates; void via; void scopeWords; void negWords; void colStretch; void colPhrase;
+  const { stretched, candidates, allCandidates, via, scopeWords, negWords, colStretch, colPhrase, ...rest } = c;
+  void stretched; void candidates; void allCandidates; void via; void scopeWords; void negWords; void colStretch; void colPhrase;
   return rest;
 }
 function cleanStages(stages) {
@@ -698,11 +710,19 @@ function cleanStages(stages) {
 // aggregation target, group-by, or threshold column resolved by concept rather
 // than by an exact header name. Candidates carry kind:"column" so the UI and
 // the alias store treat them as a column mapping, never a cell value.
-function columnConfirm(phrase, candidates, via, request) {
+// Phase 5: `allCandidates`, when the caller has a fuller list than the round-1
+// `candidates`, rides alongside on the needs_confirm result — the "None of
+// these" refinement loop's starting pool. Falls back to `candidates` when a
+// call site has no fuller list (e.g. a single unambiguous stretch).
+function columnConfirm(phrase, candidates, via, request, allCandidates) {
+  const mapCands = (list) => (list || []).map((x) => ({ kind: "column", column: x.column, via: x.via }));
+  const cands = mapCands(candidates);
+  const allCands = allCandidates && allCandidates.length ? mapCands(allCandidates) : cands;
   return {
     status: "needs_confirm",
     phrase,
-    candidates: (candidates || []).map((x) => ({ kind: "column", column: x.column, via: x.via })),
+    candidates: cands,
+    allCandidates: allCands,
     via: via || null,
     request,
   };
@@ -715,14 +735,19 @@ function buildConfirmation(stages, request) {
   // A threshold/column stretch confirms the COLUMN; a value stretch confirms the
   // cell value. They render and remember differently, so tag which one it is.
   if (c.colStretch) {
-    return columnConfirm(c.colPhrase || c.term, c.candidates, c.via, request);
+    return columnConfirm(c.colPhrase || c.term, c.candidates, c.via, request, c.allCandidates);
   }
   const candidates = (c.candidates && c.candidates.length ? c.candidates : [{ column: c.column, value: c.value }])
     .map((x) => ({ column: x.column, value: x.value }));
+  const allCandidatesRaw = c.allCandidates && c.allCandidates.length
+    ? c.allCandidates
+    : (c.candidates && c.candidates.length ? c.candidates : [{ column: c.column, value: c.value }]);
+  const allCandidates = allCandidatesRaw.map((x) => ({ column: x.column, value: x.value }));
   return {
     status: "needs_confirm",
     phrase: c.term,
     candidates,
+    allCandidates,
     via: c.via || null,
     request,
   };
@@ -776,7 +801,7 @@ export function matchRequest(request, workbook, defs, options = {}) {
   // Phase 3: a group-by column reached by concept ("per condition" -> Diagnosis)
   // is a stretch — confirm the column before breaking the answer down by it.
   if (groupBy && groupBy.stretched) {
-    return columnConfirm(groupBy.phrase, groupBy.candidates, groupBy.via, request);
+    return columnConfirm(groupBy.phrase, groupBy.candidates, groupBy.via, request, groupBy.allCandidates);
   }
   const preCohortText = groupBy ? (request.slice(0, groupBy.start) + " " + request.slice(groupBy.end)).trim() : request;
   const cohort = extractCohort(preCohortText);
@@ -802,7 +827,7 @@ export function matchRequest(request, workbook, defs, options = {}) {
     // Phase 3: a target reached by concept ("average treatment length" ->
     // Duration_days) is a stretch — confirm the column, then compute on re-run.
     if (targetRef.stretched) {
-      return columnConfirm(targetRef.phrase || targetSearchText.trim(), targetRef.candidates, targetRef.via, request);
+      return columnConfirm(targetRef.phrase || targetSearchText.trim(), targetRef.candidates, targetRef.via, request, targetRef.allCandidates);
     }
     return matchAggregation(request, intent, targetRef.column, cohort, groupBy, sheet, headers, index, defs, aliasMap);
   }

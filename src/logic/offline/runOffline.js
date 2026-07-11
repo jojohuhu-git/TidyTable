@@ -58,6 +58,9 @@ export function runOffline(request, workbook, options = {}) {
       kind: "confirm-value",
       phrase: match.phrase,
       candidates: match.candidates,
+      // Phase 5: the full ranked pool for the "None of these" refinement loop
+      // (falls back to `candidates` when the matcher had no fuller list).
+      allCandidates: match.allCandidates || match.candidates,
       via: match.via,
       request,
     };
