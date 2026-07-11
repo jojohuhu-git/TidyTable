@@ -80,6 +80,26 @@ function tokens(s) {
   return String(s == null ? "" : s).toLowerCase().split(/[^a-z0-9]+/i).filter(Boolean);
 }
 
+// Phase 5: the single dominant concept a HEADER name points to (or null), so the
+// refinement loop can group a pool of remaining column candidates by idea and ask
+// a discriminating question ("the drug given, or the diagnosis?"). Uses the same
+// conceptHits scoring as everything else; ties break by CONCEPTS declaration order
+// so the choice is deterministic, never guessed.
+export function conceptOfHeader(name) {
+  const hits = conceptHits(tokens(name));
+  if (!hits.size) return null;
+  let best = null;
+  let bestCount = 0;
+  for (const id of Object.keys(CONCEPTS)) {
+    const count = hits.get(id) || 0;
+    if (count > bestCount) {
+      bestCount = count;
+      best = id;
+    }
+  }
+  return best;
+}
+
 // Is this word (any form) a concept seed word? Used to gate concept resolution:
 // a phrase is only concept-resolved when every meaningful word is a concept
 // word, so stray words ("uti duration", "duration per") fall through to the
