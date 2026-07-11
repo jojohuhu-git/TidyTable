@@ -141,9 +141,19 @@ function buildDeclineMessage(match) {
       `(e.g. "how many rows have ... in ${match.targetColumn}").`
     );
   }
-  const lead = UNSUPPORTED_LEAD[match.reason]
-    || "This request needs the AI mode — the offline engine could not answer it with confidence, so it will not guess.";
-  return `${lead} Add your key at the top right to send it to Claude, or rephrase it as a count or share of rows.`;
+  const lead = UNSUPPORTED_LEAD[match.reason];
+  if (lead) {
+    return `${lead} Add your key at the top right to send it to Claude, or rephrase it as a count or share of rows.`;
+  }
+  // P0-2: the honest capability message for a request whose OPERATION the
+  // offline engine has no way to do (sorting, listing/pulling out rows,
+  // reformatting, reshaping). Say plainly what it can and can't do — teaching a
+  // word can't change this, so this path never offers the teach form.
+  return (
+    "I can count, average, total, and rank on this computer, but I can't sort, " +
+    "reformat, or pull out rows yet. Add an AI key (top right) for that, or use " +
+    "the pickers in Steps 7–10."
+  );
 }
 
 // Plain block message when a clinical term is undefined (refuse, don't guess).

@@ -58,6 +58,22 @@ import {
 // used, now applied to the full accumulating list.
 const MAX_RESULTS = 20;
 
+// P0-2: decline reasons a novice CAN fix by teaching the app what a word means
+// (a word → column / word → values mapping). These are all "I know the
+// operation, I just couldn't tell which column/value you meant" cases, so the
+// teach-it form genuinely helps. Every OTHER decline (an unsupported operation
+// like sort/list/reformat/reshape — reason "unrecognized"; or a text column
+// that can't be averaged — "non-numeric-target") is something teaching a word
+// can never change, so those show a plain capability message and NO form.
+const TEACHABLE_DECLINE_REASONS = new Set([
+  "no-conditions",
+  "unsupported-average", "unsupported-sum", "unsupported-groupby",
+  "unsupported-median", "unsupported-quartiles", "unsupported-stdev",
+  "unsupported-min", "unsupported-max", "unsupported-range",
+  "unsupported-describe", "unsupported-topn",
+]);
+const isTeachableDecline = (reason) => TEACHABLE_DECLINE_REASONS.has(reason);
+
 // W1: "DC antibiotics.xlsx" -> "DC antibiotics (cleaned).xlsx". Drops any
 // original extension (csv/xls/xlsx/tsv) and always writes a real .xlsx, since
 // the downloaded copy is an Excel workbook regardless of what was uploaded.
@@ -146,6 +162,11 @@ export default function App() {
   // "teach it" form so a novice can define a word and re-run — no key, no Excel
   // round-trip. { request }.
   const [pendingTeach, setPendingTeach] = useState(null);
+  // P0-4: a small plain-English confirmation that a "remember" genuinely saved
+  // (e.g. 'Learned: "visit date" means the Visit_date column — saved for this
+  // file.'). The stores already work; this just makes the save visible so the
+  // user believes it. Cleared on the next fresh ask.
+  const [learnedNote, setLearnedNote] = useState("");
   // B7: in-app definitions, merged on top of a real Definitions sheet if the
   // workbook has one; resets with the workbook, like excluded columns.
   const [definitionsStore, setDefinitionsStore] = useState(() => emptyDefinitionsStore());
@@ -286,7 +307,7 @@ export default function App() {
   // `storeOverride` lets a just-added definition be used immediately, without
   // waiting a render for `definitionsStore` state to update. `aliasOverride`
   // does the same for a just-confirmed "Did you mean…?" answer.
-  async function runOfflineFlow(request, options, storeOverride, aliasOverride, columnAliasesOverride) {
+  async function runOfflineFlow(request, options, storeOverride, aliasOverride, columnAliasesOverride, teachContext = null) {
     const res = runOffline(request, workbook, {
       ...options,
       definitionsStore: storeOverride || definitionsStore,
@@ -366,9 +387,15 @@ export default function App() {
     // res.kind === "decline"
     if (!apiKey) {
       setNotice(res.message);
-      // Phase 7.9: with no key, offer the teach-it form so the decline isn't a
-      // dead end — the user can define a word and re-run offline.
-      setPendingTeach({ request });
+      // P0-3: if this run is itself a post-teach re-run and it STILL declined,
+      // do not silently re-show the same form (the old infinite loop, which is
+      // why "Remember this" looked dead). The learnedNote above already confirms
+      // the save worked; res.message explains what still can't be done offline.
+      if (teachContext) return;
+      // P0-2: only offer the teach-it form when teaching a word can actually
+      // change the outcome. For an unsupported operation (sort/list/reformat)
+      // or a text column that can't be averaged, the message is the whole answer.
+      if (isTeachableDecline(res.reason)) setPendingTeach({ request });
       return;
     }
     await runViaClaude(request, res.claudeHint);
@@ -547,7 +574,10 @@ export default function App() {
       setAliasStore(persistAliasStore(nextStore));
       columnAliasesOverride = columnAliasesFor(nextStore, signature);
     }
-    runOfflineFlow(request, {}, null, null, columnAliasesOverride);
+    // P0-4: confirm the save is real, then re-run flagged as a post-teach run
+    // (P0-3) so a still-declining re-run explains itself instead of looping.
+    setLearnedNote(`Learned: "${phrase}" means the ${columnName} column — saved for this file.`);
+    runOfflineFlow(request, {}, null, null, columnAliasesOverride, { justTaught: true });
   }
 
   // Phase 7.9: the teach-it form taught a phrase → specific values in a column.
@@ -559,7 +589,9 @@ export default function App() {
     if (!request || !phrase || !columnName) return;
     const next = addDefinitionEntry(definitionsStore, buildDefinitionEntry(phrase, columnName, valuesText));
     setDefinitionsStore(next);
-    runOfflineFlow(request, {}, next);
+    // P0-4 + P0-3, same as teachColumn above.
+    setLearnedNote(`Learned: "${phrase}" means ${valuesText} in the ${columnName} column — saved for this file.`);
+    runOfflineFlow(request, {}, next, null, undefined, { justTaught: true });
   }
 
   // B7: record the typed definition and immediately re-run the question that
@@ -668,6 +700,7 @@ export default function App() {
     setRetryInfo(null);
     setGrainNote(null);
     setPendingTeach(null);
+    setLearnedNote(""); // P0-4: a fresh ask starts without a stale "Learned:" line
     // Phase 7.1: a short follow-up ("of those, …" / "what about X?") is rewritten
     // into a full request using the last answered question, so the previous
     // cohort carries over. Deterministic; if no confident rewrite is possible
@@ -1017,6 +1050,9 @@ export default function App() {
                   Change
                 </button>
               </div>
+            )}
+            {learnedNote && (
+              <div className="notice-box learned-note" role="status" aria-live="polite">{learnedNote}</div>
             )}
             {notice && <div className="notice-box" role="status" aria-live="polite">{notice}</div>}
             {pendingTeach && (
