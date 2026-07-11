@@ -22,6 +22,12 @@ import { loadKeyStore } from "./logic/recipes/keyStore.js";
 import { runOffline } from "./logic/offline/runOffline.js";
 import { startRefinement, rejectShown, pickGroup } from "./logic/offline/refine.js";
 import { logRefinement } from "./logic/offline/missLog.js";
+import { logHit } from "./logic/offline/hitStore.js";
+import { planShapeFromMatch, planShapeFromAiPlan } from "./logic/offline/planShape.js";
+import { detectIntent, detectTopN } from "./logic/offline/synonyms.js";
+import {
+  loadGraduationStore, persistGraduationStore, rememberGraduation,
+} from "./logic/offline/graduationStore.js";
 import { summarizeAnswer } from "./logic/offline/fillPlan.js";
 import { buildExampleWorkbook } from "./logic/exampleWorkbook.js";
 import { saveSession, loadSession } from "./logic/sessionPersistence.js";
@@ -130,6 +136,12 @@ export default function App() {
   // session aliasMap above, this survives reloads AND holds only column names —
   // never a cell value (see aliasStore.js privacy boundary).
   const [aliasStore, setAliasStore] = useState(() => loadAliasStore());
+  // Phase 6: PERSISTENT AI-graduation store. When Claude answers a Step-3 request
+  // the offline engine declined, we remember the value-free plan SHAPE (column
+  // names + aggregation, never a cell value — planShape.js is the chokepoint),
+  // keyed per file shape, so the SAME wording is answered OFFLINE next time with
+  // no API call. Same localStorage-persistence pattern as the alias store.
+  const [graduationStore, setGraduationStore] = useState(() => loadGraduationStore());
   // B8: the privacy badge must stay true — track every actual send to Claude
   // this session (mode at send time), instead of a permanent claim that never
   // updates once a full-mode request has gone out.
@@ -220,8 +232,16 @@ export default function App() {
       // Phase 3: learned per-file column aliases (persistent). The override lets
       // a just-confirmed column chip apply immediately, before state re-renders.
       columnAliases: columnAliasesOverride || columnAliases,
+      // Phase 6: a request that previously "graduated" from an AI answer is
+      // reconstructed and answered offline here, before we would ever offer Claude.
+      graduationStore,
     });
     if (res.kind === "answer") {
+      // Phase 6 in-app growth: a confident offline answer is a success worth
+      // remembering. Record its value-free shape to the hit store (bank-candidate
+      // fuel the owner can export), whether it came straight from the matcher or
+      // was reconstructed from an earlier AI graduation.
+      logHit({ request, shape: planShapeFromMatch(res.match), via: res.match?.graduated ? "graduated" : "offline" });
       // W3: an offline answer is deterministic, so it is safe to replay later
       // without the AI — record it into the routine as a "question" step
       // (original wording + the resolved match), the same way a checkup fix
@@ -446,6 +466,23 @@ export default function App() {
         kind: "question",
         savedToRoutine: false,
       });
+      // Phase 6 AI graduation: remember the value-free SHAPE of this AI answer —
+      // the intent (read offline from the user's own wording) and the column
+      // names that appear verbatim in the returned plan, never a cell value
+      // (planShape.js enforces this). Keyed per file shape so next time the same
+      // wording is answered offline with no API call. Only a genuinely
+      // reconstructable shape (a filter-free numeric/top-N/distinct over a named
+      // column) will actually auto-answer; graduationStore.applyGraduation is the
+      // gate. A hit is logged either way, as owner-curation fuel.
+      if (signature && workbook?.sheets?.[0]?.headers) {
+        const shape = planShapeFromAiPlan({
+          request, plan: newPlan, headers: workbook.sheets[0].headers, detectIntent, detectTopN,
+        });
+        if (shape) {
+          setGraduationStore((store) => persistGraduationStore(rememberGraduation(store, signature, request, shape)));
+          logHit({ request, shape, via: "ai" });
+        }
+      }
       setStatus("");
       setRetryInfo(null);
     } catch (err) {
