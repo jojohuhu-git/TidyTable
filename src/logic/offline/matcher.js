@@ -1018,7 +1018,14 @@ export function matchRequest(request, workbook, defs, options = {}) {
   // question ("combine each patient's rows first?") is about a plain count,
   // not a breakdown, so skip it once a group-by has already been resolved.
   const grain = groupBy ? null : detectGrain(request, sheet, headers);
-  const grainMode = options.grainMode || null;
+  let grainMode = options.grainMode || null;
+  // Phase 7.7: grain memory — a remembered choice for this entity column (from a
+  // previous ask on this file shape) is applied instead of asking again.
+  let grainFromMemory = false;
+  if (grain && !grainMode && options.grainChoices && options.grainChoices[grain.entityColumn]) {
+    grainMode = options.grainChoices[grain.entityColumn];
+    grainFromMemory = true;
+  }
   if (grain && !grainMode) {
     return { status: "grain", grain, request };
   }
@@ -1031,6 +1038,10 @@ export function matchRequest(request, workbook, defs, options = {}) {
     groupColumn: groupBy?.column || null,
     grain: grainMode === "group-then-test" ? grain : null,
     grainMode: grainMode || "row",
+    // Phase 7.7: surfaced so the UI can show a small "counting per patient —
+    // change" note when the answer used a remembered grain, not a fresh ask.
+    grainFromMemory,
+    grainEntity: grain?.entityColumn || null,
     lookedFor: describeLookedFor(cleanedStages, intent, grainMode, grain, groupBy),
     sheetName: sheet.name,
   };

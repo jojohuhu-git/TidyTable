@@ -27,7 +27,13 @@ export function runOffline(request, workbook, options = {}) {
     // W3: `match` is handed back too, so a successful offline answer can be
     // recorded as a replayable "question" step (see recipe.js questionStep) —
     // it carries the resolved columns/values, not just the plan text.
-    return { kind: "answer", plan, resultRows, lookedFor: match.lookedFor, exec, match };
+    return {
+      kind: "answer", plan, resultRows, lookedFor: match.lookedFor, exec, match,
+      // Phase 7.7: let the UI note when a remembered grain choice was applied.
+      grainFromMemory: match.grainFromMemory || false,
+      grainEntity: match.grainEntity || null,
+      grainMode: match.grainMode || "row",
+    };
   }
 
   if (match.status === "needs_definitions") {

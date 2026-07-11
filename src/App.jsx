@@ -46,6 +46,9 @@ import {
 } from "./logic/offline/aliasStore.js";
 import { applyFollowUp, lastFilterValue } from "./logic/offline/followUp.js";
 import { splitCompound } from "./logic/offline/compound.js";
+import {
+  loadGrainStore, persistGrainStore, rememberGrainChoice, forgetGrainChoice, grainChoicesFor,
+} from "./logic/offline/grainStore.js";
 
 // W3: how many result cards "Your results so far" keeps per session, oldest
 // dropped first — the same bounded-history spirit the old run-history chips
@@ -122,6 +125,13 @@ export default function App() {
   // rewritten into a full request deterministically — never a new AI read.
   // { request, swapTerm } — swapTerm is the previous filter value to swap out.
   const [lastQuestion, setLastQuestion] = useState(null);
+  // Phase 7.7: remember the per-patient vs per-row grain choice per file shape,
+  // so it's asked once, not every question. Persistent, holds only column names
+  // and the mode — never a cell value (see grainStore.js).
+  const [grainStore, setGrainStore] = useState(() => loadGrainStore());
+  // A small "counting per patient — change" note shown after an answer that used
+  // a remembered grain choice. { entityColumn, mode, request }.
+  const [grainNote, setGrainNote] = useState(null);
   // B7: in-app definitions, merged on top of a real Definitions sheet if the
   // workbook has one; resets with the workbook, like excluded columns.
   const [definitionsStore, setDefinitionsStore] = useState(() => emptyDefinitionsStore());
@@ -174,6 +184,11 @@ export default function App() {
   const columnAliases = useMemo(
     () => columnAliasesFor(aliasStore, signature),
     [aliasStore, signature],
+  );
+  // Phase 7.7: remembered grain choices for the current file shape.
+  const grainChoices = useMemo(
+    () => grainChoicesFor(grainStore, signature),
+    [grainStore, signature],
   );
 
   // B5/W3: persist the log/recipe/results trail (small JSON — results are
@@ -242,6 +257,10 @@ export default function App() {
       // Phase 6: a request that previously "graduated" from an AI answer is
       // reconstructed and answered offline here, before we would ever offer Claude.
       graduationStore,
+      // Phase 7.7: remembered per-patient vs per-row grain choice for this file.
+      // An explicit override (from "change") wins over current state, which may
+      // not have re-rendered yet after forgetting a choice.
+      grainChoices: options.grainChoices || grainChoices,
     });
     if (res.kind === "answer") {
       // Phase 6 in-app growth: a confident offline answer is a success worth
@@ -270,6 +289,11 @@ export default function App() {
       // Phase 2: offer the deterministic companion (median (IQR) for a mean,
       // mean (SD) for a median, n (%) for a count) as a one-click chip.
       setCompanionOffer(res.plan.companion ? { companion: res.plan.companion, request } : null);
+      // Phase 7.7: if a remembered grain choice was applied (no ask this time),
+      // show the small "counting per patient — change" note.
+      setGrainNote(res.grainFromMemory && res.grainEntity
+        ? { entityColumn: res.grainEntity, mode: res.grainMode, request }
+        : null);
       return;
     }
     if (res.kind === "block") {
@@ -569,6 +593,7 @@ export default function App() {
     setPendingConfirm(null);
     setCompanionOffer(null);
     setRetryInfo(null);
+    setGrainNote(null);
     // Phase 7.1: a short follow-up ("of those, …" / "what about X?") is rewritten
     // into a full request using the last answered question, so the previous
     // cohort carries over. Deterministic; if no confident rewrite is possible
@@ -585,10 +610,34 @@ export default function App() {
 
   // The user answered the grain question: "combine" runs per-entity, "rows" keeps
   // one row at a time. Either way we re-run the same request with that decision.
+  // Phase 7.7: remember the choice per file shape + entity column so we don't
+  // ask again for this file — only the column name and mode are stored.
   function answerGrain(mode) {
-    const request = pendingGrain?.request;
+    const pending = pendingGrain;
     setPendingGrain(null);
-    if (request) runOfflineFlow(request, { grainMode: mode });
+    if (!pending?.request) return;
+    if (signature && pending.grain?.entityColumn && (mode === "row" || mode === "group-then-test")) {
+      const next = rememberGrainChoice(grainStore, signature, pending.grain.entityColumn, mode);
+      setGrainStore(persistGrainStore(next));
+    }
+    runOfflineFlow(pending.request, { grainMode: mode });
+  }
+
+  // Phase 7.7: the user clicked "change" on the remembered-grain note — forget
+  // the stored choice for this entity column and re-ask by re-running the same
+  // question (which now has no memory to apply, so it asks again).
+  function changeGrain() {
+    const note = grainNote;
+    setGrainNote(null);
+    if (!note) return;
+    let choices = grainChoices;
+    if (signature && note.entityColumn) {
+      const next = forgetGrainChoice(grainStore, signature, note.entityColumn);
+      setGrainStore(persistGrainStore(next));
+      choices = grainChoicesFor(next, signature);
+    }
+    // Re-run with the memory cleared so the grain question appears again.
+    runOfflineFlow(note.request, { grainChoices: choices });
   }
 
   function handleWorkbook(wb) {
@@ -607,6 +656,7 @@ export default function App() {
     setPendingConfirm(null);
     setCompanionOffer(null);
     setLastQuestion(null); // Phase 7.1: a fresh file starts a fresh conversation
+    setGrainNote(null); // Phase 7.7: no remembered-grain note until one applies
     setAliasMap(new Map()); // W2d: a session-level alias map, fresh per workbook
     setDefinitionsStore(emptyDefinitionsStore());
     setAiSends([]); // B8: the badge tracks this workbook's sends, not a prior file's
@@ -880,6 +930,18 @@ export default function App() {
                   if (request) runViaClaude(request, "A local pre-check found an undefined clinical term and the user chose to ask the AI instead of defining it.");
                 } : null}
               />
+            )}
+            {grainNote && (
+              <div className="notice-box grain-note" role="status" aria-live="polite">
+                <span>
+                  {grainNote.mode === "group-then-test"
+                    ? `Counting per ${grainNote.entityColumn.replace(/id$/i, "").trim() || "patient"} (each one's rows combined first), as you chose earlier for this file. `
+                    : `Counting rows as they are, as you chose earlier for this file. `}
+                </span>
+                <button type="button" className="btn btn-ghost" onClick={changeGrain}>
+                  Change
+                </button>
+              </div>
             )}
             {notice && <div className="notice-box" role="status" aria-live="polite">{notice}</div>}
             {error && (
