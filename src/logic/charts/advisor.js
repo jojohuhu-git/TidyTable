@@ -27,17 +27,21 @@ export function recommendChart(dataset) {
   if (dataset.kind === "xy") {
     return {
       type: "scatter",
-      reason: `Two number columns — a scatter plot shows how ${dataset.xName} and ${dataset.yName} move together.`,
+      reason: `Scatter plot because "${dataset.xName}" and "${dataset.yName}" are both numbers — a scatter shows how they move together.`,
       alternatives: [],
     };
   }
 
   const n = dataset.points.length;
+  // Phase 8.2: name the column the chart-type decision was made FROM, so the
+  // recommendation is said out loud ("Bar chart because \"Diagnosis\" is
+  // categories") the same honest way Step 3 spells its filters back.
+  const col = dataset.labelName ? `"${dataset.labelName}"` : "the labels";
 
   if (dataset.labelIsTime) {
     return {
       type: "line",
-      reason: "The labels are points in time, so a line shows the change from one to the next.",
+      reason: `Line chart because ${col} is points in time, so a line shows the change from one to the next.`,
       alternatives: [{ type: "bar", reason: "Bars work too if you care about the exact value at each point more than the trend." }],
     };
   }
@@ -50,7 +54,7 @@ export function recommendChart(dataset) {
     return {
       type: "bar",
       layout: "horizontal",
-      reason: `Comparing ${n} categories — laid out as horizontal bars, largest first, so every one is still readable even though there are a lot of them.`,
+      reason: `Horizontal bar chart because ${col} has ${n} categories — laid out largest first, so every one is still readable even though there are a lot of them.`,
       alternatives: [],
       noPieReason: `A ${n}-slice pie would be unreadable; horizontal bars compare all ${n} categories clearly.`,
       offerGroupOther: n > MANY_CATEGORIES * 2,
@@ -73,7 +77,7 @@ export function recommendChart(dataset) {
 
   return {
     type: "bar",
-    reason: `Comparing ${n} categories — bars line them up so the differences are easy to see.`,
+    reason: `Bar chart because ${col} is categories, not numbers or dates — bars line up ${n} of them so the differences are easy to see.`,
     alternatives,
     noPieReason,
   };
