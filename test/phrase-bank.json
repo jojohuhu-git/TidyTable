@@ -1,0 +1,174 @@
+{
+  "_readme": "Phase 6 self-teaching phrase bank. TEMPLATES + slot vocabulary, expanded at test time by phrase-bank.test.js and run through the real offline engine on the built-in example workbook (Encounters: PatientID, Diagnosis, Drug, Duration_days [numeric], Visit_date, Lab_value). Each entry: `templates` (with {slot} placeholders), `accept` (outcomes that count as correct: answer/ask/decline), and `shape` (asserted only when the engine ANSWERS — a mismatch is confident-wrong). Grow this file from hitStore.exportBankCandidates() each release.",
+
+  "slots": {
+    "aggMean": ["average", "mean", "avg"],
+    "aggMedian": ["median"],
+    "aggMax": ["maximum", "highest"],
+    "aggMin": ["minimum", "lowest"],
+    "durExact": ["duration_days", "Duration_days", "duration"],
+    "durConcept": ["length", "treatment length", "course length"],
+    "durPhrase": ["how long patients were treated", "treatment duration", "days of therapy", "length of stay"],
+    "dxExact": ["diagnosis", "Diagnosis"],
+    "dxConcept": ["condition", "indication"],
+    "drugExact": ["drug", "Drug"],
+    "drugConcept": ["medication", "antibiotic"],
+    "freqMost": ["most common", "most frequent", "most commonly used"],
+    "distinctWord": ["how many different", "how many unique", "how many distinct"],
+    "dxValue": ["UTI", "pneumonia", "cystitis"],
+    "drugValue": ["amoxicillin", "cephalexin"]
+  },
+
+  "entries": [
+    {
+      "id": "agg-mean-exact",
+      "note": "average/mean/avg of a column named exactly (or contained) → answers, target Duration_days.",
+      "templates": ["{aggMean} {durExact}"],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "average", "target": "Duration_days" }
+    },
+    {
+      "id": "agg-median-exact",
+      "templates": ["{aggMedian} {durExact}", "{aggMedian} of {durExact}"],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "median", "target": "Duration_days" }
+    },
+    {
+      "id": "agg-max-exact",
+      "templates": ["{aggMax} {durExact}"],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "max", "target": "Duration_days" }
+    },
+    {
+      "id": "agg-min-exact",
+      "templates": ["{aggMin} {durExact}"],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "min", "target": "Duration_days" }
+    },
+    {
+      "id": "agg-mean-concept",
+      "note": "everyday words for the duration column → a confirm-chip stretch (ask); if it answers, it must be Duration_days.",
+      "templates": ["{aggMean} {durConcept}"],
+      "accept": ["ask", "answer"],
+      "shape": { "intent": "average", "target": "Duration_days" }
+    },
+    {
+      "id": "agg-mean-phrase",
+      "note": "full everyday phrasings for 'the treatment duration' → ask or answer, never confidently the wrong column.",
+      "templates": ["{aggMean} {durPhrase}", "what was the {aggMean} {durPhrase}"],
+      "accept": ["ask", "answer"],
+      "shape": { "intent": "average", "target": "Duration_days" }
+    },
+    {
+      "id": "distinct-diagnosis",
+      "templates": ["{distinctWord} diagnoses", "{distinctWord} conditions"],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "distinct", "target": "Diagnosis" }
+    },
+    {
+      "id": "distinct-drug",
+      "templates": ["{distinctWord} drugs", "{distinctWord} antibiotics"],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "distinct", "target": "Drug" }
+    },
+    {
+      "id": "topn-freq-diagnosis",
+      "templates": ["{freqMost} {dxExact}"],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "topN", "topNColumn": "Diagnosis" }
+    },
+    {
+      "id": "topn-freq-drug",
+      "templates": ["{freqMost} {drugExact}"],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "topN", "topNColumn": "Drug" }
+    },
+    {
+      "id": "topn-freq-concept",
+      "note": "'most common condition' → concept stretch (ask); if it answers, Diagnosis.",
+      "templates": ["{freqMost} {dxConcept}"],
+      "accept": ["ask", "answer"],
+      "shape": { "intent": "topN", "topNColumn": "Diagnosis" }
+    },
+    {
+      "id": "count-rows-value",
+      "note": "a count filtered by an exact cell value, no per-patient word → answers, filter on Diagnosis.",
+      "templates": ["how many records with {dxValue}", "how many records had {dxValue}"],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "count", "filterColumn": "Diagnosis" }
+    },
+    {
+      "id": "count-rows-drug-value",
+      "templates": ["how many records with {drugValue}"],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "count", "filterColumn": "Drug" }
+    },
+    {
+      "id": "count-patients-grain",
+      "note": "per-patient count over a repeating ID → asks to combine rows first (grain), an honest clarify.",
+      "templates": ["how many patients with {dxValue}", "how many patients got {drugValue}"],
+      "accept": ["ask", "answer"],
+      "shape": { "intent": "count", "filterColumn": "Diagnosis" }
+    },
+    {
+      "id": "negation-count",
+      "note": "negation must invert, not silently answer the opposite (Phase 1 honesty seed).",
+      "templates": ["how many records without {dxValue}", "how many records did not have {dxValue}"],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "count", "filterColumn": "Diagnosis" }
+    },
+    {
+      "id": "honesty-nonnumeric-decline",
+      "note": "MUST decline: averaging a text column is the classic never-guess violation. Any confident answer here is confident-wrong.",
+      "templates": ["{aggMean} {dxExact}", "{aggMean} {drugExact}"],
+      "accept": ["decline", "ask"]
+    },
+    {
+      "id": "honesty-unknown-column-decline",
+      "note": "MUST decline: no such column of numbers to average.",
+      "templates": ["{aggMean} age", "what's the {aggMean} age", "{aggMean} cost"],
+      "accept": ["decline", "ask"]
+    },
+    {
+      "id": "groupby-agg",
+      "note": "a 'per X'/'for each X' breakdown of a numeric column → answers, broken down by the group column.",
+      "templates": ["{aggMean} {durExact} for each {dxExact}", "{aggMean} {durExact} per {drugExact}"],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "average", "target": "Duration_days" }
+    },
+    {
+      "id": "groupby-count",
+      "templates": ["how many records per {dxExact}", "how many records for each {drugExact}"],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "count" }
+    },
+    {
+      "id": "describe-summarize",
+      "templates": ["summarize the {durExact}", "describe {durExact}"],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "describe", "target": "Duration_days" }
+    },
+    {
+      "id": "range-of",
+      "templates": ["what is the range of {durExact}", "range of {durExact}"],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "range", "target": "Duration_days" }
+    },
+    {
+      "id": "typical-is-average",
+      "templates": ["typical {durExact}"],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "average", "target": "Duration_days" }
+    },
+    {
+      "id": "aspirational-everyday-gaps",
+      "note": "Genuine novice phrasings the plan aspires to but the engine may not place yet. Recorded honestly: an ask/answer is a pass, a decline is a REAL miss the self-teaching loop (hit store + AI graduation) is meant to close over releases. No shape is asserted, so a spontaneous correct answer still passes and can never be counted confident-wrong.",
+      "templates": [
+        "which {drugExact} was used the most",
+        "how spread out are the {durExact}",
+        "how variable are the {durExact}"
+      ],
+      "accept": ["answer", "ask"]
+    }
+  ]
+}
