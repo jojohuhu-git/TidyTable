@@ -477,3 +477,7 @@ body {
 /* Phase 7.4: compound "and" result — each part stacked with a divider. */
 .compound-part { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 0.6rem; }
 .compound-part:first-of-type { border-top: none; margin-top: 0; padding-top: 0; }
+
+/* Phase 7.8: "show the rows behind this number" reveal. */
+.behind-box { margin: 0.6rem 0; }
+.behind-rows { margin-top: 0.5rem; }

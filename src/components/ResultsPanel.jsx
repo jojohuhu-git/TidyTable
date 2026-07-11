@@ -24,6 +24,7 @@ const TAB_IDS = ["result", "excel", "r"];
 
 export default function ResultsPanel({ plan, rows }) {
   const [tab, setTab] = useState("result");
+  const [showBehind, setShowBehind] = useState(false);
   const tabRefs = useRef([]);
 
   // Phase 7.4: a compound "and" question is shown as one card with each part's
@@ -78,6 +79,31 @@ export default function ResultsPanel({ plan, rows }) {
         <h3>{plan.engine === "offline" ? "What was done (answered on this computer)" : "What the AI did"}</h3>
         <p style={{ whiteSpace: "pre-wrap" }}>{plan.summary}</p>
       </div>
+
+      {/* Phase 7.8: reveal the actual rows behind the count — a trust-builder.
+          The rows are the user's own data, shown here on this computer only. */}
+      {plan.behind && (
+        <div className="behind-box">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            aria-expanded={showBehind}
+            onClick={() => setShowBehind((v) => !v)}
+          >
+            {showBehind ? "Hide the rows behind this number" : `Show the ${plan.behind.count} rows behind this number`}
+          </button>
+          {showBehind && (
+            <div className="behind-rows">
+              <p className="dim">These are {plan.behind.label} — check the filter did what you meant. Shown on this computer only.</p>
+              {plan.behind.rows.length === 0 ? (
+                <p className="hint">No rows matched — the filter excluded everything.</p>
+              ) : (
+                <DataTable rows={plan.behind.rows} maxRows={200} />
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="tabs" role="tablist">
         {TAB_IDS.map((id, i) => (

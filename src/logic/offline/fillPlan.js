@@ -1304,6 +1304,23 @@ export function fillPlan(match, workbook) {
       "Use the Excel steps to reproduce the same numbers by hand.",
   };
 
+  // Phase 7.8: "show the rows behind this number". The matched rows that
+  // produced the headline count are attached so the UI can reveal them on click
+  // — a trust-builder and error-catcher (a novice sees at a glance if the filter
+  // wasn't what they meant). These are the user's own rows, shown locally; they
+  // are never sent anywhere. Only offered for a plain count/share (the "count"
+  // the plan means); a group-by/aggregation/top-N answer already shows its rows.
+  if (exec.mode === "row" && Array.isArray(exec.matchedRows)) {
+    const last = exec.levels[exec.levels.length - 1];
+    plan.behind = {
+      rows: exec.matchedRows,
+      count: exec.matchedRows.length,
+      label: last
+        ? `the ${exec.matchedRows.length} ${exec.unit} where ${last.description}`
+        : `all ${exec.matchedRows.length} ${exec.unit}`,
+    };
+  }
+
   // Phase 2 "anticipate & suggest": a count/share answer offers its final
   // level restated in the clinical "n (%)" convention — same numbers the
   // levels table already shows, formatted the way a paper reports them.
