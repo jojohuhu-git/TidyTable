@@ -37,6 +37,16 @@ function timeSortKey(label) {
   return null;
 }
 
+// Phase 8.3: format a COUNT bar's clinical label — "12 (34%)" — as a share of
+// the cohort denominator captured at grouping time (dataset.countTotal). Whole
+// percent, the n (%) convention clinicians paste into tables. Falls back to the
+// bare number when there is no denominator (a sum/average total, or an empty
+// cohort), so a non-share value is never dressed up as a percentage.
+export function countLabel(value, countTotal) {
+  if (countTotal == null || countTotal <= 0) return String(value);
+  return `${value} (${Math.round((value / countTotal) * 100)}%)`;
+}
+
 // P1-6: a spread of a 200k+-element array (Math.max(...arr)) blows the call
 // stack (RangeError). A plain reduce loop has no such limit.
 export function maxOf(values, fallback = 0) {
@@ -178,9 +188,15 @@ export function buildDataset(sheet, labelCol, valueCol, options = {}) {
     // categories in first-appearance order.
     points = [...points].sort((a, b) => b.value - a.value);
   }
+  const isCount = !(aggMode === "average" || (aggMode === "sum" && valueCol && valueNum));
   const valueName = aggMode === "average" ? `average ${valueCol}`
     : aggMode === "sum" && valueCol && valueNum ? `total ${valueCol}`
       : "count";
+  // Phase 8.3: the cohort denominator behind a COUNT chart, captured on the
+  // FULL grouping (before any top-N cap or "Other" fold) so an n (%) label is a
+  // share of the whole cohort, not just the bars still on screen. Only a count
+  // is a share of a whole — a sum/average total is not, so it carries no %.
+  const countTotal = isCount ? points.reduce((s, p) => s + p.value, 0) : null;
   return {
     kind: "categorical",
     points,
@@ -188,6 +204,7 @@ export function buildDataset(sheet, labelCol, valueCol, options = {}) {
     valueName,
     labelName: labelCol,
     filter,
+    ...(isCount ? { countTotal } : {}),
     ...(noDataGroups.length ? { noDataGroups } : {}),
   };
 }

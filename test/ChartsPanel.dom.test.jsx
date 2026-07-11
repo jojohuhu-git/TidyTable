@@ -21,4 +21,13 @@ describe("ChartsPanel recommends and previews a chart", () => {
     expect(screen.getByText(/make this chart in excel/i)).toBeInTheDocument();
     expect(screen.getByText(/Insert tab/i)).toBeInTheDocument();
   });
+
+  it("Phase 8.3: labels count bars as n (%) of the cohort", () => {
+    render(<ChartsPanel sheet={wardSheet()} />);
+    fireEvent.change(screen.getByRole("combobox", { name: /labels/i }), { target: { value: "Ward" } });
+    // North 5, South 3, East 2 → total 10 → North's bar reads "5 (50%)".
+    const svg = document.querySelector("svg.chart-svg");
+    expect(svg.textContent).toMatch(/5 \(50%\)/);
+    expect(svg.textContent).toMatch(/3 \(30%\)/);
+  });
 });
