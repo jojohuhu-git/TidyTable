@@ -64,7 +64,10 @@ function niceMax(v) {
 // the long-list path only change the height and the color ramp.
 function BarChart({ dataset, fill, title, svgRef, layout }) {
   const padL = 130;
-  const padR = 40;
+  // Phase 8.3: an n (%) value label ("2 (33%)") is wider than a bare number, so
+  // the right margin has to leave room or the trailing ")" clips off the SVG.
+  const isCountBars = dataset.valueName === "count" && dataset.countTotal != null;
+  const padR = isCountBars ? 72 : 40;
   const padY = 16 + (title ? TITLE_PAD : 0);
   const points = dataset.points;
   // A "long" list grows the canvas; a short one keeps the classic 300px chart.

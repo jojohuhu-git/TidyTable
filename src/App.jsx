@@ -123,6 +123,9 @@ export default function App() {
   // Phase 8.4: a "Chart this" click seeds Step 9 with a request; the nonce lets
   // the same request re-trigger the chart if clicked again.
   const [chartSeed, setChartSeed] = useState(null); // { request, nonce }
+  // Phase 8.4: Step 9 lives inside the collapsible "Analyze & chart" group;
+  // "Chart this" opens it so the chart the click just built is actually visible.
+  const [analyzeGroupOpen, setAnalyzeGroupOpen] = useState(false);
   const chartsRef = useRef(null);
   const [keyStore, setKeyStore] = useState(() => loadKeyStore());
   const [notice, setNotice] = useState(""); // plain, non-error message (e.g. "add a definition")
@@ -246,7 +249,9 @@ export default function App() {
   // built from the same plan the answer used, never a re-typed guess.
   function chartThis(request) {
     setChartSeed({ request, nonce: Date.now() });
-    requestAnimationFrame(() => chartsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    setAnalyzeGroupOpen(true); // reveal Step 9 so the new chart is visible
+    // Scroll after the section has a chance to expand.
+    requestAnimationFrame(() => requestAnimationFrame(() => chartsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })));
   }
 
   // Decide if an answered question can be charted, cheaply, at record time —
@@ -1112,7 +1117,7 @@ export default function App() {
         )}
 
         {workbook && (
-          <details className="step-group">
+          <details className="step-group" open={analyzeGroupOpen} onToggle={(e) => setAnalyzeGroupOpen(e.currentTarget.open)}>
             <summary>Analyze &amp; chart — compare groups, run models, make a chart</summary>
             <section className="card">
               <h2><span className="step-label">Step 7</span> — Compare two groups (statistics)</h2>
