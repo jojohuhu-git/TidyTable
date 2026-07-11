@@ -30,4 +30,12 @@ describe("ChartsPanel recommends and previews a chart", () => {
     expect(svg.textContent).toMatch(/5 \(50%\)/);
     expect(svg.textContent).toMatch(/3 \(30%\)/);
   });
+
+  it("Phase 8.4: a seed from 'Chart this' auto-fills the box and draws the chart", () => {
+    render(<ChartsPanel sheet={wardSheet()} seed={{ request: "patients by ward", nonce: 1 }} />);
+    // The request lands in the box and the chart draws without typing.
+    expect(screen.getByPlaceholderText(/organisms in urine/i).value).toBe("patients by ward");
+    expect(screen.getByText(/Recommended: bar chart/i)).toBeInTheDocument();
+    expect(document.querySelector("svg.chart-svg")).not.toBeNull();
+  });
 });

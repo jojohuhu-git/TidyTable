@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { buildDataset, groupSmallIntoOther, applyRankCap } from "../logic/charts/aggregate.js";
 import { recommendChart } from "../logic/charts/advisor.js";
 import { excelChartSteps } from "../logic/charts/excelChart.js";
@@ -16,7 +16,7 @@ import ClarifyBox from "./ClarifyBox.jsx";
 // offered but collapsed. Many categories draw as a horizontal all-rows bar
 // chart (never refused); grouping the smallest into "Other" is offered, never
 // forced.
-export default function ChartsPanel({ sheet }) {
+export default function ChartsPanel({ sheet, seed }) {
   const columns = sheet.headers.map((h) => h.name);
   // B9: the value dropdown used to list every column as "total X", including
   // text ones — picking a text column then quietly fell back to a count.
@@ -50,10 +50,10 @@ export default function ChartsPanel({ sheet }) {
   // stretch (abbreviation, partial/fuzzy match, ambiguous column) → confirm
   // first, the same middle path Step 3 uses. Nothing resolvable → say so and
   // leave the dropdowns for the user, never guess.
-  function runText() {
+  function runText(requestText = text) {
     setTextNote("");
     setPendingConfirm(null);
-    const res = resolveChartRequest(text, sheet);
+    const res = resolveChartRequest(requestText, sheet);
     if (res.status !== "resolved") {
       setTextNote(res.message);
       return;
@@ -65,6 +65,16 @@ export default function ChartsPanel({ sheet }) {
     applyPlan(res);
     if (res.ignored) setTextNote(`Charting ${res.lookedFor} I couldn't place "${res.ignored}", so it was left out — add it with the pickers below if it matters.`);
   }
+
+  // Phase 8.4: a "Chart this" click from a Step 3 answer seeds the request and
+  // runs it through the same shared pipeline — the box fills in and the chart
+  // draws with no re-typing. The nonce makes a repeat click re-trigger.
+  useEffect(() => {
+    if (!seed?.request) return;
+    setText(seed.request);
+    runText(seed.request);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed?.nonce]);
 
   const baseDataset = useMemo(() => {
     if (!labelCol) return null;
@@ -102,7 +112,7 @@ export default function ChartsPanel({ sheet }) {
             onKeyDown={(e) => { if (e.key === "Enter") runText(); }}
           />
         </label>
-        <button type="button" className="btn btn-primary" onClick={runText} disabled={!text.trim()}>
+        <button type="button" className="btn btn-primary" onClick={() => runText()} disabled={!text.trim()}>
           Make this chart
         </button>
       </div>

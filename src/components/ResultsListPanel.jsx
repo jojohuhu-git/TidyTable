@@ -7,7 +7,7 @@ import ResultsPanel from "./ResultsPanel.jsx";
 // computer are automatically saved into the routine below (see App.jsx and
 // recipe.js questionStep); an AI answer is shown too, but is not saved into
 // the routine, since replay never calls the AI.
-export default function ResultsListPanel({ results, expandedId, onToggle, onRemove }) {
+export default function ResultsListPanel({ results, expandedId, onToggle, onRemove, onChart }) {
   if (!results.length) {
     return (
       <p className="empty-state">
@@ -45,6 +45,17 @@ export default function ResultsListPanel({ results, expandedId, onToggle, onRemo
                     Not saved to your routine (used AI)
                   </span>
                 )
+              )}
+              {/* Phase 8.4: a breakdown/top-N/count answer offers one-click
+                  charting of the very dataset it computed — no re-typing. */}
+              {r.chartRequest && onChart && (
+                <button
+                  type="button"
+                  className="btn btn-ghost result-card-chart"
+                  onClick={() => onChart(r.chartRequest)}
+                >
+                  Chart this
+                </button>
               )}
               <button
                 type="button"
