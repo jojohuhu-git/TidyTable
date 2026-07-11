@@ -42,6 +42,12 @@ export function planShapeFromMatch(match) {
   if (shape.target) columns.add(shape.target);
   if (shape.group) columns.add(shape.group);
   if (shape.topN?.column) columns.add(shape.topN.column);
+  // Phase 7.5: a Table-1 shape is its set of summarized columns (names only —
+  // never a cell value, consistent with the rest of this module).
+  if (match.table1?.columns) {
+    for (const c of match.table1.columns) columns.add(c);
+    shape.table1 = { columns: [...match.table1.columns] };
+  }
   shape.columns = [...columns];
   return stripValues(shape);
 }

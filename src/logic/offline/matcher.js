@@ -652,6 +652,67 @@ function isUnsupportedAggregationResidue(term) {
   return GROUP_WORDS.some((g) => lower === g || lower.startsWith(`${g} `));
 }
 
+// Phase 7.5: cue words that mark a "summarize these columns" request. Stripped
+// before the remaining fragments are read as a column list.
+const TABLE1_STRIP = [
+  "table 1", "table one", "baseline characteristics", "descriptive statistics",
+  "descriptive stats", "summarize", "summarise", "summary of", "summary",
+  "describe", "description of", "profile of", "overview of",
+];
+
+// Pull the columns named in a Table-1 request. Splits on commas / "and" / "&",
+// strips cue words, and resolves each fragment to a real column — EXACT or
+// contained header, or a NON-stretched concept hit only (a stretch would need a
+// confirm chip, out of scope for the proactive Table-1 offer). Returns the
+// resolved columns (in order, deduped) plus whether every meaningful fragment
+// resolved and how many there were, so the caller can tell a clean column list
+// from a filter question that merely mentions a column.
+function table1Columns(request, headers, opts) {
+  let t = ` ${String(request).toLowerCase()} `;
+  for (const cue of TABLE1_STRIP) {
+    t = t.replace(new RegExp(`\\b${cue.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g"), " ");
+  }
+  const frags = t.split(/,|\band\b|&|\bplus\b/i).map((s) => s.trim()).filter(Boolean);
+  const columns = [];
+  let resolved = 0;
+  let meaningful = 0;
+  for (const f of frags) {
+    const phrase = termWords(f).join(" ");
+    if (!phrase) continue; // a pure-filler fragment doesn't count for or against
+    meaningful += 1;
+    let col = fuzzyColumn(phrase, headers) || fuzzyColumn(termWords(f).map(singularize).join(" "), headers);
+    if (!col) {
+      const ref = resolveColumnRef(phrase, headers, opts);
+      if (ref && !ref.stretched) col = ref.column;
+    }
+    if (col) {
+      resolved += 1;
+      if (!columns.includes(col)) columns.push(col);
+    }
+  }
+  return { columns, allResolved: meaningful > 0 && resolved === meaningful, fragCount: meaningful };
+}
+
+// Phase 7.5: is this a Table-1 request? Two triggers: a describe/summarize cue
+// naming 2+ columns, OR a bare column list (no operation, no filter) of 2+
+// columns. A cohort/group-by/filtered request is never a Table-1.
+function detectTable1(request, intent, cohort, groupBy, headers, opts) {
+  if (cohort || groupBy) return null;
+  const describe = Boolean(intent && intent.intent === "describe");
+  if (intent && !describe) return null; // some other operation was asked for
+  const { columns, allResolved, fragCount } = table1Columns(request, headers, opts);
+  if (columns.length < 2) return null;
+  if (!describe && !(allResolved && fragCount >= 2)) return null;
+  return { columns };
+}
+
+export function describeLookedForTable1(columns) {
+  const list = columns.length <= 1
+    ? columns.map((c) => `"${c}"`).join("")
+    : columns.slice(0, -1).map((c) => `"${c}"`).join(", ") + ` and "${columns[columns.length - 1]}"`;
+  return `Building a Table 1 summarizing ${list} — n (%) for categories, median (IQR) and mean (SD) for numbers.`;
+}
+
 // Pull the base cohort clause out ("of patients with pyelonephritis"). Returns
 // { term, start, end } describing the term phrase and where the whole clause sits
 // in the original text, or null.
@@ -844,6 +905,22 @@ export function matchRequest(request, workbook, defs, options = {}) {
   }
   const preCohortText = groupBy ? (request.slice(0, groupBy.start) + " " + request.slice(groupBy.end)).trim() : request;
   const cohort = extractCohort(preCohortText);
+
+  // Phase 7.5: a Table-1 request ("summarize diagnosis, drug and duration", or a
+  // bare list of 2+ columns) is intercepted before the single-column describe /
+  // aggregation handling, since it names several columns and no single target.
+  const table1 = detectTable1(request, intent, cohort, groupBy, headers, { aliasMap, index });
+  if (table1) {
+    return {
+      status: "confident",
+      intent: "table1",
+      table1: { columns: table1.columns },
+      stages: [],
+      grainMode: "row",
+      lookedFor: describeLookedForTable1(table1.columns),
+      sheetName: sheet.name,
+    };
+  }
 
   // A3 Level 2 / Phase 2: average/sum/distinct/median/quartiles/stdev/min/max/
   // range/describe try to resolve a real numeric/target column before anything

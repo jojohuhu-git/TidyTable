@@ -146,6 +146,17 @@
       "shape": { "intent": "count" }
     },
     {
+      "id": "table1-builder",
+      "note": "Phase 7.5: naming 2+ columns to summarize (or a bare column list) builds a publication-style Table 1. Answers/asks; the plan shape is intent 'table1'.",
+      "templates": [
+        "summarize {dxExact}, {drugExact} and {durExact}",
+        "{dxExact}, {drugExact} and {durExact}",
+        "describe {dxExact} and {durExact}"
+      ],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "table1" }
+    },
+    {
       "id": "describe-summarize",
       "templates": ["summarize the {durExact}", "describe {durExact}"],
       "accept": ["answer", "ask"],

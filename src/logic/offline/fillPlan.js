@@ -11,6 +11,7 @@ import { excelRowExtent, excelRowExtentNote } from "../workbook.js";
 import { describeLookedForAggregation } from "./matcher.js";
 import { formatMeanSD, formatMedianIQR, formatNPercent } from "./clinicalFormat.js";
 import { formatDurationLabel, inferColumnUnit } from "./units.js";
+import { executeTable1, table1ResultRows, buildTable1Summary, table1ColumnMeta, numericSummaryText } from "./table1.js";
 
 const RESULT_KEYS = { checked: "What was checked", matched: "Matched", out: "Out of", share: "Share" };
 // Phase 2 (2026-07-10): descriptive-statistics labels alongside the original
@@ -666,6 +667,9 @@ function buildCompanion(match, workbook, sheet) {
 // replay, to build the plain-report line for an auto-recorded question step.
 // Never a guess: it just reads the same `exec` shape fillPlan already builds.
 export function summarizeAnswer(match, exec) {
+  if (match.table1) {
+    return `Table 1: ${exec.columns.length} characteristic${exec.columns.length === 1 ? "" : "s"}`;
+  }
   if (match.intent === "describe") {
     return exec.n === 0 ? "no readable numbers" : `n=${exec.n}, mean ${exec.mean}, median ${exec.median}`;
   }
@@ -1170,10 +1174,103 @@ function fillTopNPlan(match, workbook, sheet) {
   return { plan, resultRows, exec };
 }
 
+// Phase 7.5: the Table-1 builder — a publication-style descriptive table over
+// several named columns at once. Categorical columns as n (%) per level,
+// numeric columns as median (IQR) with mean (SD), missing counts per column.
+// The worker transform rebuilds the same table by inlining the exact same
+// numeric-summary and n(%) formatters (toString()'d, like STATS_BLOCK), so a
+// replayed table is byte-for-byte what the app showed.
+function buildTable1TransformCode(match, sheet) {
+  const cols = table1ColumnMeta(match, sheet);
+  return `
+var foldKey = function (v) { return String(v).trim().toLowerCase().replace(/\\s+/g, " "); };
+${toNumber.toString()}
+${STATS_BLOCK}
+${numericSummaryText.toString()}
+${formatNPercent.toString()}
+var COLS = ${JSON.stringify(cols)};
+var SHEET = ${JSON.stringify(match.sheetName)};
+var rows = sheets[SHEET] || [];
+var TOTAL = rows.length;
+var out = [];
+for (var ci = 0; ci < COLS.length; ci++) {
+  var col = COLS[ci];
+  if (col.numeric) {
+    var nums = []; var missing = 0;
+    for (var i = 0; i < rows.length; i++) { var n = toNumber(rows[i][col.name]); if (n == null) { missing++; continue; } nums.push(n); }
+    var st = computeStats(nums);
+    var row = {}; row["Characteristic"] = col.name; row["Summary"] = numericSummaryText(st, col.unit); row["Missing"] = missing;
+    out.push(row);
+  } else {
+    var groups = {}; var order = []; var blank = 0;
+    for (var j = 0; j < rows.length; j++) { var v = rows[j][col.name]; if (v == null || String(v).trim() === "") { blank++; continue; } var k = foldKey(v); if (!groups[k]) { groups[k] = { label: v, count: 0 }; order.push(k); } groups[k].count++; }
+    var entries = []; for (var o = 0; o < order.length; o++) entries.push(groups[order[o]]);
+    entries.sort(function (a, b) { return b.count - a.count; });
+    var denom = TOTAL - blank;
+    var hdr = {}; hdr["Characteristic"] = col.name + " — n (%)"; hdr["Summary"] = ""; hdr["Missing"] = blank; out.push(hdr);
+    for (var e = 0; e < entries.length; e++) { var lr = {}; lr["Characteristic"] = "  " + entries[e].label; lr["Summary"] = formatNPercent(entries[e].count, denom); lr["Missing"] = ""; out.push(lr); }
+  }
+}
+return out;
+`.trim();
+}
+
+function buildTable1ExcelSteps(match, exec, sheet) {
+  const extent = excelRowExtent(sheet);
+  const cols = table1ColumnMeta(match, sheet);
+  const catCols = cols.filter((c) => !c.numeric).map((c) => `"${c.name}"`).join(", ");
+  const numCols = cols.filter((c) => c.numeric).map((c) => `"${c.name}"`).join(", ");
+  const steps = [];
+  if (catCols) {
+    steps.push({
+      title: "Categorical columns — n (%)",
+      where: `Sheet "${sheet.name}"`,
+      formula: "",
+      instruction:
+        `For each of ${catCols}, build a PivotTable with the column in Rows and Count of any column in Values to get n per level, ` +
+        "then divide each by the number of rows that have a value in that column (blank/unreadable cells excluded) for the percentage. It should match the result table.",
+      teaches: "A PivotTable count per category value, over its non-blank denominator, is the n (%) a paper's Table 1 reports.",
+    });
+  }
+  if (numCols) {
+    steps.push({
+      title: "Numeric columns — median (IQR) and mean (SD)",
+      where: `Sheet "${sheet.name}"`,
+      formula: "",
+      instruction:
+        `For each of ${numCols}, run MEDIAN, QUARTILE.INC(range,1) and QUARTILE.INC(range,3) for the median and IQR, and AVERAGE and STDEV.S for the mean and SD. ` +
+        "COUNT gives n; rows minus COUNT gives the missing count. It should match the result table.",
+      teaches: "Median (IQR) is the robust summary for skewed data; mean (SD) is the symmetric-data summary — a Table 1 usually shows the median (IQR).",
+    });
+  }
+  return withExtentNote(steps, extent);
+}
+
+function fillTable1Plan(match, workbook, sheet) {
+  const exec = executeTable1(match, workbook);
+  const resultRows = table1ResultRows(exec);
+  const plan = {
+    engine: "offline",
+    looked_for: match.lookedFor,
+    summary: buildTable1Summary(match, exec),
+    transform_code: buildTable1TransformCode(match, sheet),
+    excel_steps: buildTable1ExcelSteps(match, exec, sheet),
+    r_script:
+      "# This Table 1 was worked out inside TidyTable, on your computer.\n" +
+      "# The result table and the Excel steps above reproduce it exactly.\n" +
+      "# A full R version (e.g. tableone::CreateTableOne) arrives with the statistics features.\n",
+    r_run_notes:
+      "This Table 1 ran on your computer, so there is no R script to run for it yet. " +
+      "Use the Excel steps to reproduce the same numbers by hand.",
+  };
+  return { plan, resultRows, exec };
+}
+
 // Public: build the plan and the ready-to-show result rows for a confident match.
 export function fillPlan(match, workbook) {
   const sheet = workbook.sheets.find((s) => s.name === match.sheetName) || workbook.sheets[0];
 
+  if (match.intent === "table1") return fillTable1Plan(match, workbook, sheet);
   if (match.intent === "describe") return fillDescribePlan(match, workbook, sheet);
   if (match.topN) return fillTopNPlan(match, workbook, sheet);
   if (match.aggregation) return fillAggregationPlan(match, workbook, sheet);
