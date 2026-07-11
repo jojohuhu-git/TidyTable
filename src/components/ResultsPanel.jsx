@@ -26,6 +26,28 @@ export default function ResultsPanel({ plan, rows }) {
   const [tab, setTab] = useState("result");
   const tabRefs = useRef([]);
 
+  // Phase 7.4: a compound "and" question is shown as one card with each part's
+  // own result stacked below a shared header — reusing this same panel per part,
+  // so every part keeps its result table, Excel steps, and R script.
+  if (plan.parts) {
+    return (
+      <div className="compound-results">
+        {plan.looked_for && (
+          <div className="lookedfor-box">
+            <h3>What I looked for</h3>
+            <p>{plan.looked_for}</p>
+            <p className="dim">Each part below was answered separately on this computer.</p>
+          </div>
+        )}
+        {plan.parts.map((part, i) => (
+          <section key={i} className="compound-part">
+            <ResultsPanel plan={part.plan} rows={part.rows} />
+          </section>
+        ))}
+      </div>
+    );
+  }
+
   // B12: standard tablist keyboard support — Left/Right moves and selects,
   // wrapping at the ends; Home/End jump to the first/last tab.
   function onTabKeyDown(e, index) {

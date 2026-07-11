@@ -45,6 +45,7 @@ import {
   loadAliasStore, persistAliasStore, rememberColumnAlias, columnAliasesFor, fileSignature,
 } from "./logic/offline/aliasStore.js";
 import { applyFollowUp, lastFilterValue } from "./logic/offline/followUp.js";
+import { splitCompound } from "./logic/offline/compound.js";
 
 // W3: how many result cards "Your results so far" keeps per session, oldest
 // dropped first — the same bounded-history spirit the old run-history chips
@@ -305,6 +306,49 @@ export default function App() {
     await runViaClaude(request, res.claudeHint);
   }
 
+  // Phase 7.4: a compound "and" question ("average duration and most common drug
+  // by diagnosis") is two questions. Run each part with the existing machinery
+  // and, ONLY when EVERY part answers confidently, show one combined card — never
+  // a half-answered compound. Returns true when it handled the request; false
+  // (having changed nothing) when the caller should fall back to a single run.
+  function runCompound(parts, originalRequest) {
+    const partResults = [];
+    for (const p of parts) {
+      const res = runOffline(p, workbook, {
+        definitionsStore, aliasMap, columnAliases, graduationStore,
+      });
+      if (res.kind !== "answer") return false; // not fully answerable → fall back
+      partResults.push({ request: p, res });
+    }
+    const combinedPlan = {
+      engine: "offline",
+      combined: true,
+      looked_for: `Answering ${parts.length} things at once, each on this computer:`,
+      summary: partResults
+        .map(({ res }) => res.plan.summary)
+        .join("\n\n———\n\n"),
+      parts: partResults.map(({ res }) => ({ plan: res.plan, rows: res.resultRows })),
+    };
+    const answer = partResults
+      .map(({ res }) => summarizeAnswer(res.match, res.exec))
+      .join("  ·  ");
+    for (const { request, res } of partResults) {
+      logHit({ request, shape: planShapeFromMatch(res.match), via: "offline" });
+      const a = summarizeAnswer(res.match, res.exec);
+      setRecipe((r) => addStep(r, questionStep(request, res.match, a)));
+    }
+    recordResult({
+      label: `Result of: your question "${originalRequest}"`,
+      answer,
+      plan: combinedPlan,
+      resultRows: [], // combined card renders its parts, not a single table
+      kind: "question",
+      savedToRoutine: true,
+    });
+    setLastQuestion(null); // a compound isn't a single cohort to follow up on
+    return true;
+  }
+
   // W2d: the user picked one of the "Did you mean…?" candidates. Remember the
   // mapping for the rest of the session so the same stretch never asks twice,
   // then re-run the same request — it now resolves immediately via the alias,
@@ -531,7 +575,12 @@ export default function App() {
     // (no prior question, or the swap value can't be located), the user's raw
     // words run as-is and decline honestly.
     const followed = applyFollowUp(prompt, lastQuestion);
-    await runOfflineFlow(followed ? followed.request : prompt, {});
+    const effective = followed ? followed.request : prompt;
+    // Phase 7.4: try a compound "and" split first. If it fully answers, show one
+    // combined card; otherwise fall through to a single run (nothing changed).
+    const parts = splitCompound(effective);
+    if (parts && runCompound(parts, effective)) return;
+    await runOfflineFlow(effective, {});
   }
 
   // The user answered the grain question: "combine" runs per-entity, "rows" keeps

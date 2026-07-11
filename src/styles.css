@@ -473,3 +473,7 @@ body {
   .masthead { flex-direction: column; }
   .keypanel-pop { right: auto; left: 0; }
 }
+
+/* Phase 7.4: compound "and" result — each part stacked with a divider. */
+.compound-part { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 0.6rem; }
+.compound-part:first-of-type { border-top: none; margin-top: 0; padding-top: 0; }
