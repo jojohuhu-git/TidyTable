@@ -15,8 +15,9 @@ import {
   detectIntent, detectComparator, splitNestedLevels, COHORT_MARKERS, GROUP_WORDS,
   expandClinicalSynonyms, NUMERIC_STAT_INTENTS, detectTopN,
 } from "./synonyms.js";
-import { findValueCandidates, findColumnCandidates, nearestSuggestions } from "./valueMatch.js";
+import { findValueCandidates, findColumnCandidates, nearestSuggestions, findTypoCandidates } from "./valueMatch.js";
 import { conceptColumnCandidates, valueContentCandidates, isConceptWord } from "./concepts.js";
+import { parseQuantity, convertQuantityToColumn } from "./units.js";
 
 // Words that carry no filter meaning — stripped before a term is resolved.
 const STOP = new Set([
@@ -367,9 +368,14 @@ function valueCondition(candidate, term, { stretched, candidates, allCandidates,
 function resolveCondition(clause, sheet, headers, index, defs, aliasMap) {
   const compar = detectComparator(clause);
   const numMatch = String(clause).match(/-?\d+(?:\.\d+)?/);
+  // Phase 7.3: a "<number> <time-unit>" quantity ("a week", "2 weeks", "48
+  // hours") the digit-only parser can't read. Present it here so the threshold
+  // branch can convert it into the target column's unit.
+  const quantity = parseQuantity(clause);
 
-  // Threshold: a comparator and a number, on a named column.
-  if (compar && numMatch && compar.op !== "=") {
+  // Threshold: a comparator and a number (digit OR a number-word quantity), on
+  // a named column.
+  if (compar && (numMatch || quantity) && compar.op !== "=") {
     const before = String(clause).toLowerCase().split(compar.phrase)[0];
     // Honesty bug 3 (2026-07-10): "not more than 7" / "never over 7" — a
     // negation word right before the comparator flips it; it used to be
@@ -399,10 +405,25 @@ function resolveCondition(clause, sheet, headers, index, defs, aliasMap) {
       }
     }
     if (column) {
-      return {
-        kind: "threshold", column, op, value: Number(numMatch[0]), source: "column", term: clause.trim(),
-        ...(colStretch ? { stretched: true, colStretch: true, candidates: colStretch.candidates, allCandidates: colStretch.allCandidates, via: colStretch.via, colPhrase: colStretch.colPhrase } : {}),
-      };
+      // Phase 7.3: if the clause carried a unit quantity ("2 weeks", "48
+      // hours"), convert it into the column's own unit and remember the
+      // conversion so the answer line can state it. When the column's unit is
+      // unknown (convert returns null), we do NOT guess a raw number — fall
+      // through so the clause blocks/asks honestly instead.
+      let value;
+      let conversionNote = null;
+      if (quantity && quantity.unit) {
+        const conv = convertQuantityToColumn(quantity, column);
+        if (conv) { value = conv.value; conversionNote = conv.note; }
+      }
+      if (value == null && numMatch) value = Number(numMatch[0]);
+      if (value != null) {
+        return {
+          kind: "threshold", column, op, value, source: "column", term: clause.trim(),
+          ...(conversionNote ? { conversionNote } : {}),
+          ...(colStretch ? { stretched: true, colStretch: true, candidates: colStretch.candidates, allCandidates: colStretch.allCandidates, via: colStretch.via, colPhrase: colStretch.colPhrase } : {}),
+        };
+      }
     }
   }
 
@@ -542,6 +563,24 @@ function resolveCondition(clause, sheet, headers, index, defs, aliasMap) {
     return { kind: "set", column, op: "in", values: def.values, source: "definition", term: def.term };
   }
 
+  // Phase 7.2: typo tolerance. The phrase matched no value exactly, by token
+  // subset, or by abbreviation — but it may be a MISSPELLING of a real value
+  // one or two edits away ("amoxicilin" -> "amoxicillin"). Offer the nearest as
+  // a confirm chip (a STRETCH, never an auto-answer), restricted to the scoped
+  // column first, so a misspelling asks instead of blocking.
+  let typo = scanColumns ? findTypoCandidates(phrase, headers, index, { columns: scanColumns }) : [];
+  if (!typo.length) typo = findTypoCandidates(phrase, headers, index);
+  if (typo.length) {
+    const top = typo[0];
+    return valueCondition(top, phrase, {
+      stretched: true,
+      candidates: typo.filter((c) => c.distance === top.distance).slice(0, 3),
+      allCandidates: typo,
+      via: `"${phrase}" looks like a misspelling of "${top.value}"`,
+      scopeWords,
+    });
+  }
+
   // W2e: nothing resolved. Refuse to guess, but hand back the nearest values and
   // columns so the UI can offer them as chips instead of just "use AI".
   return { kind: "missing", term: phrase, reason: "unknown", nearest: nearestSuggestions(phrase, headers, index) };
@@ -611,6 +650,67 @@ function isUnsupportedAggregationResidue(term) {
   }
   const lower = t.toLowerCase();
   return GROUP_WORDS.some((g) => lower === g || lower.startsWith(`${g} `));
+}
+
+// Phase 7.5: cue words that mark a "summarize these columns" request. Stripped
+// before the remaining fragments are read as a column list.
+const TABLE1_STRIP = [
+  "table 1", "table one", "baseline characteristics", "descriptive statistics",
+  "descriptive stats", "summarize", "summarise", "summary of", "summary",
+  "describe", "description of", "profile of", "overview of",
+];
+
+// Pull the columns named in a Table-1 request. Splits on commas / "and" / "&",
+// strips cue words, and resolves each fragment to a real column — EXACT or
+// contained header, or a NON-stretched concept hit only (a stretch would need a
+// confirm chip, out of scope for the proactive Table-1 offer). Returns the
+// resolved columns (in order, deduped) plus whether every meaningful fragment
+// resolved and how many there were, so the caller can tell a clean column list
+// from a filter question that merely mentions a column.
+function table1Columns(request, headers, opts) {
+  let t = ` ${String(request).toLowerCase()} `;
+  for (const cue of TABLE1_STRIP) {
+    t = t.replace(new RegExp(`\\b${cue.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g"), " ");
+  }
+  const frags = t.split(/,|\band\b|&|\bplus\b/i).map((s) => s.trim()).filter(Boolean);
+  const columns = [];
+  let resolved = 0;
+  let meaningful = 0;
+  for (const f of frags) {
+    const phrase = termWords(f).join(" ");
+    if (!phrase) continue; // a pure-filler fragment doesn't count for or against
+    meaningful += 1;
+    let col = fuzzyColumn(phrase, headers) || fuzzyColumn(termWords(f).map(singularize).join(" "), headers);
+    if (!col) {
+      const ref = resolveColumnRef(phrase, headers, opts);
+      if (ref && !ref.stretched) col = ref.column;
+    }
+    if (col) {
+      resolved += 1;
+      if (!columns.includes(col)) columns.push(col);
+    }
+  }
+  return { columns, allResolved: meaningful > 0 && resolved === meaningful, fragCount: meaningful };
+}
+
+// Phase 7.5: is this a Table-1 request? Two triggers: a describe/summarize cue
+// naming 2+ columns, OR a bare column list (no operation, no filter) of 2+
+// columns. A cohort/group-by/filtered request is never a Table-1.
+function detectTable1(request, intent, cohort, groupBy, headers, opts) {
+  if (cohort || groupBy) return null;
+  const describe = Boolean(intent && intent.intent === "describe");
+  if (intent && !describe) return null; // some other operation was asked for
+  const { columns, allResolved, fragCount } = table1Columns(request, headers, opts);
+  if (columns.length < 2) return null;
+  if (!describe && !(allResolved && fragCount >= 2)) return null;
+  return { columns };
+}
+
+export function describeLookedForTable1(columns) {
+  const list = columns.length <= 1
+    ? columns.map((c) => `"${c}"`).join("")
+    : columns.slice(0, -1).map((c) => `"${c}"`).join(", ") + ` and "${columns[columns.length - 1]}"`;
+  return `Building a Table 1 summarizing ${list} — n (%) for categories, median (IQR) and mean (SD) for numbers.`;
 }
 
 // Pull the base cohort clause out ("of patients with pyelonephritis"). Returns
@@ -806,6 +906,22 @@ export function matchRequest(request, workbook, defs, options = {}) {
   const preCohortText = groupBy ? (request.slice(0, groupBy.start) + " " + request.slice(groupBy.end)).trim() : request;
   const cohort = extractCohort(preCohortText);
 
+  // Phase 7.5: a Table-1 request ("summarize diagnosis, drug and duration", or a
+  // bare list of 2+ columns) is intercepted before the single-column describe /
+  // aggregation handling, since it names several columns and no single target.
+  const table1 = detectTable1(request, intent, cohort, groupBy, headers, { aliasMap, index });
+  if (table1) {
+    return {
+      status: "confident",
+      intent: "table1",
+      table1: { columns: table1.columns },
+      stages: [],
+      grainMode: "row",
+      lookedFor: describeLookedForTable1(table1.columns),
+      sheetName: sheet.name,
+    };
+  }
+
   // A3 Level 2 / Phase 2: average/sum/distinct/median/quartiles/stdev/min/max/
   // range/describe try to resolve a real numeric/target column before anything
   // else. Only decline outright (as Level 1 did) when no column can be pinned
@@ -902,7 +1018,14 @@ export function matchRequest(request, workbook, defs, options = {}) {
   // question ("combine each patient's rows first?") is about a plain count,
   // not a breakdown, so skip it once a group-by has already been resolved.
   const grain = groupBy ? null : detectGrain(request, sheet, headers);
-  const grainMode = options.grainMode || null;
+  let grainMode = options.grainMode || null;
+  // Phase 7.7: grain memory — a remembered choice for this entity column (from a
+  // previous ask on this file shape) is applied instead of asking again.
+  let grainFromMemory = false;
+  if (grain && !grainMode && options.grainChoices && options.grainChoices[grain.entityColumn]) {
+    grainMode = options.grainChoices[grain.entityColumn];
+    grainFromMemory = true;
+  }
   if (grain && !grainMode) {
     return { status: "grain", grain, request };
   }
@@ -915,6 +1038,10 @@ export function matchRequest(request, workbook, defs, options = {}) {
     groupColumn: groupBy?.column || null,
     grain: grainMode === "group-then-test" ? grain : null,
     grainMode: grainMode || "row",
+    // Phase 7.7: surfaced so the UI can show a small "counting per patient —
+    // change" note when the answer used a remembered grain, not a fresh ask.
+    grainFromMemory,
+    grainEntity: grain?.entityColumn || null,
     lookedFor: describeLookedFor(cleanedStages, intent, grainMode, grain, groupBy),
     sheetName: sheet.name,
   };
@@ -1059,7 +1186,13 @@ function matchTopN(request, topInfo, sheet, headers, index, defs, aliasMap) {
 }
 
 export function conditionPhrase(c) {
-  if (c.kind === "threshold") return `"${c.column}" is ${opWord(c.op)} ${c.value}`;
+  if (c.kind === "threshold") {
+    // Phase 7.3: state the unit conversion in the trust line, so "more than a
+    // week" reads back as "over 7 (from 'a week = 7 days')" — the approximation
+    // is never hidden.
+    const note = c.conversionNote ? ` (from "${c.conversionNote}")` : "";
+    return `"${c.column}" is ${opWord(c.op)} ${c.value}${note}`;
+  }
   if (c.kind === "set") return `"${c.column}" is ${c.op === "not-in" ? "NONE of" : "one of"} ${c.values.join(", ")}`;
   // Bug 3: a negated condition states the negation back plainly, so the user
   // sees the app understood the "not" before trusting the number.

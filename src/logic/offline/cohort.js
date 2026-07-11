@@ -83,6 +83,22 @@ export function positiveCondition(cond) {
 
 const pct = (num, den) => (den ? Math.round((num / den) * 1000) / 10 : 0);
 
+// Phase 7.6: how many rows in the given population have a BLANK/empty cell in a
+// value/set condition's column. Such rows sit in the denominator (they are real
+// rows) but can never match an "=" / "one of" filter — stating this out loud is
+// the denominator transparency the plan asks for, so a novice doesn't read an
+// n (%) as if the blanks weren't there. Thresholds report their own unreadable
+// count (countUnreadable) separately, so this only fires for value/set kinds.
+function countBlankInColumn(cond, rows) {
+  if (cond.kind !== "value" && cond.kind !== "set") return 0;
+  let n = 0;
+  for (const r of rows) {
+    const v = r[cond.column];
+    if (v == null || String(v).trim() === "") n++;
+  }
+  return n;
+}
+
 // How many rows in the given population had no readable number for a
 // threshold condition's column (honoring its "when" guard), so the summary
 // can say plainly that they were not counted rather than silently treating
@@ -164,12 +180,16 @@ export function executeCohort(match, workbook) {
   for (const stage of match.stages) {
     const pred = predicate(stage.condition);
     const skippedCount = countUnreadable(stage.condition, current);
+    // Phase 7.6: blanks in this filter's column, among the rows entering this
+    // level (its denominator) — real rows that can never match an "="/"one of".
+    const blankInColumn = countBlankInColumn(stage.condition, current);
     current = current.filter(pred);
     const count = current.length;
     levels.push({
       description: conditionPhrase(stage.condition),
       count, denominator: prev, proportion: pct(count, prev), unit: "rows",
       skippedCount, skippedColumn: skippedCount ? stage.condition.column : null,
+      blankInColumn, blankColumn: blankInColumn ? stage.condition.column : null,
     });
     prev = count;
   }

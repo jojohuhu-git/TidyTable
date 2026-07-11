@@ -16,7 +16,10 @@
     "freqMost": ["most common", "most frequent", "most commonly used"],
     "distinctWord": ["how many different", "how many unique", "how many distinct"],
     "dxValue": ["UTI", "pneumonia", "cystitis"],
-    "drugValue": ["amoxicillin", "cephalexin"]
+    "drugValue": ["amoxicillin", "cephalexin"],
+    "drugTypo": ["amoxicilin", "amoxacillin", "cephalexn", "cefpodoxim"],
+    "dxTypo": ["pneumnia", "pnuemonia", "cystits"],
+    "durationSpoken": ["more than a week", "over 2 weeks", "at least three days", "under a month"]
   },
 
   "entries": [
@@ -143,6 +146,17 @@
       "shape": { "intent": "count" }
     },
     {
+      "id": "table1-builder",
+      "note": "Phase 7.5: naming 2+ columns to summarize (or a bare column list) builds a publication-style Table 1. Answers/asks; the plan shape is intent 'table1'.",
+      "templates": [
+        "summarize {dxExact}, {drugExact} and {durExact}",
+        "{dxExact}, {drugExact} and {durExact}",
+        "describe {dxExact} and {durExact}"
+      ],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "table1" }
+    },
+    {
       "id": "describe-summarize",
       "templates": ["summarize the {durExact}", "describe {durExact}"],
       "accept": ["answer", "ask"],
@@ -159,6 +173,35 @@
       "templates": ["typical {durExact}"],
       "accept": ["answer", "ask"],
       "shape": { "intent": "average", "target": "Duration_days" }
+    },
+    {
+      "id": "spoken-duration-threshold",
+      "note": "Phase 7.3: a number-word + time-unit quantity ('more than a week') converts to a days threshold on Duration_days and answers; the trust line states the conversion. Never confidently the wrong column.",
+      "templates": [
+        "how many records with duration_days {durationSpoken}",
+        "how many records where duration_days is {durationSpoken}"
+      ],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "count", "filterColumn": "Duration_days" }
+    },
+    {
+      "id": "typo-tolerance-asks",
+      "note": "Phase 7.2: a misspelled value must ASK ('Did you mean amoxicillin?'), never auto-answer. Answering here would be confident-wrong (no shape asserted, and 'answer' not accepted). A decline is an honest miss but still not wrong.",
+      "templates": [
+        "how many records with {drugTypo}",
+        "how many records with {dxTypo}"
+      ],
+      "accept": ["ask", "decline"]
+    },
+    {
+      "id": "followup-nested-combined",
+      "note": "Phase 7.1: the fully-expanded form a cross-turn 'of those, …' follow-up rewrites to — the nested cohort machinery must carry the first filter into the second, never drop it. Answers/asks, filter includes Diagnosis.",
+      "templates": [
+        "how many records with {dxValue}, of those how many got {drugValue}",
+        "how many records with {dxValue} and of those how many got {drugValue}"
+      ],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "count", "filterColumn": "Diagnosis" }
     },
     {
       "id": "aspirational-everyday-gaps",

@@ -38,12 +38,19 @@ import ChartsPanel from "./components/ChartsPanel.jsx";
 import ShelfPanel from "./components/ShelfPanel.jsx";
 import ColumnProfileTable from "./components/ColumnProfileTable.jsx";
 import DefinitionsEditor from "./components/DefinitionsEditor.jsx";
+import TeachItForm from "./components/TeachItForm.jsx";
+import { buildDefinitionEntry } from "./logic/offline/definitions.js";
 import DefinitionsPanel from "./components/DefinitionsPanel.jsx";
 import { privacyBadgeText } from "./logic/privacyBadge.js";
 import { emptyDefinitionsStore, addDefinitionEntry } from "./logic/offline/definitionsStore.js";
 import {
   loadAliasStore, persistAliasStore, rememberColumnAlias, columnAliasesFor, fileSignature,
 } from "./logic/offline/aliasStore.js";
+import { applyFollowUp, lastFilterValue } from "./logic/offline/followUp.js";
+import { splitCompound } from "./logic/offline/compound.js";
+import {
+  loadGrainStore, persistGrainStore, rememberGrainChoice, forgetGrainChoice, grainChoicesFor,
+} from "./logic/offline/grainStore.js";
 
 // W3: how many result cards "Your results so far" keeps per session, oldest
 // dropped first — the same bounded-history spirit the old run-history chips
@@ -115,6 +122,22 @@ export default function App() {
   const [keyStore, setKeyStore] = useState(() => loadKeyStore());
   const [notice, setNotice] = useState(""); // plain, non-error message (e.g. "add a definition")
   const [pendingGrain, setPendingGrain] = useState(null); // { grain, request } awaiting a combine-rows answer
+  // Phase 7.1: the last question answered this session, so a short follow-up
+  // ("of those, how many got cephalexin?" / "what about ceftriaxone?") can be
+  // rewritten into a full request deterministically — never a new AI read.
+  // { request, swapTerm } — swapTerm is the previous filter value to swap out.
+  const [lastQuestion, setLastQuestion] = useState(null);
+  // Phase 7.7: remember the per-patient vs per-row grain choice per file shape,
+  // so it's asked once, not every question. Persistent, holds only column names
+  // and the mode — never a cell value (see grainStore.js).
+  const [grainStore, setGrainStore] = useState(() => loadGrainStore());
+  // A small "counting per patient — change" note shown after an answer that used
+  // a remembered grain choice. { entityColumn, mode, request }.
+  const [grainNote, setGrainNote] = useState(null);
+  // Phase 7.9: when the engine declines and there's no API key, offer a small
+  // "teach it" form so a novice can define a word and re-run — no key, no Excel
+  // round-trip. { request }.
+  const [pendingTeach, setPendingTeach] = useState(null);
   // B7: in-app definitions, merged on top of a real Definitions sheet if the
   // workbook has one; resets with the workbook, like excluded columns.
   const [definitionsStore, setDefinitionsStore] = useState(() => emptyDefinitionsStore());
@@ -167,6 +190,11 @@ export default function App() {
   const columnAliases = useMemo(
     () => columnAliasesFor(aliasStore, signature),
     [aliasStore, signature],
+  );
+  // Phase 7.7: remembered grain choices for the current file shape.
+  const grainChoices = useMemo(
+    () => grainChoicesFor(grainStore, signature),
+    [grainStore, signature],
   );
 
   // B5/W3: persist the log/recipe/results trail (small JSON — results are
@@ -235,6 +263,10 @@ export default function App() {
       // Phase 6: a request that previously "graduated" from an AI answer is
       // reconstructed and answered offline here, before we would ever offer Claude.
       graduationStore,
+      // Phase 7.7: remembered per-patient vs per-row grain choice for this file.
+      // An explicit override (from "change") wins over current state, which may
+      // not have re-rendered yet after forgetting a choice.
+      grainChoices: options.grainChoices || grainChoices,
     });
     if (res.kind === "answer") {
       // Phase 6 in-app growth: a confident offline answer is a success worth
@@ -256,9 +288,18 @@ export default function App() {
         savedToRoutine: true,
       });
       setRecipe((r) => addStep(r, questionStep(request, res.match, answer)));
+      // Phase 7.1: remember this answered question so the NEXT turn can be a
+      // short follow-up. `request` here is already the fully-expanded wording
+      // (a chained "of those" follow-up accumulates against the expanded form).
+      setLastQuestion({ request, swapTerm: lastFilterValue(res.match) });
       // Phase 2: offer the deterministic companion (median (IQR) for a mean,
       // mean (SD) for a median, n (%) for a count) as a one-click chip.
       setCompanionOffer(res.plan.companion ? { companion: res.plan.companion, request } : null);
+      // Phase 7.7: if a remembered grain choice was applied (no ask this time),
+      // show the small "counting per patient — change" note.
+      setGrainNote(res.grainFromMemory && res.grainEntity
+        ? { entityColumn: res.grainEntity, mode: res.grainMode, request }
+        : null);
       return;
     }
     if (res.kind === "block") {
@@ -290,9 +331,55 @@ export default function App() {
     // res.kind === "decline"
     if (!apiKey) {
       setNotice(res.message);
+      // Phase 7.9: with no key, offer the teach-it form so the decline isn't a
+      // dead end — the user can define a word and re-run offline.
+      setPendingTeach({ request });
       return;
     }
     await runViaClaude(request, res.claudeHint);
+  }
+
+  // Phase 7.4: a compound "and" question ("average duration and most common drug
+  // by diagnosis") is two questions. Run each part with the existing machinery
+  // and, ONLY when EVERY part answers confidently, show one combined card — never
+  // a half-answered compound. Returns true when it handled the request; false
+  // (having changed nothing) when the caller should fall back to a single run.
+  function runCompound(parts, originalRequest) {
+    const partResults = [];
+    for (const p of parts) {
+      const res = runOffline(p, workbook, {
+        definitionsStore, aliasMap, columnAliases, graduationStore,
+      });
+      if (res.kind !== "answer") return false; // not fully answerable → fall back
+      partResults.push({ request: p, res });
+    }
+    const combinedPlan = {
+      engine: "offline",
+      combined: true,
+      looked_for: `Answering ${parts.length} things at once, each on this computer:`,
+      summary: partResults
+        .map(({ res }) => res.plan.summary)
+        .join("\n\n———\n\n"),
+      parts: partResults.map(({ res }) => ({ plan: res.plan, rows: res.resultRows })),
+    };
+    const answer = partResults
+      .map(({ res }) => summarizeAnswer(res.match, res.exec))
+      .join("  ·  ");
+    for (const { request, res } of partResults) {
+      logHit({ request, shape: planShapeFromMatch(res.match), via: "offline" });
+      const a = summarizeAnswer(res.match, res.exec);
+      setRecipe((r) => addStep(r, questionStep(request, res.match, a)));
+    }
+    recordResult({
+      label: `Result of: your question "${originalRequest}"`,
+      answer,
+      plan: combinedPlan,
+      resultRows: [], // combined card renders its parts, not a single table
+      kind: "question",
+      savedToRoutine: true,
+    });
+    setLastQuestion(null); // a compound isn't a single cohort to follow up on
+    return true;
   }
 
   // W2d: the user picked one of the "Did you mean…?" candidates. Remember the
@@ -411,6 +498,35 @@ export default function App() {
     setRecipe((r) => addStep(r, questionStep(companionRequest, companion.match, companion.answer)));
   }
 
+  // Phase 7.9: the teach-it form taught a phrase → a whole column. Save it as a
+  // persistent column alias (the same Phase 3 store a confirmed chip feeds) and
+  // re-run the declined question, which now resolves the phrase.
+  function teachColumn(phrase, columnName) {
+    setPendingTeach(null);
+    setNotice("");
+    const request = pendingTeach?.request;
+    if (!request || !phrase || !columnName) return;
+    let columnAliasesOverride;
+    if (signature) {
+      const nextStore = rememberColumnAlias(aliasStore, signature, phrase, columnName);
+      setAliasStore(persistAliasStore(nextStore));
+      columnAliasesOverride = columnAliasesFor(nextStore, signature);
+    }
+    runOfflineFlow(request, {}, null, null, columnAliasesOverride);
+  }
+
+  // Phase 7.9: the teach-it form taught a phrase → specific values in a column.
+  // Save it as an in-app definition (the same B7 store) and re-run.
+  function teachValues(phrase, columnName, valuesText) {
+    setPendingTeach(null);
+    setNotice("");
+    const request = pendingTeach?.request;
+    if (!request || !phrase || !columnName) return;
+    const next = addDefinitionEntry(definitionsStore, buildDefinitionEntry(phrase, columnName, valuesText));
+    setDefinitionsStore(next);
+    runOfflineFlow(request, {}, next);
+  }
+
   // B7: record the typed definition and immediately re-run the question that
   // was blocked on it — the whole point is no Excel round-trip.
   function addDefinitionAndRerun(entry) {
@@ -515,15 +631,52 @@ export default function App() {
     setPendingConfirm(null);
     setCompanionOffer(null);
     setRetryInfo(null);
-    await runOfflineFlow(prompt, {});
+    setGrainNote(null);
+    setPendingTeach(null);
+    // Phase 7.1: a short follow-up ("of those, …" / "what about X?") is rewritten
+    // into a full request using the last answered question, so the previous
+    // cohort carries over. Deterministic; if no confident rewrite is possible
+    // (no prior question, or the swap value can't be located), the user's raw
+    // words run as-is and decline honestly.
+    const followed = applyFollowUp(prompt, lastQuestion);
+    const effective = followed ? followed.request : prompt;
+    // Phase 7.4: try a compound "and" split first. If it fully answers, show one
+    // combined card; otherwise fall through to a single run (nothing changed).
+    const parts = splitCompound(effective);
+    if (parts && runCompound(parts, effective)) return;
+    await runOfflineFlow(effective, {});
   }
 
   // The user answered the grain question: "combine" runs per-entity, "rows" keeps
   // one row at a time. Either way we re-run the same request with that decision.
+  // Phase 7.7: remember the choice per file shape + entity column so we don't
+  // ask again for this file — only the column name and mode are stored.
   function answerGrain(mode) {
-    const request = pendingGrain?.request;
+    const pending = pendingGrain;
     setPendingGrain(null);
-    if (request) runOfflineFlow(request, { grainMode: mode });
+    if (!pending?.request) return;
+    if (signature && pending.grain?.entityColumn && (mode === "row" || mode === "group-then-test")) {
+      const next = rememberGrainChoice(grainStore, signature, pending.grain.entityColumn, mode);
+      setGrainStore(persistGrainStore(next));
+    }
+    runOfflineFlow(pending.request, { grainMode: mode });
+  }
+
+  // Phase 7.7: the user clicked "change" on the remembered-grain note — forget
+  // the stored choice for this entity column and re-ask by re-running the same
+  // question (which now has no memory to apply, so it asks again).
+  function changeGrain() {
+    const note = grainNote;
+    setGrainNote(null);
+    if (!note) return;
+    let choices = grainChoices;
+    if (signature && note.entityColumn) {
+      const next = forgetGrainChoice(grainStore, signature, note.entityColumn);
+      setGrainStore(persistGrainStore(next));
+      choices = grainChoicesFor(next, signature);
+    }
+    // Re-run with the memory cleared so the grain question appears again.
+    runOfflineFlow(note.request, { grainChoices: choices });
   }
 
   function handleWorkbook(wb) {
@@ -541,6 +694,9 @@ export default function App() {
     setPendingDefinitions(null);
     setPendingConfirm(null);
     setCompanionOffer(null);
+    setLastQuestion(null); // Phase 7.1: a fresh file starts a fresh conversation
+    setGrainNote(null); // Phase 7.7: no remembered-grain note until one applies
+    setPendingTeach(null); // Phase 7.9: no teach-it form until a decline
     setAliasMap(new Map()); // W2d: a session-level alias map, fresh per workbook
     setDefinitionsStore(emptyDefinitionsStore());
     setAiSends([]); // B8: the badge tracks this workbook's sends, not a prior file's
@@ -815,7 +971,28 @@ export default function App() {
                 } : null}
               />
             )}
+            {grainNote && (
+              <div className="notice-box grain-note" role="status" aria-live="polite">
+                <span>
+                  {grainNote.mode === "group-then-test"
+                    ? `Counting per ${grainNote.entityColumn.replace(/id$/i, "").trim() || "patient"} (each one's rows combined first), as you chose earlier for this file. `
+                    : `Counting rows as they are, as you chose earlier for this file. `}
+                </span>
+                <button type="button" className="btn btn-ghost" onClick={changeGrain}>
+                  Change
+                </button>
+              </div>
+            )}
             {notice && <div className="notice-box" role="status" aria-live="polite">{notice}</div>}
+            {pendingTeach && (
+              <TeachItForm
+                request={pendingTeach.request}
+                columns={workbook.sheets[0].headers.map((h) => h.name)}
+                onTeachColumn={teachColumn}
+                onTeachValues={teachValues}
+                onCancel={() => setPendingTeach(null)}
+              />
+            )}
             {error && (
               <div className="error-box" role="alert">
                 {error}

@@ -79,6 +79,96 @@ export function findValueCandidates(phrase, headers, index, { columns = null } =
   return out;
 }
 
+// Phase 7.2 (2026-07-10): typo tolerance for cell values. "amoxicilin" is not a
+// prefix of "amoxicillin" (they differ mid-word), so scoreTokenMatch above can't
+// reach it — but it is one deletion away. This layer offers the near value as a
+// CONFIRM chip ("Did you mean amoxicillin?"), never an auto-answer, so a
+// misspelling asks instead of blocking, while the never-guess promise holds.
+
+// A tiny British↔American spelling fold, applied before the distance check so
+// "paediatric"/"pediatric" and "anaemia"/"anemia" land at distance 0. Only the
+// safe, high-frequency digraphs — never a general phonetic collapse.
+function foldSpelling(word) {
+  return String(word || "")
+    .replace(/ae/g, "e")   // paediatric -> pediatric, anaemia -> anemia
+    .replace(/oe/g, "e")   // oedema -> edema
+    .replace(/ise\b/g, "ize")
+    .replace(/isation\b/g, "ization")
+    .replace(/ll/g, "l");  // travelled -> traveled; also folds the amoxici(ll/l)in slip
+}
+
+// Classic Levenshtein edit distance, with an early exit once it exceeds `max`
+// (so a scan over many values stays cheap). Returns the distance, or max+1 when
+// it is known to exceed max.
+export function editDistance(a, b, max = Infinity) {
+  const s = String(a);
+  const t = String(b);
+  if (Math.abs(s.length - t.length) > max) return max + 1;
+  let prev = Array.from({ length: t.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= s.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= t.length; j++) {
+      const cost = s[i - 1] === t[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (cur[j] < rowMin) rowMin = cur[j];
+    }
+    if (rowMin > max) return max + 1;
+    prev = cur;
+  }
+  return prev[t.length];
+}
+
+// The largest edit distance allowed for a query word of a given length — short
+// words (where one edit is a large fraction) get a tighter budget so "uti" can
+// never "correct" to "cti". 4–6 chars → 1 edit; 7+ → 2 edits; <4 → no typo tier.
+function maxTypoDistance(len) {
+  if (len < 4) return 0;
+  if (len <= 6) return 1;
+  return 2;
+}
+
+// Scan the given columns for cell values a SINGLE-WORD query is a near-miss of.
+// Deliberately single-word only: a misspelled value is almost always one token
+// (a drug/organism name), and a whole-phrase edit distance would drift. Returns
+// candidates best (closest) first: { column, value, distance, exact:false }.
+export function findTypoCandidates(phrase, headers, index, { columns = null } = {}) {
+  const qTokens = tokens(phrase);
+  if (qTokens.length !== 1) return [];
+  const q = qTokens[0];
+  const budget = maxTypoDistance(q.length);
+  if (budget === 0) return [];
+  const qFold = foldSpelling(q);
+  const scope = columns || headers.map((h) => h.name);
+  const out = [];
+  const seen = new Set();
+  for (const colName of scope) {
+    const m = index.get(colName);
+    if (!m) continue;
+    for (const original of m.values()) {
+      // Compare against each token of the value; a value token close to the
+      // query word means the query is a typo of that value.
+      let best = budget + 1;
+      for (const vt of tokens(original)) {
+        const vFold = foldSpelling(vt);
+        const d = editDistance(qFold, vFold, budget);
+        if (d < best) best = d;
+      }
+      if (best > budget) continue;
+      const key = `${colName}::${String(original).toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ column: colName, value: original, distance: best, exact: false });
+    }
+  }
+  out.sort((a, b) =>
+    a.distance - b.distance
+    || String(a.value).length - String(b.value).length
+    || String(a.value).localeCompare(String(b.value)),
+  );
+  return out;
+}
+
 // W2c: fuzzy-match a spoken phrase to one or more header names by token subset,
 // so "urine" hits "Urine Organisms". Returns matching header names, best-first.
 // Exact columnKey equality (handled by the caller's fuzzyColumn) is stronger and
