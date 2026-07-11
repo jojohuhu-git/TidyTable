@@ -16,7 +16,9 @@
     "freqMost": ["most common", "most frequent", "most commonly used"],
     "distinctWord": ["how many different", "how many unique", "how many distinct"],
     "dxValue": ["UTI", "pneumonia", "cystitis"],
-    "drugValue": ["amoxicillin", "cephalexin"]
+    "drugValue": ["amoxicillin", "cephalexin"],
+    "drugTypo": ["amoxicilin", "amoxacillin", "cephalexn", "cefpodoxim"],
+    "dxTypo": ["pneumnia", "pnuemonia", "cystits"]
   },
 
   "entries": [
@@ -159,6 +161,15 @@
       "templates": ["typical {durExact}"],
       "accept": ["answer", "ask"],
       "shape": { "intent": "average", "target": "Duration_days" }
+    },
+    {
+      "id": "typo-tolerance-asks",
+      "note": "Phase 7.2: a misspelled value must ASK ('Did you mean amoxicillin?'), never auto-answer. Answering here would be confident-wrong (no shape asserted, and 'answer' not accepted). A decline is an honest miss but still not wrong.",
+      "templates": [
+        "how many records with {drugTypo}",
+        "how many records with {dxTypo}"
+      ],
+      "accept": ["ask", "decline"]
     },
     {
       "id": "followup-nested-combined",

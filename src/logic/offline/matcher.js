@@ -15,7 +15,7 @@ import {
   detectIntent, detectComparator, splitNestedLevels, COHORT_MARKERS, GROUP_WORDS,
   expandClinicalSynonyms, NUMERIC_STAT_INTENTS, detectTopN,
 } from "./synonyms.js";
-import { findValueCandidates, findColumnCandidates, nearestSuggestions } from "./valueMatch.js";
+import { findValueCandidates, findColumnCandidates, nearestSuggestions, findTypoCandidates } from "./valueMatch.js";
 import { conceptColumnCandidates, valueContentCandidates, isConceptWord } from "./concepts.js";
 
 // Words that carry no filter meaning — stripped before a term is resolved.
@@ -540,6 +540,24 @@ function resolveCondition(clause, sheet, headers, index, defs, aliasMap) {
       };
     }
     return { kind: "set", column, op: "in", values: def.values, source: "definition", term: def.term };
+  }
+
+  // Phase 7.2: typo tolerance. The phrase matched no value exactly, by token
+  // subset, or by abbreviation — but it may be a MISSPELLING of a real value
+  // one or two edits away ("amoxicilin" -> "amoxicillin"). Offer the nearest as
+  // a confirm chip (a STRETCH, never an auto-answer), restricted to the scoped
+  // column first, so a misspelling asks instead of blocking.
+  let typo = scanColumns ? findTypoCandidates(phrase, headers, index, { columns: scanColumns }) : [];
+  if (!typo.length) typo = findTypoCandidates(phrase, headers, index);
+  if (typo.length) {
+    const top = typo[0];
+    return valueCondition(top, phrase, {
+      stretched: true,
+      candidates: typo.filter((c) => c.distance === top.distance).slice(0, 3),
+      allCandidates: typo,
+      via: `"${phrase}" looks like a misspelling of "${top.value}"`,
+      scopeWords,
+    });
   }
 
   // W2e: nothing resolved. Refuse to guess, but hand back the nearest values and
