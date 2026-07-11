@@ -1,3 +1,7 @@
+> **STATUS: SUPERSEDED (2026-07-11).** Phases 6, 7, and 8 are now DONE, merged,
+> and deployed. The open "which Phase 4?" decision below was resolved by the owner
+> ("complete 6-8"). See the newer `handoff-2026-07-11-offline-smarts-complete.md`.
+
 # TidyTable — Start-here handoff after Phase 5 shipped (2026-07-10)
 
 **Repo:** `/Users/joannehuang/Downloads/TidyTable` · **Live:** https://jojohuhu-git.github.io/TidyTable/
