@@ -38,6 +38,8 @@ import ChartsPanel from "./components/ChartsPanel.jsx";
 import ShelfPanel from "./components/ShelfPanel.jsx";
 import ColumnProfileTable from "./components/ColumnProfileTable.jsx";
 import DefinitionsEditor from "./components/DefinitionsEditor.jsx";
+import TeachItForm from "./components/TeachItForm.jsx";
+import { buildDefinitionEntry } from "./logic/offline/definitions.js";
 import DefinitionsPanel from "./components/DefinitionsPanel.jsx";
 import { privacyBadgeText } from "./logic/privacyBadge.js";
 import { emptyDefinitionsStore, addDefinitionEntry } from "./logic/offline/definitionsStore.js";
@@ -132,6 +134,10 @@ export default function App() {
   // A small "counting per patient — change" note shown after an answer that used
   // a remembered grain choice. { entityColumn, mode, request }.
   const [grainNote, setGrainNote] = useState(null);
+  // Phase 7.9: when the engine declines and there's no API key, offer a small
+  // "teach it" form so a novice can define a word and re-run — no key, no Excel
+  // round-trip. { request }.
+  const [pendingTeach, setPendingTeach] = useState(null);
   // B7: in-app definitions, merged on top of a real Definitions sheet if the
   // workbook has one; resets with the workbook, like excluded columns.
   const [definitionsStore, setDefinitionsStore] = useState(() => emptyDefinitionsStore());
@@ -325,6 +331,9 @@ export default function App() {
     // res.kind === "decline"
     if (!apiKey) {
       setNotice(res.message);
+      // Phase 7.9: with no key, offer the teach-it form so the decline isn't a
+      // dead end — the user can define a word and re-run offline.
+      setPendingTeach({ request });
       return;
     }
     await runViaClaude(request, res.claudeHint);
@@ -489,6 +498,35 @@ export default function App() {
     setRecipe((r) => addStep(r, questionStep(companionRequest, companion.match, companion.answer)));
   }
 
+  // Phase 7.9: the teach-it form taught a phrase → a whole column. Save it as a
+  // persistent column alias (the same Phase 3 store a confirmed chip feeds) and
+  // re-run the declined question, which now resolves the phrase.
+  function teachColumn(phrase, columnName) {
+    setPendingTeach(null);
+    setNotice("");
+    const request = pendingTeach?.request;
+    if (!request || !phrase || !columnName) return;
+    let columnAliasesOverride;
+    if (signature) {
+      const nextStore = rememberColumnAlias(aliasStore, signature, phrase, columnName);
+      setAliasStore(persistAliasStore(nextStore));
+      columnAliasesOverride = columnAliasesFor(nextStore, signature);
+    }
+    runOfflineFlow(request, {}, null, null, columnAliasesOverride);
+  }
+
+  // Phase 7.9: the teach-it form taught a phrase → specific values in a column.
+  // Save it as an in-app definition (the same B7 store) and re-run.
+  function teachValues(phrase, columnName, valuesText) {
+    setPendingTeach(null);
+    setNotice("");
+    const request = pendingTeach?.request;
+    if (!request || !phrase || !columnName) return;
+    const next = addDefinitionEntry(definitionsStore, buildDefinitionEntry(phrase, columnName, valuesText));
+    setDefinitionsStore(next);
+    runOfflineFlow(request, {}, next);
+  }
+
   // B7: record the typed definition and immediately re-run the question that
   // was blocked on it — the whole point is no Excel round-trip.
   function addDefinitionAndRerun(entry) {
@@ -594,6 +632,7 @@ export default function App() {
     setCompanionOffer(null);
     setRetryInfo(null);
     setGrainNote(null);
+    setPendingTeach(null);
     // Phase 7.1: a short follow-up ("of those, …" / "what about X?") is rewritten
     // into a full request using the last answered question, so the previous
     // cohort carries over. Deterministic; if no confident rewrite is possible
@@ -657,6 +696,7 @@ export default function App() {
     setCompanionOffer(null);
     setLastQuestion(null); // Phase 7.1: a fresh file starts a fresh conversation
     setGrainNote(null); // Phase 7.7: no remembered-grain note until one applies
+    setPendingTeach(null); // Phase 7.9: no teach-it form until a decline
     setAliasMap(new Map()); // W2d: a session-level alias map, fresh per workbook
     setDefinitionsStore(emptyDefinitionsStore());
     setAiSends([]); // B8: the badge tracks this workbook's sends, not a prior file's
@@ -944,6 +984,15 @@ export default function App() {
               </div>
             )}
             {notice && <div className="notice-box" role="status" aria-live="polite">{notice}</div>}
+            {pendingTeach && (
+              <TeachItForm
+                request={pendingTeach.request}
+                columns={workbook.sheets[0].headers.map((h) => h.name)}
+                onTeachColumn={teachColumn}
+                onTeachValues={teachValues}
+                onCancel={() => setPendingTeach(null)}
+              />
+            )}
             {error && (
               <div className="error-box" role="alert">
                 {error}

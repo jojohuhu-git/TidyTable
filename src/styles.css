@@ -481,3 +481,7 @@ body {
 /* Phase 7.8: "show the rows behind this number" reveal. */
 .behind-box { margin: 0.6rem 0; }
 .behind-rows { margin-top: 0.5rem; }
+
+/* Phase 7.9: teach-it form on decline. */
+.teach-it-form { margin-top: 0.6rem; padding: 0.75rem; border: 1px dashed var(--line); border-radius: var(--rad); display: grid; gap: 0.35rem; }
+.teach-mode { border: none; padding: 0; margin: 0.2rem 0; display: flex; gap: 1rem; flex-wrap: wrap; }
