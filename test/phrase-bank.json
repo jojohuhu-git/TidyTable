@@ -161,6 +161,16 @@
       "shape": { "intent": "average", "target": "Duration_days" }
     },
     {
+      "id": "followup-nested-combined",
+      "note": "Phase 7.1: the fully-expanded form a cross-turn 'of those, …' follow-up rewrites to — the nested cohort machinery must carry the first filter into the second, never drop it. Answers/asks, filter includes Diagnosis.",
+      "templates": [
+        "how many records with {dxValue}, of those how many got {drugValue}",
+        "how many records with {dxValue} and of those how many got {drugValue}"
+      ],
+      "accept": ["answer", "ask"],
+      "shape": { "intent": "count", "filterColumn": "Diagnosis" }
+    },
+    {
       "id": "aspirational-everyday-gaps",
       "note": "Genuine novice phrasings the plan aspires to but the engine may not place yet. Recorded honestly: an ask/answer is a pass, a decline is a REAL miss the self-teaching loop (hit store + AI graduation) is meant to close over releases. No shape is asserted, so a spontaneous correct answer still passes and can never be counted confident-wrong.",
       "templates": [

@@ -44,6 +44,7 @@ import { emptyDefinitionsStore, addDefinitionEntry } from "./logic/offline/defin
 import {
   loadAliasStore, persistAliasStore, rememberColumnAlias, columnAliasesFor, fileSignature,
 } from "./logic/offline/aliasStore.js";
+import { applyFollowUp, lastFilterValue } from "./logic/offline/followUp.js";
 
 // W3: how many result cards "Your results so far" keeps per session, oldest
 // dropped first — the same bounded-history spirit the old run-history chips
@@ -115,6 +116,11 @@ export default function App() {
   const [keyStore, setKeyStore] = useState(() => loadKeyStore());
   const [notice, setNotice] = useState(""); // plain, non-error message (e.g. "add a definition")
   const [pendingGrain, setPendingGrain] = useState(null); // { grain, request } awaiting a combine-rows answer
+  // Phase 7.1: the last question answered this session, so a short follow-up
+  // ("of those, how many got cephalexin?" / "what about ceftriaxone?") can be
+  // rewritten into a full request deterministically — never a new AI read.
+  // { request, swapTerm } — swapTerm is the previous filter value to swap out.
+  const [lastQuestion, setLastQuestion] = useState(null);
   // B7: in-app definitions, merged on top of a real Definitions sheet if the
   // workbook has one; resets with the workbook, like excluded columns.
   const [definitionsStore, setDefinitionsStore] = useState(() => emptyDefinitionsStore());
@@ -256,6 +262,10 @@ export default function App() {
         savedToRoutine: true,
       });
       setRecipe((r) => addStep(r, questionStep(request, res.match, answer)));
+      // Phase 7.1: remember this answered question so the NEXT turn can be a
+      // short follow-up. `request` here is already the fully-expanded wording
+      // (a chained "of those" follow-up accumulates against the expanded form).
+      setLastQuestion({ request, swapTerm: lastFilterValue(res.match) });
       // Phase 2: offer the deterministic companion (median (IQR) for a mean,
       // mean (SD) for a median, n (%) for a count) as a one-click chip.
       setCompanionOffer(res.plan.companion ? { companion: res.plan.companion, request } : null);
@@ -515,7 +525,13 @@ export default function App() {
     setPendingConfirm(null);
     setCompanionOffer(null);
     setRetryInfo(null);
-    await runOfflineFlow(prompt, {});
+    // Phase 7.1: a short follow-up ("of those, …" / "what about X?") is rewritten
+    // into a full request using the last answered question, so the previous
+    // cohort carries over. Deterministic; if no confident rewrite is possible
+    // (no prior question, or the swap value can't be located), the user's raw
+    // words run as-is and decline honestly.
+    const followed = applyFollowUp(prompt, lastQuestion);
+    await runOfflineFlow(followed ? followed.request : prompt, {});
   }
 
   // The user answered the grain question: "combine" runs per-entity, "rows" keeps
@@ -541,6 +557,7 @@ export default function App() {
     setPendingDefinitions(null);
     setPendingConfirm(null);
     setCompanionOffer(null);
+    setLastQuestion(null); // Phase 7.1: a fresh file starts a fresh conversation
     setAliasMap(new Map()); // W2d: a session-level alias map, fresh per workbook
     setDefinitionsStore(emptyDefinitionsStore());
     setAiSends([]); // B8: the badge tracks this workbook's sends, not a prior file's
