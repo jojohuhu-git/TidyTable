@@ -1,0 +1,50 @@
+{
+  "_readme": "Phase 8.6 chart-flavored phrase bank. TEMPLATES + slot vocabulary, expanded by chart-phrase-bank.test.js and run through the REAL chart engine (resolveChartRequest, which since Phase 8.1 routes through the same Step 3 matcher). Each entry: `templates` (with {slot} placeholders), `accept` (outcomes that count as correct: resolved/decline; a stretched resolve is an honest 'ask' and always passes), and `shape` (asserted only when the engine resolves EXACTLY — a mismatch is confident-wrong). Grow this from real successful chart requests each release.",
+
+  "slots": {
+    "aggMean": ["average", "mean", "avg"],
+    "aggTotal": ["total"],
+    "durExact": ["duration_days", "duration"],
+    "costExact": ["cost", "Cost"],
+    "group": ["ward", "diagnosis", "drug"],
+    "catExact": ["diagnosis", "drug"],
+    "entity": ["patients", "records"],
+    "topWord": ["most common", "top 3"]
+  },
+
+  "entries": [
+    {
+      "id": "chart-mean-by-group",
+      "note": "average of a numeric column, broken down by a group → a value chart. valueCol Duration_days, aggMode average (the label column varies with the group slot).",
+      "templates": ["{aggMean} {durExact} by {group}"],
+      "accept": ["resolved"],
+      "shape": { "aggMode": "average", "valueCol": "Duration_days" }
+    },
+    {
+      "id": "chart-total-by-group",
+      "templates": ["{aggTotal} {costExact} by {group}"],
+      "accept": ["resolved"],
+      "shape": { "aggMode": "sum", "valueCol": "Cost" }
+    },
+    {
+      "id": "chart-count-by-group",
+      "note": "a plain count broken down by a group → a count chart (label varies with the group slot).",
+      "templates": ["how many {entity} by {group}", "count by {group}"],
+      "accept": ["resolved"],
+      "shape": { "aggMode": "count", "valueCol": null }
+    },
+    {
+      "id": "chart-topn-frequency",
+      "note": "a most-common / top-N request → a sorted, capped bar of that category.",
+      "templates": ["{topWord} {catExact}"],
+      "accept": ["resolved"],
+      "shape": { "aggMode": "count", "rankDirection": "most" }
+    },
+    {
+      "id": "chart-honesty-nonnumeric-decline",
+      "note": "MUST decline (or ask): you cannot average a TEXT column into a value chart. A confident resolve to average here is confident-wrong.",
+      "templates": ["{aggMean} {catExact} by {group}"],
+      "accept": ["decline"]
+    }
+  ]
+}
