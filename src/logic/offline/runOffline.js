@@ -9,6 +9,7 @@ import { mergeDefinitions } from "./definitionsStore.js";
 import { matchRequest, conditionPhrase } from "./matcher.js";
 import { fillPlan } from "./fillPlan.js";
 import { logMiss } from "./missLog.js";
+import { applyGraduation } from "./graduationStore.js";
 
 // options.grainMode: pass "group-then-test" after the user agrees to combine rows.
 // options.definitionsStore: B7's in-app definitions (see definitionsStore.js),
@@ -64,6 +65,21 @@ export function runOffline(request, workbook, options = {}) {
       via: match.via,
       request,
     };
+  }
+
+  // Phase 6 AI graduation: a request the matcher can't place may have been
+  // answered by Claude before — in which case its value-free plan shape is
+  // remembered, keyed by this exact wording and file shape. Reconstruct that
+  // computation locally now and answer with no API key. The values are re-read
+  // from the live sheet by fillPlan, never restored from storage, and only
+  // filter-free shapes graduate (see graduationStore.applyGraduation), so this
+  // can never resurrect a stale or misremembered cell value.
+  if (options.graduationStore) {
+    const grad = applyGraduation(options.graduationStore, request, workbook);
+    if (grad) {
+      const { plan, resultRows, exec } = fillPlan(grad, workbook);
+      return { kind: "answer", plan, resultRows, lookedFor: grad.lookedFor, exec, match: grad, graduated: true };
+    }
   }
 
   // Not our kind of request. Log it for the growth loop and offer Claude.
