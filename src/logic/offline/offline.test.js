@@ -90,7 +90,10 @@ describe("scenario 3: nested cohort question", () => {
     const terms = res.missingTerms.map((m) => m.term).join(" ");
     expect(terms).toMatch(/beta lactam/i);
     expect(terms).toMatch(/excess/i);
-    expect(res.message).toMatch(/Definitions sheet/i);
+    // P0-1: the block now leads with plain English (in-app form), and mentions
+    // the Definitions sheet only as an optional alternative.
+    expect(res.message).toMatch(/don't know what counts as/i);
+    expect(res.message).toMatch(/sheet named "Definitions"/i);
   });
 
   it("with definitions filled, gives correct nested counts and proportions, no key needed", () => {

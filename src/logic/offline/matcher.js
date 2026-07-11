@@ -38,6 +38,38 @@ const STOP = new Set([
 
 const words = (s) => String(s || "").toLowerCase().split(/[^a-z0-9]+/i).filter(Boolean);
 
+// P0-1: leading "request verbs" a novice types before the actual question
+// ("show me all patients who…", "list all rows where…"). They describe the
+// ASK, not a clinical term, so they must be peeled off the front of the request
+// before anything tries to resolve them — otherwise the leftover "show me all"
+// is mistaken for an undefined term and triggers the Definitions block. Longest
+// phrases first so "show me all" wins over "show me". Only a LEADING occurrence
+// is stripped, and only when real words remain after it.
+const REQUEST_LEAD = [
+  "show me all", "show me", "show all", "show", "list all", "list out", "list",
+  "pull out", "pull up", "pull", "give me", "give", "display", "find me", "find",
+  "get me", "fetch",
+];
+function stripRequestLead(request) {
+  let text = String(request || "").trim();
+  // Peel repeatedly so "show me, list all patients" and "give me all the rows"
+  // both reduce, but stop as soon as nothing more leads.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const lower = text.toLowerCase();
+    for (const lead of REQUEST_LEAD) {
+      if (lower.startsWith(lead) && /[^a-z]|$/.test(lower.charAt(lead.length))) {
+        const rest = text.slice(lead.length).replace(/^[\s,]+/, "");
+        // Only strip if real question words remain — never blank out the whole
+        // request (e.g. a lone "list" is left alone to decline normally).
+        if (words(rest).length > 0) { text = rest; changed = true; break; }
+      }
+    }
+  }
+  return text;
+}
+
 // The header types (see workbook.js inferType) an average/sum can honestly run
 // on. Same set textToChart.js uses for its numeric dropdown.
 const NUMERIC_COLUMN_TYPES = new Set(["number", "mixed (text + numbers)"]);
@@ -863,6 +895,10 @@ function buildConfirmation(stages, request) {
 export function matchRequest(request, workbook, defs, options = {}) {
   const sheet = workbook?.sheets?.[0];
   if (!sheet) return { status: "none", reason: "no-data" };
+  // P0-1: peel leading request verbs ("show me all", "list all") so they are
+  // never mistaken for an undefined clinical term. Everything below reads the
+  // cleaned request.
+  request = stripRequestLead(request);
   const headers = sheet.headers;
   const index = valueIndex(sheet);
   // W2d: phrase (folded) -> confirmed { column, value } from an earlier "Did you

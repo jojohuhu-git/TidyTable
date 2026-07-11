@@ -147,15 +147,18 @@ function buildDeclineMessage(match) {
 }
 
 // Plain block message when a clinical term is undefined (refuse, don't guess).
+// P0-1: lead in plain English a non-coder can act on — "I don't know what
+// counts as X in your data. Tell me below and I'll remember it." The in-app
+// form (rendered next to this message) is the path we point at; the
+// Definitions-sheet route stays available but is described as an optional
+// alternative rather than the first thing the user reads.
 function buildBlockMessage(match) {
   const terms = match.missingTerms.map((m) => `"${m.term}"`);
   const list = terms.length === 1 ? terms[0] : terms.slice(0, -1).join(", ") + " and " + terms.slice(-1);
-  const lead = match.definitionsPresent
-    ? `Your Definitions sheet does not say what counts as ${list}.`
-    : `This question uses ${list}, which the data does not define, and there is no Definitions sheet yet.`;
   return (
-    `${lead} I will not guess clinical meaning. Add a row to a sheet named "Definitions" with three columns — ` +
-    `the term, the column it applies to, and the values (or a rule like "> 7 when Diagnosis = pyelonephritis") that count — then ask again.`
+    `I don't know what counts as ${list} in your data. Tell me below and I'll remember it — ` +
+    `pick the column it lives in and the values that count. ` +
+    `(You can also add a sheet named "Definitions" to your file if you prefer.)`
   );
 }
 
