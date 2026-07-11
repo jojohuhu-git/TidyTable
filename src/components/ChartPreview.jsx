@@ -4,7 +4,7 @@
 // given, that bar/point is the accent colour and every peer is grey.
 
 import { foldKey } from "../logic/checkup/normalizers.js";
-import { maxOf } from "../logic/charts/aggregate.js";
+import { maxOf, countLabel } from "../logic/charts/aggregate.js";
 import { chartPalette } from "../logic/charts/palette.js";
 import { buildChartAriaSummary } from "../logic/charts/chartAriaSummary.js";
 
@@ -64,7 +64,10 @@ function niceMax(v) {
 // the long-list path only change the height and the color ramp.
 function BarChart({ dataset, fill, title, svgRef, layout }) {
   const padL = 130;
-  const padR = 40;
+  // Phase 8.3: an n (%) value label ("2 (33%)") is wider than a bare number, so
+  // the right margin has to leave room or the trailing ")" clips off the SVG.
+  const isCountBars = dataset.valueName === "count" && dataset.countTotal != null;
+  const padR = isCountBars ? 72 : 40;
   const padY = 16 + (title ? TITLE_PAD : 0);
   const points = dataset.points;
   // A "long" list grows the canvas; a short one keeps the classic 300px chart.
@@ -78,6 +81,10 @@ function BarChart({ dataset, fill, title, svgRef, layout }) {
   const zeroX = padL + negMax * scale;
   const rowH = (chartH - padY - 16) / points.length;
   const barH = Math.min(rowH * 0.62, 34);
+  // Phase 8.3 clinical default: a count bar is labeled n (%) of the cohort;
+  // a sum/average total is not a share of a whole, so it stays a bare number.
+  const isCount = dataset.valueName === "count";
+  const barLabel = (v) => (isCount ? countLabel(v, dataset.countTotal) : String(v));
   // B12: a data summary in the aria-label, not just the chart type, so a
   // screen reader user gets the numbers without seeing the SVG.
   const ariaLabel = title
@@ -105,7 +112,7 @@ function BarChart({ dataset, fill, title, svgRef, layout }) {
               dominantBaseline="middle"
               className="chart-value"
             >
-              {p.value}
+              {barLabel(p.value)}
             </text>
           </g>
         );

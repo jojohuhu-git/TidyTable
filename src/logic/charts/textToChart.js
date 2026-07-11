@@ -17,6 +17,7 @@ import { findColumnCandidates, findValueCandidates, scoreTokenMatch, tokens } fr
 import { detectIntent, GROUP_WORDS, detectTopN } from "../offline/synonyms.js";
 import { foldKey } from "../checkup/normalizers.js";
 import { matchColumn } from "../recipes/recipe.js";
+import { matchRequest } from "../offline/matcher.js";
 
 // Generic filler words that carry no column/value meaning for a chart
 // request — separate from (and smaller than) the offline Q&A matcher's STOP
@@ -100,18 +101,139 @@ function resolveGroupMarker(text, headers) {
   return null;
 }
 
-// Public: read a free-text chart request against the sheet actually being
-// charted. Returns:
+// Phase 8.1 — "one brain, two steps". A chart request is read through the SAME
+// Step 3 pipeline (matchRequest) FIRST, so every Step 3 improvement — synonyms,
+// learned aliases, negation, typo tolerance, cohort filters — transfers to
+// Step 9 for free. Only when the pipeline confidently resolves a request into a
+// shape a single chart can draw (a group/label column, an optional numeric
+// aggregation, an optional single-value cohort filter, an optional top-N cap)
+// do we take its plan. Anything the shared pipeline doesn't recognize as a
+// question (a bare column name, a value-only scope like "e coli by ward" with
+// no counting verb — the natural way people describe a chart) falls back to the
+// chart-specific local parser below, which is more liberal about turning a bare
+// column into "chart this column". Honesty is preserved on both paths: a
+// confident cohort the chart can't represent (a threshold, a negation, or more
+// than one filter) is declined plainly, never silently drawn as a wrong chart.
+//
+// Returns:
 //   { status: "none", reason, message }               — send the user to the
 //                                                          dropdowns instead
 //   { status: "resolved", labelCol, valueCol, aggMode,
 //     filter, confidence, lookedFor, ignored, ties }   — confidence is
 //                                                          "exact" or
 //                                                          "stretched"
-export function resolveChartRequest(text, sheet) {
+export function resolveChartRequest(text, sheet, options = {}) {
   const raw = String(text || "").trim();
   if (!raw) return { status: "none", reason: "empty", message: "Type what you want to compare." };
   if (!sheet?.headers?.length) return { status: "none", reason: "no-data", message: "Upload a spreadsheet first." };
+
+  // One brain: run the request through the shared Step 3 pipeline first.
+  const workbook = { sheets: [sheet] };
+  const match = matchRequest(raw, workbook, options.defs || { present: false }, options.matchOptions || {});
+  if (match.status === "confident") {
+    const mapped = chartPlanFromMatch(match);
+    if (mapped === UNSUPPORTED_FILTER) {
+      // The pipeline understood a cohort the chart's single-value filter can't
+      // honestly express (a threshold like "over 7 days", a negation, or more
+      // than one condition). Say so plainly — never draw a plausible-but-wrong
+      // chart that quietly ignores part of the filter.
+      return {
+        status: "none",
+        reason: "complex-filter",
+        message: `I understood your request, but a chart here can only narrow to a single exact value (like "for UTI"). ${match.lookedFor || ""} Ask that in Step 3 and use "Chart this", or pick columns by hand below.`.trim(),
+      };
+    }
+    if (mapped) return finishMatchedPlan(mapped);
+    // Confident, but not a shape one chart can draw (a plain number, a distinct
+    // count, a Table 1, a whole-column describe/median, or a magnitude ranking):
+    // fall through to the local parser, which may still find a plain column to
+    // chart, or decline honestly.
+  }
+
+  return resolveChartLocally(raw, sheet);
+}
+
+// A confident cohort that a single equality filter can't represent — the caller
+// declines plainly rather than dropping part of the filter into a wrong chart.
+const UNSUPPORTED_FILTER = Symbol("unsupported-filter");
+
+// Map a confident matchRequest result to the chart plan the pickers below
+// express — { labelCol, valueCol, aggMode, filter, rank } — or null when the
+// result isn't a single-chart shape (so the caller falls back to the local
+// parser). Returns UNSUPPORTED_FILTER when the request resolved but its cohort
+// can't be drawn as one equality filter.
+function chartPlanFromMatch(match) {
+  const filter = stagesToFilter(match.stages || []);
+  if (filter === UNSUPPORTED_FILTER) return UNSUPPORTED_FILTER;
+
+  // Top-N frequency ("top 5 drugs", "least common diagnosis") → a capped,
+  // sorted bar of that column. Magnitude ranking ("longest duration") ranks raw
+  // rows, not categories, so it is left to the local parser (unchanged).
+  if (match.intent === "topN" && match.topN) {
+    if (match.topN.family !== "frequency") return null;
+    // The Q&A default for a frequency ranking with no stated count is the FULL
+    // ranked table (Infinity); a chart expresses "no cap, just reorder" as null.
+    const n = match.topN.n === Infinity || match.topN.n == null ? null : match.topN.n;
+    return {
+      labelCol: match.topN.targetColumn, valueCol: null, aggMode: "count",
+      filter, rank: { n, direction: match.topN.direction },
+    };
+  }
+
+  // average / sum of a numeric column, broken down by a group column.
+  if (match.intent === "average" || match.intent === "sum") {
+    const agg = match.aggregation;
+    if (!agg || !agg.groupColumn || !agg.targetColumn) return null; // needs something to compare across
+    return { labelCol: agg.groupColumn, valueCol: agg.targetColumn, aggMode: match.intent, filter, rank: null };
+  }
+
+  // count / share broken down by a group column ("patients by ward",
+  // "how many with UTI by ward").
+  if (match.intent === "count" || match.intent === "proportion") {
+    if (!match.groupColumn) return null; // a single number, not a chart
+    return { labelCol: match.groupColumn, valueCol: null, aggMode: "count", filter, rank: null };
+  }
+
+  // distinct / median / quartiles / describe / table1 aren't single-group charts.
+  return null;
+}
+
+// Reduce a confident plan's cohort stages to the chart's single equality
+// filter. Zero stages → no filter. Exactly one plain value-equality condition →
+// that filter. Anything else (a threshold, a negation with op "<>", a set, or
+// more than one stage) can't be drawn as one equality filter — signal it so the
+// caller declines instead of silently charting the wrong rows.
+function stagesToFilter(stages) {
+  if (!stages.length) return null;
+  if (stages.length > 1) return UNSUPPORTED_FILTER;
+  const c = stages[0].condition;
+  if (c && c.kind === "value" && c.op === "=" && !c.negated) {
+    return { column: c.column, value: c.value };
+  }
+  return UNSUPPORTED_FILTER;
+}
+
+// Finish a plan resolved through the shared pipeline. These are always EXACT —
+// any stretch (an abbreviation, a concept column, a typo) comes back from
+// matchRequest as needs_confirm, not confident, so it never reaches here.
+function finishMatchedPlan({ labelCol, valueCol, aggMode, filter, rank }) {
+  return {
+    status: "resolved",
+    labelCol, valueCol, aggMode,
+    filter: filter === UNSUPPORTED_FILTER ? null : filter,
+    confidence: "exact",
+    lookedFor: describeLookedFor({ labelCol, valueCol, aggMode, filter: filter === UNSUPPORTED_FILTER ? null : filter, rank }),
+    ignored: null,
+    ties: [],
+    rank: rank || null,
+    via: "step3",
+  };
+}
+
+// Local chart-specific parser (the pre-Phase-8 resolver, now the fallback for
+// requests the shared pipeline doesn't treat as a question). Reads a free-text
+// chart request against the sheet actually being charted.
+function resolveChartLocally(raw, sheet) {
   const headers = sheet.headers;
 
   // Phase 4: "top 5"/"most common"/"least common"/"longest"/"shortest" — the

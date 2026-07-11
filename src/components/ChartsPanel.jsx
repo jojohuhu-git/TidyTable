@@ -1,5 +1,6 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { buildDataset, groupSmallIntoOther, applyRankCap } from "../logic/charts/aggregate.js";
+import { parseChartTweak, sortDataset } from "../logic/charts/chartTweaks.js";
 import { recommendChart } from "../logic/charts/advisor.js";
 import { excelChartSteps } from "../logic/charts/excelChart.js";
 import { buildChartTitle } from "../logic/charts/chartTitle.js";
@@ -16,7 +17,7 @@ import ClarifyBox from "./ClarifyBox.jsx";
 // offered but collapsed. Many categories draw as a horizontal all-rows bar
 // chart (never refused); grouping the smallest into "Other" is offered, never
 // forced.
-export default function ChartsPanel({ sheet }) {
+export default function ChartsPanel({ sheet, seed }) {
   const columns = sheet.headers.map((h) => h.name);
   // B9: the value dropdown used to list every column as "total X", including
   // text ones — picking a text column then quietly fell back to a count.
@@ -32,6 +33,9 @@ export default function ChartsPanel({ sheet }) {
   const [pendingConfirm, setPendingConfirm] = useState(null); // W4 middle path: { plan, summary }
   const [groupOther, setGroupOther] = useState(false); // W4: fold small values into "Other"
   const [chartRank, setChartRank] = useState(null); // Phase 4: { n, direction } from a "top N"/"most common" free-text request
+  const [sortMode, setSortMode] = useState(null); // Phase 8.5: "alpha" | "value" | null (chart default)
+  const [tweakText, setTweakText] = useState(""); // Phase 8.5: the "adjust the chart" box
+  const [tweakLog, setTweakLog] = useState([]); // applied tweaks, in words, for replay/recipe
   const svgRef = useRef(null);
 
   // Apply a resolved (or confirmed) plan to the pickers below, so the dropdowns
@@ -44,16 +48,48 @@ export default function ChartsPanel({ sheet }) {
     setChosen(null);
     setGroupOther(false);
     setChartRank(plan.rank || null);
+    setSortMode(null);
+    setTweakLog([]);
+  }
+
+  // Phase 8.5: apply a plain-word tweak to the chart already on screen. Each
+  // recognized verb maps to one deterministic change (a cap, a re-sort) or an
+  // honest note when the request is already true or not yet supported — never a
+  // silent no-op. Applied tweaks are logged so a replay can keep them.
+  function runTweak(text = tweakText) {
+    const tweak = parseChartTweak(text);
+    let note = "";
+    if (tweak.kind === "topn") {
+      setChartRank({ n: tweak.n, direction: chartRank?.direction === "least" ? "least" : "most" });
+      note = `Only the top ${tweak.n}.`;
+    } else if (tweak.kind === "sort") {
+      setSortMode(tweak.mode);
+      note = tweak.mode === "alpha" ? "Sorted A→Z by label." : "Sorted largest first.";
+    } else if (tweak.kind === "blanks") {
+      note = "Blank categories are already left out of the chart.";
+    } else if (tweak.kind === "percent") {
+      note = baseDataset && baseDataset.valueName === "count"
+        ? "Count bars already show their percentage share, as n (%)."
+        : "A percentage only makes sense for a count — switch the Value to \"count\" first.";
+    } else if (tweak.kind === "flip") {
+      note = "Flipping between vertical and horizontal isn't a word tweak yet — the app already lays many categories out horizontally for you.";
+    } else {
+      setTextNote(`I didn't understand "${text}". Try "only top 5", "sort alphabetically", or "sort largest first".`);
+      return;
+    }
+    if (tweak.kind === "topn" || tweak.kind === "sort") setTweakLog((l) => [...l, note]);
+    setTextNote(note);
+    setTweakText("");
   }
 
   // W4: read the free-text box. Exact, unambiguous → apply immediately. Any
   // stretch (abbreviation, partial/fuzzy match, ambiguous column) → confirm
   // first, the same middle path Step 3 uses. Nothing resolvable → say so and
   // leave the dropdowns for the user, never guess.
-  function runText() {
+  function runText(requestText = text) {
     setTextNote("");
     setPendingConfirm(null);
-    const res = resolveChartRequest(text, sheet);
+    const res = resolveChartRequest(requestText, sheet);
     if (res.status !== "resolved") {
       setTextNote(res.message);
       return;
@@ -66,6 +102,16 @@ export default function ChartsPanel({ sheet }) {
     if (res.ignored) setTextNote(`Charting ${res.lookedFor} I couldn't place "${res.ignored}", so it was left out — add it with the pickers below if it matters.`);
   }
 
+  // Phase 8.4: a "Chart this" click from a Step 3 answer seeds the request and
+  // runs it through the same shared pipeline — the box fills in and the chart
+  // draws with no re-typing. The nonce makes a repeat click re-trigger.
+  useEffect(() => {
+    if (!seed?.request) return;
+    setText(seed.request);
+    runText(seed.request);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed?.nonce]);
+
   const baseDataset = useMemo(() => {
     if (!labelCol) return null;
     return buildDataset(sheet, labelCol, valueCol || null, { aggMode, filter });
@@ -76,8 +122,11 @@ export default function ChartsPanel({ sheet }) {
     // Phase 4: "top 5 drugs" caps the bar chart the same way it caps the Q&A
     // ranked table — sorted desc (or asc for "least common"), a tie at the
     // cutoff shown in full.
-    return grouped && chartRank ? applyRankCap(grouped, chartRank) : grouped;
-  }, [baseDataset, groupOther, chartRank]);
+    const capped = grouped && chartRank ? applyRankCap(grouped, chartRank) : grouped;
+    // Phase 8.5: a "sort alphabetically" word tweak reorders the capped set
+    // (largest-first stays the default when sortMode is null).
+    return capped && sortMode ? sortDataset(capped, sortMode) : capped;
+  }, [baseDataset, groupOther, chartRank, sortMode]);
 
   const rec = useMemo(() => (dataset ? recommendChart(dataset) : null), [dataset]);
   const chartType = chosen || rec?.type;
@@ -102,7 +151,7 @@ export default function ChartsPanel({ sheet }) {
             onKeyDown={(e) => { if (e.key === "Enter") runText(); }}
           />
         </label>
-        <button type="button" className="btn btn-primary" onClick={runText} disabled={!text.trim()}>
+        <button type="button" className="btn btn-primary" onClick={() => runText()} disabled={!text.trim()}>
           Make this chart
         </button>
       </div>
@@ -191,6 +240,26 @@ export default function ChartsPanel({ sheet }) {
           )}
 
           <ChartPreview chartType={chartType} dataset={dataset} title={chartTitle} svgRef={svgRef} layout={rec.layout} />
+
+          {/* Phase 8.5: adjust the chart in plain words. */}
+          <div className="chart-tweak-row">
+            <label className="chart-text-label">
+              Adjust in words
+              <input
+                className="chart-text-input"
+                value={tweakText}
+                placeholder='e.g. "only top 5" or "sort alphabetically"'
+                onChange={(e) => setTweakText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") runTweak(); }}
+              />
+            </label>
+            <button type="button" className="btn btn-ghost" onClick={() => runTweak()} disabled={!tweakText.trim()}>
+              Apply
+            </button>
+          </div>
+          {tweakLog.length > 0 && (
+            <p className="dim">Adjustments: {tweakLog.join(" ")}</p>
+          )}
           {dataset.kind === "categorical" && (
             <p className="dim chart-palette-note">
               {qualitative

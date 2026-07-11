@@ -35,6 +35,7 @@ import ClarifyBox from "./components/ClarifyBox.jsx";
 import StatsPanel from "./components/StatsPanel.jsx";
 import RegressionWizard from "./components/RegressionWizard.jsx";
 import ChartsPanel from "./components/ChartsPanel.jsx";
+import { resolveChartRequest } from "./logic/charts/textToChart.js";
 import ShelfPanel from "./components/ShelfPanel.jsx";
 import ColumnProfileTable from "./components/ColumnProfileTable.jsx";
 import DefinitionsEditor from "./components/DefinitionsEditor.jsx";
@@ -119,6 +120,13 @@ export default function App() {
   // available rather than showing stale or missing data.
   const [results, setResults] = useState(() => savedSession?.results || []);
   const [expandedResultId, setExpandedResultId] = useState(null);
+  // Phase 8.4: a "Chart this" click seeds Step 9 with a request; the nonce lets
+  // the same request re-trigger the chart if clicked again.
+  const [chartSeed, setChartSeed] = useState(null); // { request, nonce }
+  // Phase 8.4: Step 9 lives inside the collapsible "Analyze & chart" group;
+  // "Chart this" opens it so the chart the click just built is actually visible.
+  const [analyzeGroupOpen, setAnalyzeGroupOpen] = useState(false);
+  const chartsRef = useRef(null);
   const [keyStore, setKeyStore] = useState(() => loadKeyStore());
   const [notice, setNotice] = useState(""); // plain, non-error message (e.g. "add a definition")
   const [pendingGrain, setPendingGrain] = useState(null); // { grain, request } awaiting a combine-rows answer
@@ -220,16 +228,42 @@ export default function App() {
   // folded into this one list). `kind` is "checkup" or "question"; a question
   // answered by the offline engine is also recorded into the routine
   // (`savedToRoutine: true`) by the caller.
-  function recordResult({ label, answer, plan: newPlan, resultRows: newResultRows, kind, savedToRoutine }) {
+  function recordResult({ label, answer, plan: newPlan, resultRows: newResultRows, kind, savedToRoutine, chartRequest }) {
     const id = `${Date.now()}-${Math.random()}`;
     setPlan(newPlan);
     setResultRows(newResultRows);
     setResults((r) => [
-      { id, kind, label, answer, timestamp: Date.now(), plan: newPlan, resultRows: newResultRows, savedToRoutine: Boolean(savedToRoutine) },
+      // Phase 8.4: `chartRequest` is set only when this answer's own wording
+      // resolves to a chart through the shared pipeline — so the card can offer
+      // a one-click "Chart this" that seeds Step 9 without re-typing.
+      { id, kind, label, answer, timestamp: Date.now(), plan: newPlan, resultRows: newResultRows, savedToRoutine: Boolean(savedToRoutine), chartRequest: chartRequest || null },
       ...r,
     ].slice(0, MAX_RESULTS));
     setExpandedResultId(id);
     requestAnimationFrame(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
+
+  // Phase 8.4: a Step 3 answer offers "Chart this" when its wording resolves to
+  // a chart — seed Step 9 and scroll to it. The chart engine re-resolves the
+  // same request through the same shared pipeline (Phase 8.1), so the chart is
+  // built from the same plan the answer used, never a re-typed guess.
+  function chartThis(request) {
+    setChartSeed({ request, nonce: Date.now() });
+    setAnalyzeGroupOpen(true); // reveal Step 9 so the new chart is visible
+    // Scroll after the section has a chance to expand.
+    requestAnimationFrame(() => requestAnimationFrame(() => chartsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })));
+  }
+
+  // Decide if an answered question can be charted, cheaply, at record time —
+  // its wording resolves to a chart plan through the shared pipeline.
+  function chartRequestFor(request) {
+    try {
+      const s = workbook?.sheets?.[0];
+      if (!s) return null;
+      return resolveChartRequest(request, s).status === "resolved" ? request : null;
+    } catch {
+      return null;
+    }
   }
 
   // W3: per-card "Remove" in "Your results so far" — takes the card out of
@@ -286,6 +320,7 @@ export default function App() {
         resultRows: res.resultRows,
         kind: "question",
         savedToRoutine: true,
+        chartRequest: chartRequestFor(request),
       });
       setRecipe((r) => addStep(r, questionStep(request, res.match, answer)));
       // Phase 7.1: remember this answered question so the NEXT turn can be a
@@ -1036,6 +1071,7 @@ export default function App() {
               expandedId={expandedResultId}
               onToggle={(id) => setExpandedResultId((cur) => (cur === id ? null : id))}
               onRemove={removeResult}
+              onChart={chartThis}
             />
           </section>
         )}
@@ -1081,7 +1117,7 @@ export default function App() {
         )}
 
         {workbook && (
-          <details className="step-group">
+          <details className="step-group" open={analyzeGroupOpen} onToggle={(e) => setAnalyzeGroupOpen(e.currentTarget.open)}>
             <summary>Analyze &amp; chart — compare groups, run models, make a chart</summary>
             <section className="card">
               <h2><span className="step-label">Step 7</span> — Compare two groups (statistics)</h2>
@@ -1116,7 +1152,9 @@ export default function App() {
                   <> Only the first sheet, "{workbook.sheets[0].name}", is used here.</>
                 )}
               </p>
-              <ChartsPanel sheet={workbook.sheets[0]} />
+              <div ref={chartsRef}>
+                <ChartsPanel sheet={workbook.sheets[0]} seed={chartSeed} />
+              </div>
             </section>
           </details>
         )}
