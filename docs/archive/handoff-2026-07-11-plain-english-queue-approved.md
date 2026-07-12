@@ -1,3 +1,9 @@
+> **SUPERSEDED (2026-07-11).** Execution has begun. See
+> `docs/archive/handoff-2026-07-11-p0-done-p1-1-list-done.md` for current state:
+> P0-1…P0-4 and P1-1 (list+sort) are done, committed, and green (777 tests).
+> The fix spec `.claude/prompts/fix-2026-07-11-steps-2-3-9-plain-english.md`
+> remains the active queue; resume at P1-1b / P1-2.
+
 # TidyTable — Handoff after steps 2/3/9 review; approved fix queue, nothing executed (2026-07-11)
 
 Branch: `main`, in sync with `origin/main` at `6cfec7e`. Nothing committed this
