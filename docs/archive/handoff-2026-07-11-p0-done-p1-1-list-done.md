@@ -1,3 +1,7 @@
+> **SUPERSEDED (2026-07-11)** — P1-1b and P1-2 from this queue are now done.
+> Resume from `handoff-2026-07-11-p1-1b-and-p1-2-done.md` (baseline 790 tests,
+> next item P1-3). Do not resume from the queue below.
+
 # TidyTable — Handoff after P0 (all) + P1-1 (list+sort) of the steps-2/3/9 queue (2026-07-11)
 
 Branch: `main`, off `main`. **NOT pushed** — TidyTable rule: never push to `main`
