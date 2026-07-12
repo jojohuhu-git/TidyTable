@@ -38,8 +38,22 @@ function compare(n, op, target) {
   }
 }
 
+// P1-1b: is this cell "missing"? Uses the SAME sentinel set Step 2's cleanup
+// recognizes (sentinelBlanks in checkup/normalizers.js) — null/empty plus the
+// stand-in markers N/A, none, -, . — so the app is consistent about what counts
+// as "no value". A censored result like "<0.5" is a real value, not missing.
+// Self-contained (no imports) so fillPlan.js can inline this exact logic.
+export function isMissingCell(v) {
+  if (v == null) return true;
+  const t = String(v).trim().toLowerCase();
+  return t === "" || t === "n/a" || t === "na" || t === "none" || t === "-" || t === ".";
+}
+
 // Build a row predicate for a resolved condition.
 export function predicate(cond) {
+  if (cond.kind === "blank") {
+    return (r) => cond.present ? !isMissingCell(r[cond.column]) : isMissingCell(r[cond.column]);
+  }
   if (cond.kind === "value") {
     const want = foldKey(cond.value);
     if (cond.op === "<>") {

@@ -442,14 +442,89 @@ function valueCondition(candidate, term, { stretched, candidates, allCandidates,
   };
 }
 
-// Resolve a single filter phrase into a condition, trying (in order): a threshold
-// ("... over 7"), a column scope ("... in urine"), an exact/fuzzy value present
-// in the data (value scan), a clinical-abbreviation expansion, then the
-// Definitions sheet. Anything left over is a missing term the app must refuse to
-// guess — but it comes back with the nearest values/columns it CAN see, so the
-// user isn't just told to reach for AI. `aliasMap` remembers phrases the user
-// already confirmed this session, so the same stretch never asks twice.
+// P1-1b: keyword lists for a "<column> is missing / blank / empty" (or "…is
+// present / recorded") filter. Negated forms are listed so "not missing" reads
+// as PRESENT and "not recorded" reads as MISSING — the plain-English opposites a
+// novice actually types. "Missing" uses the SAME sentinel set Step 2's cleanup
+// recognizes (see sentinelBlanks in checkup/normalizers.js), so the whole app
+// agrees on what "no value" means.
+const BLANK_MISSING_KW = [
+  "not recorded", "not filled in", "not filled", "unrecorded",
+  "missing", "blank", "empty", "has no value", "no value", "n/a", "na",
+];
+const BLANK_PRESENT_KW = [
+  "not missing", "not blank", "not empty",
+  "present", "recorded", "filled in", "filled", "has a value", "has value",
+];
+// Linking words that glue a blank keyword to its column phrase; dropped so
+// "lab value is missing" resolves the column "Lab value". "value(s)" is kept —
+// it can be part of the column name (Lab_value) — because any "has (no) value"
+// keyword already consumed its own "value" word above.
+const BLANK_LINK_WORDS = new Set([
+  "is", "are", "was", "were", "the", "a", "an", "that", "which", "where",
+  "with", "of", "in", "has", "have", "row", "rows", "record", "records",
+  "patient", "patients", "entry", "entries", "cell", "cells",
+]);
+
+// P1-1b: detect a missing/present filter and resolve its column, or null. When
+// the column is resolved by concept (a stretch) it is tagged colStretch so
+// buildConfirmation asks "did you mean this COLUMN?", never a cell value.
+function detectBlankCondition(clause, headers, index, aliasMap) {
+  const norm = " " + String(clause).toLowerCase().replace(/[^a-z0-9/ ]/g, " ").replace(/\s+/g, " ").trim() + " ";
+  // Earliest keyword position wins; longest keyword wins at the same position,
+  // so "not recorded" beats "recorded" and "not missing" beats "missing".
+  let best = null;
+  const consider = (kw, present) => {
+    const idx = norm.indexOf(" " + kw + " ");
+    if (idx < 0) return;
+    if (!best || idx < best.idx || (idx === best.idx && kw.length > best.kw.length)) {
+      best = { idx, kw, present };
+    }
+  };
+  BLANK_MISSING_KW.forEach((kw) => consider(kw, false));
+  BLANK_PRESENT_KW.forEach((kw) => consider(kw, true));
+  if (!best) return null;
+
+  const columnPhrase = norm
+    .replace(" " + best.kw + " ", " ")
+    .split(" ")
+    .filter((w) => w && !BLANK_LINK_WORDS.has(w))
+    .join(" ")
+    .trim();
+  if (!columnPhrase) return null;
+
+  let column = fuzzyColumn(columnPhrase, headers);
+  let stretch = null;
+  if (!column) {
+    const ref = resolveColumnRef(columnPhrase, headers, { aliasMap, index });
+    if (ref) {
+      column = ref.column;
+      if (ref.stretched) stretch = { candidates: ref.candidates, allCandidates: ref.allCandidates, via: ref.via, colPhrase: columnPhrase };
+    }
+  }
+  if (!column) return null; // let the normal pipeline report the unknown column
+
+  return {
+    kind: "blank", column, present: best.present, source: "column", term: String(clause).trim(),
+    ...(stretch ? { stretched: true, colStretch: true, candidates: stretch.candidates, allCandidates: stretch.allCandidates, via: stretch.via, colPhrase: stretch.colPhrase } : {}),
+  };
+}
+
+// Resolve a single filter phrase into a condition, trying (in order): a "missing/
+// present" blank filter, a threshold ("... over 7"), a column scope ("... in
+// urine"), an exact/fuzzy value present in the data (value scan), a clinical-
+// abbreviation expansion, then the Definitions sheet. Anything left over is a
+// missing term the app must refuse to guess — but it comes back with the nearest
+// values/columns it CAN see, so the user isn't just told to reach for AI.
+// `aliasMap` remembers phrases the user already confirmed this session, so the
+// same stretch never asks twice.
 function resolveCondition(clause, sheet, headers, index, defs, aliasMap) {
+  // P1-1b: a "<column> is missing/blank/empty" (or "…present") filter has no
+  // comparator or value to scan, so catch it up front before the value machinery
+  // treats the keyword as an undefined term.
+  const blank = detectBlankCondition(clause, headers, index, aliasMap);
+  if (blank) return blank;
+
   const compar = detectComparator(clause);
   const numMatch = String(clause).match(/-?\d+(?:\.\d+)?/);
   // Phase 7.3: a "<number> <time-unit>" quantity ("a week", "2 weeks", "48
@@ -979,7 +1054,7 @@ function matchList(request, sortRaw, sheet, headers, index, defs, aliasMap, opti
     }
   }
 
-  const hasCondition = stages.some((s) => ["value", "set", "threshold"].includes(s.condition.kind));
+  const hasCondition = stages.some((s) => ["value", "set", "threshold", "blank"].includes(s.condition.kind));
   // Nothing to filter on and no sort — not a list we can honestly build.
   if (!hasCondition && !sort) return null;
 
@@ -1405,6 +1480,7 @@ export function conditionPhrase(c) {
     const note = c.conversionNote ? ` (from "${c.conversionNote}")` : "";
     return `"${c.column}" is ${opWord(c.op)} ${c.value}${note}`;
   }
+  if (c.kind === "blank") return `"${c.column}" is ${c.present ? "recorded (not blank)" : "missing (blank / N/A)"}`;
   if (c.kind === "set") return `"${c.column}" is ${c.op === "not-in" ? "NONE of" : "one of"} ${c.values.join(", ")}`;
   // Bug 3: a negated condition states the negation back plainly, so the user
   // sees the app understood the "not" before trusting the number.

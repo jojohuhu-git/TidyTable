@@ -63,6 +63,14 @@ function letterFor(sheet, colName) {
   return h ? h.letter : "A";
 }
 
+// P1-1b: a condition that a single COUNTIFS criterion can't honestly express —
+// a "one of" set, or a "missing/blank" filter (blanks span several sentinel
+// markers, so the honest Excel path is Data > Filter, not a formula). These
+// route to the AutoFilter fallback the set case already used.
+function needsFilterFallback(c) {
+  return c.kind === "set" || c.kind === "blank";
+}
+
 // A plain-English answer built from the executed levels.
 function buildSummary(match, exec) {
   const lines = [match.lookedFor, ""];
@@ -98,15 +106,16 @@ function buildExcelSteps(match, exec, sheet) {
   let teachesAdded = false;
   match.stages.forEach((stage, i) => {
     upto.push(stage.condition);
-    const hasSet = upto.some((c) => c.kind === "set");
+    const hasSet = upto.some(needsFilterFallback);
     if (hasSet) {
       steps.push({
         title: `Level ${i + 1}: ${stage.condition.term}`,
         where: `Sheet "${sheet.name}"`,
         formula: "",
         instruction:
-          `Turn on Data > Filter, then filter each column to the values that count for "${stage.condition.term}". ` +
-          `The row count Excel shows at the bottom is the matched number. A single COUNTIFS cannot list several accepted values, so filtering is the honest way here.`,
+          `Turn on Data > Filter, then filter each column to what counts for "${stage.condition.term}" ` +
+          `(for a "missing" condition, tick Blanks plus any N/A / none / - / . markers). ` +
+          `The row count Excel shows at the bottom is the matched number — a single COUNTIFS can't express these, so filtering is the honest way here.`,
       });
       return;
     }
@@ -147,6 +156,7 @@ var SHEET = ${JSON.stringify(match.sheetName)};
 var UNIT = ${JSON.stringify(grain ? "people" : "rows")};
 var rows = sheets[SHEET] || [];
 var pred = function (c) { return function (r) {
+  if (c.kind === "blank") { var bv = r[c.column]; var bt = bv == null ? "" : String(bv).trim().toLowerCase(); var bm = (bt === "" || bt === "n/a" || bt === "na" || bt === "none" || bt === "-" || bt === "."); return c.present ? !bm : bm; }
   if (c.kind === "value") { if (c.op === "<>") { return r[c.column] == null || foldKey(r[c.column]) !== foldKey(c.value); } return r[c.column] != null && foldKey(r[c.column]) === foldKey(c.value); }
   if (c.kind === "set") { var set = {}; for (var i = 0; i < c.values.length; i++) { set[foldKey(c.values[i])] = 1; } if (c.op === "not-in") { return r[c.column] == null || set[foldKey(r[c.column])] !== 1; } return r[c.column] != null && set[foldKey(r[c.column])] === 1; }
   if (c.kind === "threshold") { if (c.when) { var wv = r[c.when.column]; if (wv == null || foldKey(wv) !== foldKey(c.when.value)) return false; } var n = toNumber(r[c.column]); if (n == null) return false; return cmp(n, c.op, c.value); }
@@ -188,7 +198,7 @@ function buildGroupCountExcelSteps(match, exec, sheet) {
   const lastRow = extent.lastRow;
   const range = (col) => `'${sheet.name}'!${letterFor(sheet, col)}2:${letterFor(sheet, col)}${lastRow}`;
   const crit = (op, value) => (op === "=" ? `"${escapeCriteria(value)}"` : `"${op}${escapeCriteria(value)}"`);
-  const hasSet = match.stages.some((s) => s.condition.kind === "set");
+  const hasSet = match.stages.some((s) => needsFilterFallback(s.condition));
 
   if (hasSet) {
     return withExtentNote([{
@@ -233,6 +243,7 @@ var GROUP = ${JSON.stringify(match.groupColumn)};
 var SHEET = ${JSON.stringify(match.sheetName)};
 var rows = sheets[SHEET] || [];
 var pred = function (c) { return function (r) {
+  if (c.kind === "blank") { var bv = r[c.column]; var bt = bv == null ? "" : String(bv).trim().toLowerCase(); var bm = (bt === "" || bt === "n/a" || bt === "na" || bt === "none" || bt === "-" || bt === "."); return c.present ? !bm : bm; }
   if (c.kind === "value") { if (c.op === "<>") { return r[c.column] == null || foldKey(r[c.column]) !== foldKey(c.value); } return r[c.column] != null && foldKey(r[c.column]) === foldKey(c.value); }
   if (c.kind === "set") { var set = {}; for (var i = 0; i < c.values.length; i++) { set[foldKey(c.values[i])] = 1; } if (c.op === "not-in") { return r[c.column] == null || set[foldKey(r[c.column])] !== 1; } return r[c.column] != null && set[foldKey(r[c.column])] === 1; }
   if (c.kind === "threshold") { if (c.when) { var wv = r[c.when.column]; if (wv == null || foldKey(wv) !== foldKey(c.when.value)) return false; } var n = toNumber(r[c.column]); if (n == null) return false; return cmp(n, c.op, c.value); }
@@ -375,11 +386,11 @@ function buildAggregationExcelSteps(match, exec, sheet, label) {
   const filterPairs = [];
   for (const stage of match.stages) {
     const c = stage.condition;
-    if (c.kind === "set") continue;
+    if (needsFilterFallback(c)) continue;
     filterPairs.push(`${range(c.column)}, ${crit(c.op, c.value)}`);
     if (c.when) filterPairs.push(`${range(c.when.column)}, "${escapeCriteria(c.when.value)}"`);
   }
-  const hasSet = match.stages.some((s) => s.condition.kind === "set");
+  const hasSet = match.stages.some((s) => needsFilterFallback(s.condition));
   const targetRange = range(exec.targetColumn);
 
   // Distinct count: always the copy + Remove Duplicates pattern.
@@ -533,6 +544,7 @@ var LABEL = ${JSON.stringify(label)};
 var SHEET = ${JSON.stringify(match.sheetName)};
 var rows = sheets[SHEET] || [];
 var pred = function (c) { return function (r) {
+  if (c.kind === "blank") { var bv = r[c.column]; var bt = bv == null ? "" : String(bv).trim().toLowerCase(); var bm = (bt === "" || bt === "n/a" || bt === "na" || bt === "none" || bt === "-" || bt === "."); return c.present ? !bm : bm; }
   if (c.kind === "value") { if (c.op === "<>") { return r[c.column] == null || foldKey(r[c.column]) !== foldKey(c.value); } return r[c.column] != null && foldKey(r[c.column]) === foldKey(c.value); }
   if (c.kind === "set") { var set = {}; for (var i = 0; i < c.values.length; i++) { set[foldKey(c.values[i])] = 1; } if (c.op === "not-in") { return r[c.column] == null || set[foldKey(r[c.column])] !== 1; } return r[c.column] != null && set[foldKey(r[c.column])] === 1; }
   if (c.kind === "threshold") { if (c.when) { var wv = r[c.when.column]; if (wv == null || foldKey(wv) !== foldKey(c.when.value)) return false; } var n = toNumber(r[c.column]); if (n == null) return false; return cmp(n, c.op, c.value); }
@@ -763,11 +775,11 @@ function buildDescribeExcelSteps(match, exec, sheet) {
   const filterPairs = [];
   for (const stage of match.stages) {
     const c = stage.condition;
-    if (c.kind === "set") continue;
+    if (needsFilterFallback(c)) continue;
     filterPairs.push(`${range(c.column)}, ${crit(c.op, c.value)}`);
     if (c.when) filterPairs.push(`${range(c.when.column)}, "${escapeCriteria(c.when.value)}"`);
   }
-  const hasSet = match.stages.some((s) => s.condition.kind === "set");
+  const hasSet = match.stages.some((s) => needsFilterFallback(s.condition));
   const targetRange = range(exec.targetColumn);
   const isFiltered = filterPairs.length > 0 || hasSet || exec.mode === "group";
 
@@ -840,6 +852,7 @@ var GROUP = ${JSON.stringify(groupColumn)};
 var SHEET = ${JSON.stringify(match.sheetName)};
 var rows = sheets[SHEET] || [];
 var pred = function (c) { return function (r) {
+  if (c.kind === "blank") { var bv = r[c.column]; var bt = bv == null ? "" : String(bv).trim().toLowerCase(); var bm = (bt === "" || bt === "n/a" || bt === "na" || bt === "none" || bt === "-" || bt === "."); return c.present ? !bm : bm; }
   if (c.kind === "value") { if (c.op === "<>") { return r[c.column] == null || foldKey(r[c.column]) !== foldKey(c.value); } return r[c.column] != null && foldKey(r[c.column]) === foldKey(c.value); }
   if (c.kind === "set") { var set = {}; for (var i = 0; i < c.values.length; i++) { set[foldKey(c.values[i])] = 1; } if (c.op === "not-in") { return r[c.column] == null || set[foldKey(r[c.column])] !== 1; } return r[c.column] != null && set[foldKey(r[c.column])] === 1; }
   if (c.kind === "threshold") { if (c.when) { var wv = r[c.when.column]; if (wv == null || foldKey(wv) !== foldKey(c.when.value)) return false; } var n = toNumber(r[c.column]); if (n == null) return false; return cmp(n, c.op, c.value); }
@@ -973,7 +986,7 @@ function buildTopNFrequencyExcelSteps(match, exec, sheet) {
   const lastRow = extent.lastRow;
   const range = (col) => `'${sheet.name}'!${letterFor(sheet, col)}2:${letterFor(sheet, col)}${lastRow}`;
   const crit = (op, value) => (op === "=" ? `"${escapeCriteria(value)}"` : `"${op}${escapeCriteria(value)}"`);
-  const hasSet = match.stages.some((s) => s.condition.kind === "set");
+  const hasSet = match.stages.some((s) => needsFilterFallback(s.condition));
 
   const intro = {
     title: `Rank "${exec.targetColumn}" by frequency`,
@@ -1097,6 +1110,7 @@ var DIRECTION = ${JSON.stringify(exec.direction)};
 var SHEET = ${JSON.stringify(match.sheetName)};
 var rows = sheets[SHEET] || [];
 var pred = function (c) { return function (r) {
+  if (c.kind === "blank") { var bv = r[c.column]; var bt = bv == null ? "" : String(bv).trim().toLowerCase(); var bm = (bt === "" || bt === "n/a" || bt === "na" || bt === "none" || bt === "-" || bt === "."); return c.present ? !bm : bm; }
   if (c.kind === "value") { if (c.op === "<>") { return r[c.column] == null || foldKey(r[c.column]) !== foldKey(c.value); } return r[c.column] != null && foldKey(r[c.column]) === foldKey(c.value); }
   if (c.kind === "set") { var set = {}; for (var i = 0; i < c.values.length; i++) { set[foldKey(c.values[i])] = 1; } if (c.op === "not-in") { return r[c.column] == null || set[foldKey(r[c.column])] !== 1; } return r[c.column] != null && set[foldKey(r[c.column])] === 1; }
   if (c.kind === "threshold") { if (c.when) { var wv = r[c.when.column]; if (wv == null || foldKey(wv) !== foldKey(c.when.value)) return false; } var n = toNumber(r[c.column]); if (n == null) return false; return cmp(n, c.op, c.value); }
@@ -1133,6 +1147,7 @@ var DIRECTION = ${JSON.stringify(exec.direction)};
 var SHEET = ${JSON.stringify(match.sheetName)};
 var rows = sheets[SHEET] || [];
 var pred = function (c) { return function (r) {
+  if (c.kind === "blank") { var bv = r[c.column]; var bt = bv == null ? "" : String(bv).trim().toLowerCase(); var bm = (bt === "" || bt === "n/a" || bt === "na" || bt === "none" || bt === "-" || bt === "."); return c.present ? !bm : bm; }
   if (c.kind === "value") { if (c.op === "<>") { return r[c.column] == null || foldKey(r[c.column]) !== foldKey(c.value); } return r[c.column] != null && foldKey(r[c.column]) === foldKey(c.value); }
   if (c.kind === "set") { var set = {}; for (var i = 0; i < c.values.length; i++) { set[foldKey(c.values[i])] = 1; } if (c.op === "not-in") { return r[c.column] == null || set[foldKey(r[c.column])] !== 1; } return r[c.column] != null && set[foldKey(r[c.column])] === 1; }
   if (c.kind === "threshold") { if (c.when) { var wv = r[c.when.column]; if (wv == null || foldKey(wv) !== foldKey(c.when.value)) return false; } var n = toNumber(r[c.column]); if (n == null) return false; return cmp(n, c.op, c.value); }
@@ -1295,6 +1310,11 @@ function compareForSort(a, b, column, sign) {
 // P1-1: R filter expression for one resolved condition (dplyr::filter).
 function rFilterExpr(c) {
   const q = (v) => `"${String(v).replace(/"/g, '\\"')}"`;
+  if (c.kind === "blank") {
+    // Same sentinel set the app uses everywhere (null + "", N/A, none, -, .).
+    const miss = `(is.na(${c.column}) | trimws(tolower(as.character(${c.column}))) %in% c("", "n/a", "na", "none", "-", "."))`;
+    return c.present ? `!${miss}` : miss;
+  }
   if (c.kind === "value") return c.op === "<>" ? `${c.column} != ${q(c.value)}` : `${c.column} == ${q(c.value)}`;
   if (c.kind === "set") {
     const list = `c(${c.values.map(q).join(", ")})`;
@@ -1326,6 +1346,7 @@ function buildListSummary(match, exec, sheet) {
 function buildListExcelSteps(match, exec, sheet) {
   const extent = excelRowExtent(sheet);
   const crit = (c) => {
+    if (c.kind === "blank") return c.present ? "not blank (has a value)" : "blank / missing — use the Filter's Blanks box, and also tick any N/A, none, -, . markers";
     if (c.kind === "set") return `one of: ${c.values.join(", ")}`;
     if (c.kind === "threshold") return `${c.op} ${c.value}${c.when ? ` (only where "${c.when.column}" is ${c.when.value})` : ""}`;
     return c.op === "<>" ? `not "${c.value}"` : `"${c.value}"`;
@@ -1403,6 +1424,7 @@ var SORT = ${JSON.stringify(sort)};
 var SHEET = ${JSON.stringify(match.sheetName)};
 var rows = sheets[SHEET] || [];
 var pred = function (c) { return function (r) {
+  if (c.kind === "blank") { var bv = r[c.column]; var bt = bv == null ? "" : String(bv).trim().toLowerCase(); var bm = (bt === "" || bt === "n/a" || bt === "na" || bt === "none" || bt === "-" || bt === "."); return c.present ? !bm : bm; }
   if (c.kind === "value") { if (c.op === "<>") { return r[c.column] == null || foldKey(r[c.column]) !== foldKey(c.value); } return r[c.column] != null && foldKey(r[c.column]) === foldKey(c.value); }
   if (c.kind === "set") { var set = {}; for (var i = 0; i < c.values.length; i++) { set[foldKey(c.values[i])] = 1; } if (c.op === "not-in") { return r[c.column] == null || set[foldKey(r[c.column])] !== 1; } return r[c.column] != null && set[foldKey(r[c.column])] === 1; }
   if (c.kind === "threshold") { if (c.when) { var wv = r[c.when.column]; if (wv == null || foldKey(wv) !== foldKey(c.when.value)) return false; } var n = toNumber(r[c.column]); if (n == null) return false; return cmp(n, c.op, c.value); }
