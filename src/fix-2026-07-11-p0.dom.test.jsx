@@ -26,14 +26,16 @@ function ask(question) {
 beforeEach(() => localStorage.clear());
 
 describe("P0-2 — teach form only when teaching can help", () => {
-  it("R3: an unsupported OPERATION (sort) does not offer the teach form", async () => {
+  // NOTE: "sort" became a supported operation in P1-1, so this uses "reformat",
+  // which the offline engine genuinely cannot do, as the unsupported-operation case.
+  it("an unsupported OPERATION (reformat) does not offer the teach form", async () => {
     await tryExample();
-    ask("sort the rows by visit date newest first");
+    ask("reformat the visit date column into dd/mm/yyyy");
     await waitFor(() => expect(document.querySelector(".notice-box")).toBeTruthy());
     // No teach-it form for an operation teaching can never fix.
     expect(document.querySelector(".teach-it-form")).toBeNull();
     // The message names what the offline engine can/can't do, in plain English.
-    expect(document.body.textContent).toMatch(/can't sort|cannot sort|can't .*pull out rows|Steps 7/i);
+    expect(document.body.textContent).toMatch(/can't sort|cannot sort|reformat|can't .*pull out rows|Steps 7/i);
   });
 
   it("still offers the form for a word-resolution failure (average of an unknown word)", async () => {

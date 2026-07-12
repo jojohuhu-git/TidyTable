@@ -70,6 +70,58 @@ function stripRequestLead(request) {
   return text;
 }
 
+// P1-1: a request that asks to SEE the rows themselves, not a number. It is
+// triggered by a leading list verb ("show me all patients who…", "list the
+// rows where…") or a "sort the rows…" ask. It only turns into a list when no
+// counting/aggregation/ranking intent claimed the request first (those always
+// win), so "show me how many…" stays a count and "show me the average…" stays
+// an average.
+function detectListVerb(request) {
+  const lower = String(request || "").trim().toLowerCase();
+  if (/^sort(ed)?\b/.test(lower)) return true;
+  return REQUEST_LEAD.some((v) => lower.startsWith(v) && /[^a-z]|$/.test(lower.charAt(v.length)));
+}
+
+// P1-1: words that set the sort DIRECTION on a listed result. Descending words
+// put the biggest / newest / most first; ascending words the smallest / oldest.
+const SORT_DESC_WORDS = /\b(newest|latest|most recent|recent|highest|largest|greatest|biggest|longest|descending|z-?a|high to low)\b/;
+const SORT_ASC_WORDS = /\b(oldest|earliest|lowest|smallest|shortest|ascending|a-?z|alphabetical|low to high)\b/;
+
+// P1-1: pull an optional ordering off a list request. Returns
+// { columnPhrase, direction, matchText } or null. `columnPhrase` is the raw
+// words after "by"/"sorted by" (resolved to a real header by the caller);
+// `matchText` is the whole sort clause so it can be excised before the rest is
+// read as filter conditions. Direction defaults to ascending unless a
+// descending word ("newest", "highest", …) is present.
+const SORT_DIR_WORD = "newest|oldest|latest|earliest|highest|lowest|largest|smallest|greatest|biggest|longest|shortest|most recent|ascending|descending|first|last|a-?z|z-?a|alphabetical";
+function parseSortModifier(request) {
+  const text = String(request || "");
+  // Capture the WHOLE sort clause (to the next comma or end) so its direction
+  // words never leak back and get read as a filter value. Three shapes:
+  //   1. a "sort/order/rank …" phrase anywhere,
+  //   2. a trailing "by <column> <direction> first",
+  //   3. a bare trailing "<direction> first".
+  let clause = null;
+  let m = /\b(?:sort(?:ed)?|order(?:ed)?|rank(?:ed)?)\b[^,]*(?:,|$)/i.exec(text);
+  if (m) clause = m[0].replace(/,\s*$/, "");
+  if (!clause) {
+    m = new RegExp(`\\bby\\s+[a-z0-9_ ]+?\\s+(?:${SORT_DIR_WORD})\\s+first\\b`, "i").exec(text);
+    if (m) clause = m[0];
+  }
+  if (!clause) {
+    m = new RegExp(`\\b(?:${SORT_DIR_WORD})\\s+first\\b`, "i").exec(text);
+    if (m) clause = m[0];
+  }
+  if (!clause) return null;
+  const cl = clause.toLowerCase();
+  const direction = SORT_DESC_WORDS.test(cl) ? "desc" : SORT_ASC_WORDS.test(cl) ? "asc" : "asc";
+  // The named column, if any: the words after "by", stopped at a direction word.
+  let columnPhrase = null;
+  const bym = new RegExp(`\\bby\\s+([a-z0-9_ ]+?)(?=\\s+(?:${SORT_DIR_WORD})\\b|,|$)`, "i").exec(clause);
+  if (bym) columnPhrase = bym[1].trim();
+  return { columnPhrase, direction, matchText: clause };
+}
+
 // The header types (see workbook.js inferType) an average/sum can honestly run
 // on. Same set textToChart.js uses for its numeric dropdown.
 const NUMERIC_COLUMN_TYPES = new Set(["number", "mixed (text + numbers)"]);
@@ -885,6 +937,102 @@ function buildConfirmation(stages, request) {
   };
 }
 
+// P1-1: build a "list matching rows" match. Reuses the same cohort/level
+// filter machinery a count uses (executeCohort returns the matched rows in row
+// mode), then attaches an optional ORDER on a resolved column. Returns a
+// confident list match, a needs_confirm/needs_definitions/partial when the
+// filter needs one, or null when there is nothing to filter on and no sort (the
+// caller then declines plainly). Grain memory is honored if a per-entity choice
+// was already made for this file, but a fresh list never pops the count-centric
+// "combine each patient's rows?" question — a list of rows is unambiguous.
+function matchList(request, sortRaw, sheet, headers, index, defs, aliasMap, options) {
+  // `request` already has any sort clause removed (matchRequest excises it
+  // before intent detection); `sortRaw` carries the parsed ordering.
+  const filterText = request;
+
+  const cohort = extractCohort(filterText);
+  let remainder = filterText;
+  if (cohort) remainder = (filterText.slice(0, cohort.start) + " " + filterText.slice(cohort.end)).trim();
+  const levelTexts = splitNestedLevels(remainder).filter((t) => termWords(t).length > 0);
+
+  const rawStages = [];
+  if (cohort) rawStages.push({ text: cohort.termText, role: "cohort" });
+  for (const t of levelTexts) rawStages.push({ text: t, role: "level" });
+
+  const stages = rawStages
+    .flatMap((s) => resolveConditions(s.text, sheet, headers, index, defs, aliasMap).map((condition) => ({ ...s, condition })))
+    .filter((s) => s.condition);
+
+  // Resolve the sort column, if one was named. An unresolved named column is a
+  // stretch → confirm before listing; a bare direction with no column just
+  // lists in natural order (sort dropped).
+  let sort = null;
+  if (sortRaw && sortRaw.columnPhrase) {
+    const col = fuzzyColumn(sortRaw.columnPhrase, headers);
+    if (col) {
+      sort = { column: col, direction: sortRaw.direction };
+    } else {
+      const ref = resolveColumnRef(sortRaw.columnPhrase, headers, { aliasMap, index });
+      if (ref && !ref.stretched) sort = { column: ref.column, direction: sortRaw.direction };
+      else if (ref && ref.stretched) return columnConfirm(sortRaw.columnPhrase, ref.candidates, ref.via, request, ref.allCandidates);
+      // else: named column can't be resolved — drop the sort rather than guess.
+    }
+  }
+
+  const hasCondition = stages.some((s) => ["value", "set", "threshold"].includes(s.condition.kind));
+  // Nothing to filter on and no sort — not a list we can honestly build.
+  if (!hasCondition && !sort) return null;
+
+  // A term we could not place blocks/asks, exactly like a count would.
+  const partial = stages.find((s) => s.condition.kind === "partial");
+  if (partial) {
+    return { status: "partial", understood: partial.condition.matched, unmatchedText: partial.condition.unmatchedText, clause: partial.condition.term, request };
+  }
+  const missing = stages.filter((s) => s.condition.kind === "missing").map((s) => s.condition);
+  if (missing.length) {
+    return { status: "needs_definitions", missingTerms: missing, definitionsPresent: Boolean(defs?.present), request };
+  }
+  const confirm = buildConfirmation(stages, request);
+  if (confirm) return confirm;
+
+  // Grain: honor a remembered per-entity choice (list one row per entity), but
+  // never ask fresh — a list of rows doesn't need the count-mode question.
+  const grain = detectGrain(request, sheet, headers);
+  let grainMode = options.grainMode || null;
+  let grainFromMemory = false;
+  if (grain && !grainMode && options.grainChoices && options.grainChoices[grain.entityColumn]) {
+    grainMode = options.grainChoices[grain.entityColumn];
+    grainFromMemory = true;
+  }
+
+  const cleanedStages = cleanStages(stages);
+  return {
+    status: "confident",
+    intent: "list",
+    list: { sort },
+    stages: cleanedStages,
+    grainMode: grainMode === "group-then-test" ? "group-then-test" : "row",
+    grain: grainMode === "group-then-test" ? grain : null,
+    grainFromMemory,
+    grainEntity: grain?.entityColumn || null,
+    lookedFor: describeLookedForList(cleanedStages, sort, grainMode === "group-then-test" ? grain : null),
+    sheetName: sheet.name,
+  };
+}
+
+// P1-1: the trust line for a row list — "Listing the rows where …, sorted by …".
+export function describeLookedForList(stages, sort, grain) {
+  const unit = grain ? `${grain.entity}s` : "rows";
+  let base;
+  if (!stages.length) base = `Listing all ${unit}`;
+  else base = `Listing the ${unit} where ${stages.map((s) => conditionPhrase(s.condition)).join(", and ")}`;
+  if (sort) {
+    const dirWord = sort.direction === "desc" ? "high to low" : "low to high";
+    base += `, sorted by "${sort.column}" (${dirWord})`;
+  }
+  return `${base}.`;
+}
+
 // Public: read a request. options.grainMode = "row" | "group-then-test" | null.
 // Returns a result whose `status` drives the UI:
 //   "none"             — nothing recognizable; offer Claude / decline, log a miss
@@ -895,10 +1043,25 @@ function buildConfirmation(stages, request) {
 export function matchRequest(request, workbook, defs, options = {}) {
   const sheet = workbook?.sheets?.[0];
   if (!sheet) return { status: "none", reason: "no-data" };
+  // P1-1: note whether the user asked to SEE rows ("show me…", "list…",
+  // "sort the rows…") BEFORE the list verbs are stripped below — a counting or
+  // aggregation intent still wins, but otherwise this becomes a row list.
+  const listLed = detectListVerb(request);
   // P0-1: peel leading request verbs ("show me all", "list all") so they are
   // never mistaken for an undefined clinical term. Everything below reads the
   // cleaned request.
   request = stripRequestLead(request);
+  // P1-1: for a list request, set aside any trailing sort clause ("… highest
+  // first", "sorted by X") BEFORE intent detection, so an ordering word like
+  // "highest" is never read as a max/min aggregation. The clause is handed to
+  // matchList to become an ORDER on the result.
+  let listSort = null;
+  if (listLed) {
+    listSort = parseSortModifier(request);
+    if (listSort && listSort.matchText) {
+      request = request.replace(listSort.matchText, " ").replace(/\s+/g, " ").trim();
+    }
+  }
   const headers = sheet.headers;
   const index = valueIndex(sheet);
   // W2d: phrase (folded) -> confirmed { column, value } from an earlier "Did you
@@ -926,6 +1089,19 @@ export function matchRequest(request, workbook, defs, options = {}) {
   if (topN) return matchTopN(request, topN, sheet, headers, index, defs, aliasMap);
 
   const intent = detectIntent(request);
+
+  // P1-1: a row-listing request ("show me all patients who got cephalexin",
+  // "sort the rows by visit date newest first"). Only when a list verb led AND
+  // no counting/aggregation/ranking intent claimed it — those all resolve
+  // above/below and win. Handled here, before the group-by step, so a sort
+  // clause's "by <column>" is never mistaken for a "per <column>" breakdown.
+  if (listLed && !intent) {
+    const listMatch = matchList(request, listSort, sheet, headers, index, defs, aliasMap, options);
+    if (listMatch) return listMatch;
+    // Fell through (nothing to filter on and no sort) — treat as unrecognized so
+    // it declines with the plain capability message, never a bad guess.
+    return { status: "none", reason: "unrecognized", request };
+  }
 
   // A3 Level 2: resolve a "per X"/"by X"/"grouped by X" breakdown column
   // first, against the raw request, and strip its clause out before looking

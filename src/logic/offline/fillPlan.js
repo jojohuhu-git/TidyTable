@@ -672,6 +672,10 @@ function buildCompanion(match, workbook, sheet) {
 // replay, to build the plain-report line for an auto-recorded question step.
 // Never a guess: it just reads the same `exec` shape fillPlan already builds.
 export function summarizeAnswer(match, exec) {
+  if (match.list) {
+    const n = exec.rows ? exec.rows.length : 0;
+    return `${n} ${exec.unit || "rows"}`;
+  }
   if (match.table1) {
     return `Table 1: ${exec.columns.length} characteristic${exec.columns.length === 1 ? "" : "s"}`;
   }
@@ -1271,10 +1275,200 @@ function fillTable1Plan(match, workbook, sheet) {
   return { plan, resultRows, exec };
 }
 
+// P1-1: order a set of rows by a resolved column. Numbers sort numerically,
+// everything else by text; blank/unreadable cells always sink to the bottom so
+// they never masquerade as the smallest value. Deterministic and stable.
+function compareForSort(a, b, column, sign) {
+  const va = a[column];
+  const vb = b[column];
+  const ea = va == null || String(va).trim() === "";
+  const eb = vb == null || String(vb).trim() === "";
+  if (ea && eb) return 0;
+  if (ea) return 1;
+  if (eb) return -1;
+  const na = toNumber(va);
+  const nb = toNumber(vb);
+  if (na != null && nb != null) return sign * (na - nb);
+  return sign * String(va).localeCompare(String(vb));
+}
+
+// P1-1: R filter expression for one resolved condition (dplyr::filter).
+function rFilterExpr(c) {
+  const q = (v) => `"${String(v).replace(/"/g, '\\"')}"`;
+  if (c.kind === "value") return c.op === "<>" ? `${c.column} != ${q(c.value)}` : `${c.column} == ${q(c.value)}`;
+  if (c.kind === "set") {
+    const list = `c(${c.values.map(q).join(", ")})`;
+    return c.op === "not-in" ? `!(${c.column} %in% ${list})` : `${c.column} %in% ${list}`;
+  }
+  if (c.kind === "threshold") {
+    const base = `${c.column} ${c.op === "<>" ? "!=" : c.op} ${c.value}`;
+    return c.when ? `${base} & ${c.when.column} == ${q(c.when.value)}` : base;
+  }
+  return "TRUE";
+}
+
+function buildListSummary(match, exec, sheet) {
+  const rows = exec.rows;
+  const lines = [match.lookedFor, ""];
+  lines.push(`Found ${rows.length} ${exec.unit} out of ${exec.total} in "${match.sheetName}".`);
+  if (match.list.sort) {
+    const dirWord = match.list.sort.direction === "desc" ? "highest/newest first" : "lowest/oldest first";
+    lines.push(`Sorted by "${match.list.sort.column}" (${dirWord}). Blank cells in that column are listed last.`);
+  }
+  if (exec.dedupedFrom != null && exec.dedupedFrom !== rows.length) {
+    lines.push(`One row is shown per ${match.grain.entity} (${exec.dedupedFrom} matching rows collapsed to ${rows.length} ${match.grain.entity}s).`);
+  }
+  lines.push("");
+  lines.push("These are your own rows, shown on your computer — nothing was sent anywhere. The Excel steps and R script reproduce the same list.");
+  return lines.join("\n");
+}
+
+function buildListExcelSteps(match, exec, sheet) {
+  const extent = excelRowExtent(sheet);
+  const crit = (c) => {
+    if (c.kind === "set") return `one of: ${c.values.join(", ")}`;
+    if (c.kind === "threshold") return `${c.op} ${c.value}${c.when ? ` (only where "${c.when.column}" is ${c.when.value})` : ""}`;
+    return c.op === "<>" ? `not "${c.value}"` : `"${c.value}"`;
+  };
+  const steps = [];
+  if (match.stages.length) {
+    steps.push({
+      title: "Filter to the matching rows",
+      where: `Sheet "${sheet.name}"`,
+      formula: "",
+      instruction:
+        "Turn on Data > Filter, then set each column's filter: " +
+        match.stages.map((s) => `"${s.condition.column}" → ${crit(s.condition)}`).join("; ") +
+        `. The rows still visible are the ${exec.rows.length} matching ${exec.unit}.`,
+      teaches: "Data > Filter hides rows that don't match, leaving exactly the rows you asked for — no formula needed to pull rows out.",
+    });
+  } else {
+    steps.push({
+      title: "All rows",
+      where: `Sheet "${sheet.name}"`,
+      formula: "",
+      instruction: `No filter — every row is included (${exec.total} ${exec.unit}).`,
+    });
+  }
+  if (match.list.sort) {
+    const s = match.list.sort;
+    steps.push({
+      title: `Sort by "${s.column}"`,
+      where: `Sheet "${sheet.name}"`,
+      formula: "",
+      instruction: `Turn on Data > Sort and sort by "${s.column}", ${s.direction === "desc" ? "largest/newest to smallest/oldest" : "smallest/oldest to largest/newest"}. Blank cells sort to the bottom.`,
+    });
+  }
+  return withExtentNote(steps, extent);
+}
+
+function buildListRScript(match, sheet) {
+  const conds = match.stages.map((s) => rFilterExpr(s.condition));
+  const lines = [
+    "# TidyTable built this list on your computer. This R script reproduces it.",
+    "library(dplyr)",
+    "library(readxl)",
+    `df <- read_excel("your_file.xlsx", sheet = ${JSON.stringify(sheet.name)})`,
+    "",
+    "result <- df %>%",
+  ];
+  const pipeline = [];
+  if (conds.length) pipeline.push(`  filter(${conds.join(",\n         ")})`);
+  if (match.grainMode === "group-then-test" && match.grain) {
+    pipeline.push(`  distinct(${match.grain.entityColumn}, .keep_all = TRUE)`);
+  }
+  if (match.list.sort) {
+    const s = match.list.sort;
+    pipeline.push(`  arrange(${s.direction === "desc" ? `desc(${s.column})` : s.column})`);
+  }
+  if (!pipeline.length) pipeline.push("  identity()");
+  lines.push(pipeline.join(" %>%\n"));
+  lines.push("");
+  lines.push("print(result)");
+  return lines.join("\n");
+}
+
+function buildListTransformCode(match) {
+  const stages = match.stages.map((s) => s.condition);
+  const grain = match.grainMode === "group-then-test" && match.grain
+    ? { entityColumn: match.grain.entityColumn } : null;
+  const sort = match.list.sort || null;
+  return `
+var foldKey = function (v) { return String(v).trim().toLowerCase().replace(/\\s+/g, " "); };
+${toNumber.toString()}
+var cmp = function (n, op, t) { switch (op) { case ">": return n > t; case ">=": return n >= t; case "<": return n < t; case "<=": return n <= t; case "<>": return n !== t; default: return n === t; } };
+var STAGES = ${JSON.stringify(stages)};
+var GRAIN = ${JSON.stringify(grain)};
+var SORT = ${JSON.stringify(sort)};
+var SHEET = ${JSON.stringify(match.sheetName)};
+var rows = sheets[SHEET] || [];
+var pred = function (c) { return function (r) {
+  if (c.kind === "value") { if (c.op === "<>") { return r[c.column] == null || foldKey(r[c.column]) !== foldKey(c.value); } return r[c.column] != null && foldKey(r[c.column]) === foldKey(c.value); }
+  if (c.kind === "set") { var set = {}; for (var i = 0; i < c.values.length; i++) { set[foldKey(c.values[i])] = 1; } if (c.op === "not-in") { return r[c.column] == null || set[foldKey(r[c.column])] !== 1; } return r[c.column] != null && set[foldKey(r[c.column])] === 1; }
+  if (c.kind === "threshold") { if (c.when) { var wv = r[c.when.column]; if (wv == null || foldKey(wv) !== foldKey(c.when.value)) return false; } var n = toNumber(r[c.column]); if (n == null) return false; return cmp(n, c.op, c.value); }
+  return false;
+}; };
+var out = rows;
+for (var s = 0; s < STAGES.length; s++) { out = out.filter(pred(STAGES[s])); }
+if (GRAIN) { var seen = {}; var dedup = []; for (var i2 = 0; i2 < out.length; i2++) { var kv = out[i2][GRAIN.entityColumn]; var kk = (kv == null ? "" : foldKey(kv)); if (!seen[kk]) { seen[kk] = 1; dedup.push(out[i2]); } } out = dedup; }
+if (SORT) {
+  var sign = SORT.direction === "desc" ? -1 : 1;
+  out = out.slice().sort(function (a, b) {
+    var va = a[SORT.column], vb = b[SORT.column];
+    var ea = va == null || String(va).trim() === ""; var eb = vb == null || String(vb).trim() === "";
+    if (ea && eb) return 0; if (ea) return 1; if (eb) return -1;
+    var na = toNumber(va), nb = toNumber(vb);
+    if (na != null && nb != null) return sign * (na - nb);
+    return sign * String(va).localeCompare(String(vb));
+  });
+}
+return out;
+`.trim();
+}
+
+function fillListPlan(match, workbook, sheet) {
+  // Always execute in row mode to get the matched rows themselves; a remembered
+  // per-entity grain choice is applied by de-duping here, not by counting.
+  const rowMatch = { ...match, grainMode: "row", grain: null };
+  const exec0 = executeCohort(rowMatch, workbook);
+  let rows = Array.isArray(exec0.matchedRows) ? exec0.matchedRows : [];
+  const dedupedFrom = rows.length;
+  if (match.grainMode === "group-then-test" && match.grain) {
+    const seen = new Set();
+    const out = [];
+    for (const r of rows) {
+      const v = r[match.grain.entityColumn];
+      const k = v == null ? "" : String(v).trim().toLowerCase();
+      if (!seen.has(k)) { seen.add(k); out.push(r); }
+    }
+    rows = out;
+  }
+  if (match.list.sort) {
+    const sign = match.list.sort.direction === "desc" ? -1 : 1;
+    rows = rows.slice().sort((a, b) => compareForSort(a, b, match.list.sort.column, sign));
+  }
+  const unit = match.grainMode === "group-then-test" && match.grain ? `${match.grain.entity}s` : "rows";
+  const exec = { rows, total: exec0.total, unit, dedupedFrom };
+
+  const plan = {
+    engine: "offline",
+    looked_for: match.lookedFor,
+    summary: buildListSummary(match, exec, sheet),
+    transform_code: buildListTransformCode(match),
+    excel_steps: buildListExcelSteps(match, exec, sheet),
+    r_script: buildListRScript(match, sheet),
+    r_run_notes:
+      "This list is a plain filter (and sort), so the R script above reproduces it exactly — " +
+      "run it in RStudio after pointing read_excel at your file.",
+  };
+  return { plan, resultRows: rows, exec };
+}
+
 // Public: build the plan and the ready-to-show result rows for a confident match.
 export function fillPlan(match, workbook) {
   const sheet = workbook.sheets.find((s) => s.name === match.sheetName) || workbook.sheets[0];
 
+  if (match.list) return fillListPlan(match, workbook, sheet);
   if (match.intent === "table1") return fillTable1Plan(match, workbook, sheet);
   if (match.intent === "describe") return fillDescribePlan(match, workbook, sheet);
   if (match.topN) return fillTopNPlan(match, workbook, sheet);
