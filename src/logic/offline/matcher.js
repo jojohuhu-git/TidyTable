@@ -898,6 +898,31 @@ function extractCohort(request) {
   return { termText, start: best.markerIdx, end: afterIdx + (stop === -1 ? rest.length : stop) };
 }
 
+// P1-2 (R4): a trailing "for <value>" / "in <value>" (or "with"/"among") that
+// names a REAL cell value is a cohort filter, not part of an aggregation target:
+// "average duration for UTI" means average Duration_days over the UTI rows, not a
+// column called "duration uti". Only fires when the trailing phrase is an EXACT
+// existing cell value — we never invent a cohort from a phrase the data doesn't
+// contain (the never-guess promise). Returns a cohort {termText, start, end}
+// shaped exactly like extractCohort's, or null. Tries the rightmost marker first
+// so the closest trailing clause wins.
+function detectTrailingValueCohort(text, headers, index) {
+  const markers = [...String(text).matchAll(/\b(?:for|in|with|among)\s+/gi)];
+  for (let i = markers.length - 1; i >= 0; i--) {
+    const mk = markers[i];
+    const after = text.slice(mk.index + mk[0].length);
+    // Tolerate a trailing entity noun ("for UTI patients", "in UTI cases").
+    const termText = after.replace(/\s+(?:patients?|cases?|rows?|encounters?|records?|people)\s*$/i, "").trim();
+    const phrase = termWords(termText).join(" ");
+    if (!phrase) continue;
+    const cands = findValueCandidates(phrase, headers, index);
+    if (cands.some((c) => c.exact)) {
+      return { termText, start: mk.index, end: text.length };
+    }
+  }
+  return null;
+}
+
 // Detect a per-entity question over repeating rows (grain). If the user asks
 // "how many patients…" and the patient column really does repeat, a row-mode
 // count would double-count — so we flag it for a clarifying question.
@@ -1216,10 +1241,14 @@ export function matchRequest(request, workbook, defs, options = {}) {
   // capability message, but "average duration_days [for patients with X] [per
   // Y]" now actually computes.
   if (intent && AGGREGATION_INTENTS.has(intent.intent)) {
+    // P1-2 (R4): if no cohort marker was found, a trailing "for/in <value>" that
+    // names a real cell value is still a cohort filter — peel it off so it does
+    // not get glued onto the target phrase ("average duration for UTI").
+    const aggCohort = cohort || detectTrailingValueCohort(preCohortText, headers, index);
     // Search for the target column with any cohort clause ("for patients with
     // UTI") stripped out too, so its words don't get glued onto the target
     // phrase and break the fuzzy column match.
-    const targetSearchText = cohort ? (preCohortText.slice(0, cohort.start) + " " + preCohortText.slice(cohort.end)).trim() : preCohortText;
+    const targetSearchText = aggCohort ? (preCohortText.slice(0, aggCohort.start) + " " + preCohortText.slice(aggCohort.end)).trim() : preCohortText;
     // A distinct count works on any column type; every other aggregation
     // (including describe) needs a real numeric column.
     const numericOnly = intent.intent !== "distinct";
@@ -1232,7 +1261,7 @@ export function matchRequest(request, workbook, defs, options = {}) {
     if (targetRef.stretched) {
       return columnConfirm(targetRef.phrase || targetSearchText.trim(), targetRef.candidates, targetRef.via, request, targetRef.allCandidates);
     }
-    return matchAggregation(request, intent, targetRef.column, cohort, groupBy, sheet, headers, index, defs, aliasMap);
+    return matchAggregation(request, intent, targetRef.column, aggCohort, groupBy, sheet, headers, index, defs, aliasMap);
   }
 
   // A cohort question needs either a counting word ("how many", "what share")
