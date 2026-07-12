@@ -15,23 +15,49 @@ export function tokens(s) {
   return String(s == null ? "" : s).toLowerCase().split(/[^a-z0-9]+/i).filter(Boolean);
 }
 
-// Phase 3: word-forms are folded ONLY for column-CONCEPT matching (concepts.js),
-// never for cell-VALUE scoring below. Folding a value scan is where the
-// never-guess promise is most at risk — e.g. "patients" would deplural to
-// "patient" and hijack a "PatientID" column — so scoreTokenMatch deliberately
-// compares raw tokens. foldWord stays imported for callers that opt in.
-void foldWord;
+// P1-3: a token that only agrees once both sides are folded to their everyday
+// word-form ("diagnoses" -> "diagnose" == "Diagnosis" -> "diagnose") is a real
+// but weaker match. It scores BELOW the raw prefix tier (1), so a literal match
+// always wins, and — because every caller treats any non-exact (score < 3) hit
+// as a stretch to CONFIRM, never a silent answer — the never-guess promise holds.
+const FOLD_STRETCH_SCORE = 0.5;
 
 // Score how well a set of query tokens matches a set of value tokens, or return
 // null for no match. Higher is a better/closer match:
-//   3 — exact: the query tokens ARE the value tokens (same set, same size)
-//   2 — all-tokens-equal: every query token equals some value token (value may
-//       have extra words, e.g. "coli" in "escherichia coli")
-//   1 — prefix: every query token equals or is a prefix of some value token
-//       (e.g. "e"/"coli" against "escherichia"/"coli")
+//   3   — exact: the query tokens ARE the value tokens (same set, same size)
+//   2   — all-tokens-equal: every query token equals some value token (value may
+//         have extra words, e.g. "coli" in "escherichia coli")
+//   1   — prefix: every query token equals or is a prefix of some value token
+//         (e.g. "e"/"coli" against "escherichia"/"coli")
+//   0.5 — fold-only: no raw match, but every query word equals a value word once
+//         both are folded to their canonical form (plural/verb-noun). A stretch.
 // A single-letter query token ("e") may only match as a prefix, never stand on
 // its own as an exact word, so a stray "e" can't hijack a whole column.
 export function scoreTokenMatch(queryTokens, valueTokens) {
+  const raw = rawScoreTokenMatch(queryTokens, valueTokens);
+  if (raw != null) return raw;
+  // P1-3 fold tier: retry with everyday word-forms folded on BOTH sides so a
+  // plural or verb/noun form reaches its column ("drugs" -> "Drug"). Guarded two
+  // ways to stay honest: (a) only worth trying if folding actually changed a
+  // token — otherwise the raw pass already had the final say; (b) the folded
+  // re-score must be an all-words-EQUAL match (2/3), never a mere prefix (1).
+  // Stacking fold + prefix could bridge unrelated words like "prescription" ->
+  // "Prescriber"; refusing prefix keeps that family cleanly separated (the trap
+  // the wordforms families table is built to avoid).
+  if (!queryTokens.length || !valueTokens.length) return null;
+  const qFold = queryTokens.map(foldWord);
+  const vFold = valueTokens.map(foldWord);
+  const changed = qFold.some((t, i) => t !== queryTokens[i]) || vFold.some((t, i) => t !== valueTokens[i]);
+  if (!changed) return null;
+  const folded = rawScoreTokenMatch(qFold, vFold);
+  if (folded == null || folded < 2) return null;
+  return FOLD_STRETCH_SCORE;
+}
+
+// The raw, unfolded token scorer (the original scoreTokenMatch body). Kept
+// separate so the fold tier above can reuse the exact same equal/prefix logic on
+// folded tokens without duplicating it.
+function rawScoreTokenMatch(queryTokens, valueTokens) {
   if (!queryTokens.length || !valueTokens.length) return null;
   const vset = new Set(valueTokens);
   let allEqual = true;
