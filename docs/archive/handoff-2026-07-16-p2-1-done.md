@@ -1,3 +1,7 @@
+> **SUPERSEDED** by
+> [handoff-2026-07-17-p2-2-done.md](handoff-2026-07-17-p2-2-done.md) — P2-2 is
+> now done too. Resume from that file, not this one.
+
 # TidyTable — Handoff after P2-1 (one-line findings) done (2026-07-16)
 
 Branch: `main`, off `main`. **NOT pushed** — TidyTable rule: never push to
