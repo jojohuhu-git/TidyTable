@@ -277,7 +277,7 @@ function findEpochDates(sheet) {
       column: h.name,
       letter: h.letter,
       title: `Numbers that Excel accidentally turned into dates in "${h.name}"`,
-      detail: `${epochCells.length} value${s(epochCells.length)} in "${h.name}" ${be(epochCells.length)} stored as dates from 1899-1900 (Excel's internal date epoch), even though the rest of the column is plain numbers. This usually means Excel auto-formatted a number (like a day-count) as a date by mistake. The fix converts these cells back to the plain number they represent — it never writes a 1899/1900 date into your data.`,
+      detail: `Excel auto-formatted ${epochCells.length} plain number${s(epochCells.length)} in "${h.name}" as a date by mistake. (In technical terms: ${epochCells.length} value${s(epochCells.length)} ${be(epochCells.length)} stored as dates from 1899-1900, Excel's internal date epoch, even though the rest of the column is plain numbers.) The fix converts these cells back to the plain number they represent — it never writes a 1899/1900 date into your data.`,
       count: epochCells.length,
       samples: sample(epochCells),
       fixable: true,

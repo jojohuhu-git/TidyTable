@@ -147,4 +147,16 @@ describe("NEW-1 — epochSerialToNumber recovers numbers that Excel mis-typed as
     const findings = checkupSheet(sheet);
     expect(findings.find((x) => x.type === "epochDates")).toBeFalsy();
   });
+
+  // P2-2: read-aloud check — the epoch-date detail's first sentence must be
+  // plain (no "epoch"/"1899-1900" jargon); the technical bit can follow.
+  it("opens the epochDates detail with a plain-English sentence before the technical explanation", () => {
+    const sheet = deriveSheet("S", [
+      { Duration: 7 }, { Duration: 5 }, { Duration: "1899-12-30" }, { Duration: "1900-01-06" }, { Duration: 8 },
+    ]);
+    const f = checkupSheet(sheet).find((x) => x.type === "epochDates");
+    const firstSentence = f.detail.split(/(?<=[.!?])\s/)[0];
+    expect(firstSentence.toLowerCase()).not.toMatch(/epoch|1899|1900/);
+    expect(f.detail).toMatch(/1899-1900/); // technical detail still present, later in the string
+  });
 });

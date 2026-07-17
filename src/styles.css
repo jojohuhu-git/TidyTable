@@ -287,6 +287,10 @@ body {
 .rguide-body li { margin-bottom: 0.45rem; }
 
 /* Checkup findings checklist */
+.finding-group { margin-bottom: 1.1rem; }
+.finding-group h3 { margin: 0 0 0.5rem; font-size: 0.95rem; }
+.finding-group-head { display: flex; align-items: center; justify-content: space-between; gap: 0.7rem; margin-bottom: 0.5rem; }
+.finding-group-head h3 { margin: 0; }
 .findings { list-style: none; padding: 0; margin: 0 0 1rem; }
 .finding {
   border: 1px solid var(--line); border-radius: var(--rad);

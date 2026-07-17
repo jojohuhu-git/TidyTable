@@ -47,6 +47,19 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
   const visible = findings.filter((f) => !dismissed.has(f.id));
   const fixable = visible.filter((f) => f.fixable);
   const flags = visible.filter((f) => !f.fixable);
+  // P2-2: "safe" fixes never ask a policy question — nothing is lost or
+  // judged, so they can all be ticked in one click. Anything that needs a
+  // policy answer (date order, below/above-limit results) is the user's call.
+  const safeFixable = fixable.filter((f) => !f.fix?.needsPolicy);
+  const callFixable = fixable.filter((f) => f.fix?.needsPolicy);
+
+  function tickAllSafe() {
+    setSelected((s) => {
+      const next = new Set(s);
+      for (const f of safeFixable) next.add(f.id);
+      return next;
+    });
+  }
 
   function toggle(f) {
     if (selected.has(f.id)) {
@@ -99,97 +112,123 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
     );
   }
 
+  function renderFixable(f) {
+    return (
+      <li key={f.id} className="finding">
+        <div className="finding-line">
+          <label className="finding-head">
+            <input
+              type="checkbox"
+              checked={selected.has(f.id)}
+              onChange={() => toggle(f)}
+              disabled={busy}
+            />
+            <span className="finding-title">{f.title}</span>
+          </label>
+          <span className="finding-count">{f.count} affected</span>
+          <button type="button" className="finding-dismiss" onClick={() => dismiss(f)} disabled={busy}>
+            Skip
+          </button>
+        </div>
+        <details className="finding-expander">
+          <summary>What's this?</summary>
+          <p className="finding-detail">{f.detail}</p>
+          {f.type === "categoryVariants" && f.groups?.length > 0 ? (
+            <div className="variant-groups">
+              {f.groups.map((g, gi) => {
+                const chosen = canonicalChoices[f.id]?.[gi] ?? g.canonical;
+                return (
+                  <div key={gi} className="variant-group">
+                    <span className="dim">Merge into: </span>
+                    {g.variants.map((v) => (
+                      <button
+                        key={v.value}
+                        type="button"
+                        className={`variant-chip ${chosen === v.value ? "variant-chip-active" : ""}`}
+                        aria-pressed={chosen === v.value}
+                        onClick={() => chooseCanonical(f.id, gi, v.value)}
+                        disabled={busy}
+                      >
+                        {v.value} ({v.count})
+                      </button>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            f.samples?.length > 0 && (
+              <div className="finding-samples">
+                {f.samples.map((s, i) => <span key={i} className="sample-chip">{String(s)}</span>)}
+              </div>
+            )
+          )}
+        </details>
+        {askingPolicy === f.id && (
+          <ClarifyBox
+            question={f.fix.policyQuestion || `How should the below/above-limit results in "${f.column}" be counted?`}
+            options={f.fix.policyOptions || CENSORED_OPTIONS}
+            onAnswer={(v) => answerPolicy(f.id, v)}
+            onCancel={() => setAskingPolicy(null)}
+          />
+        )}
+        {policies[f.id] && (
+          <p className="dim">
+            Chosen: {(f.fix.policyOptions || CENSORED_OPTIONS).find((o) => o.value === policies[f.id])?.label.toLowerCase()}.
+          </p>
+        )}
+      </li>
+    );
+  }
+
   return (
     <div>
-      <ul className="findings">
-        {fixable.map((f) => (
-          <li key={f.id} className="finding">
-            <div className="finding-line">
-              <label className="finding-head">
-                <input
-                  type="checkbox"
-                  checked={selected.has(f.id)}
-                  onChange={() => toggle(f)}
-                  disabled={busy}
-                />
-                <span className="finding-title">{f.title}</span>
-              </label>
-              <span className="finding-count">{f.count} affected</span>
-              <button type="button" className="finding-dismiss" onClick={() => dismiss(f)} disabled={busy}>
-                Skip
-              </button>
-            </div>
-            <details className="finding-expander">
-              <summary>What's this?</summary>
-              <p className="finding-detail">{f.detail}</p>
-              {f.type === "categoryVariants" && f.groups?.length > 0 ? (
-                <div className="variant-groups">
-                  {f.groups.map((g, gi) => {
-                    const chosen = canonicalChoices[f.id]?.[gi] ?? g.canonical;
-                    return (
-                      <div key={gi} className="variant-group">
-                        <span className="dim">Merge into: </span>
-                        {g.variants.map((v) => (
-                          <button
-                            key={v.value}
-                            type="button"
-                            className={`variant-chip ${chosen === v.value ? "variant-chip-active" : ""}`}
-                            aria-pressed={chosen === v.value}
-                            onClick={() => chooseCanonical(f.id, gi, v.value)}
-                            disabled={busy}
-                          >
-                            {v.value} ({v.count})
-                          </button>
-                        ))}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                f.samples?.length > 0 && (
-                  <div className="finding-samples">
-                    {f.samples.map((s, i) => <span key={i} className="sample-chip">{String(s)}</span>)}
-                  </div>
-                )
-              )}
-            </details>
-            {askingPolicy === f.id && (
-              <ClarifyBox
-                question={f.fix.policyQuestion || `How should the below/above-limit results in "${f.column}" be counted?`}
-                options={f.fix.policyOptions || CENSORED_OPTIONS}
-                onAnswer={(v) => answerPolicy(f.id, v)}
-                onCancel={() => setAskingPolicy(null)}
-              />
-            )}
-            {policies[f.id] && (
-              <p className="dim">
-                Chosen: {(f.fix.policyOptions || CENSORED_OPTIONS).find((o) => o.value === policies[f.id])?.label.toLowerCase()}.
-              </p>
-            )}
-          </li>
-        ))}
+      {safeFixable.length > 0 && (
+        <section className="finding-group">
+          <div className="finding-group-head">
+            <h3>Safe fixes — nothing is lost</h3>
+            <button type="button" className="btn btn-ghost" onClick={tickAllSafe} disabled={busy}>
+              Tick all safe fixes
+            </button>
+          </div>
+          <ul className="findings">{safeFixable.map(renderFixable)}</ul>
+        </section>
+      )}
 
-        {flags.map((f) => (
-          <li key={f.id} className="finding finding-flag">
-            <div className="finding-line">
-              <span className="finding-title">{f.title}</span>
-              <span className="finding-count">for your review</span>
-              <button type="button" className="finding-dismiss" onClick={() => dismiss(f)} disabled={busy}>
-                Skip
-              </button>
-            </div>
-            <details className="finding-expander">
-              <summary>What's this?</summary>
-              <p className="finding-detail">{f.detail}</p>
-              {f.samples?.length > 0 && (
-                <div className="finding-samples">
-                  {f.samples.map((s, i) => <span key={i} className="sample-chip">{String(s)}</span>)}
+      {callFixable.length > 0 && (
+        <section className="finding-group">
+          <h3>Needs your call</h3>
+          <ul className="findings">{callFixable.map(renderFixable)}</ul>
+        </section>
+      )}
+
+      {flags.length > 0 && (
+        <section className="finding-group">
+          <h3>For your review</h3>
+          <ul className="findings">
+            {flags.map((f) => (
+              <li key={f.id} className="finding finding-flag">
+                <div className="finding-line">
+                  <span className="finding-title">{f.title}</span>
+                  <span className="finding-count">for your review</span>
+                  <button type="button" className="finding-dismiss" onClick={() => dismiss(f)} disabled={busy}>
+                    Skip
+                  </button>
                 </div>
-              )}
-            </details>
-          </li>
-        ))}
-      </ul>
+                <details className="finding-expander">
+                  <summary>What's this?</summary>
+                  <p className="finding-detail">{f.detail}</p>
+                  {f.samples?.length > 0 && (
+                    <div className="finding-samples">
+                      {f.samples.map((s, i) => <span key={i} className="sample-chip">{String(s)}</span>)}
+                    </div>
+                  )}
+                </details>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <div className="run-row">
         <button className="btn btn-primary" onClick={apply} disabled={busy || selected.size === 0}>

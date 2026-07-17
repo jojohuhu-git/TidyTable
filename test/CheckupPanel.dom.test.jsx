@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import CheckupPanel from "../src/components/CheckupPanel.jsx";
 import { deriveSheet } from "../src/logic/workbook.js";
 
@@ -71,5 +71,28 @@ describe("CheckupPanel", () => {
 
     fireEvent.click(item.querySelector(".finding-expander summary"));
     expect(expander.hasAttribute("open")).toBe(true);
+  });
+
+  it("P2-2: splits fixable findings into 'Safe fixes' vs 'Needs your call', and 'Tick all safe fixes' selects only the safe ones", () => {
+    const onApply = vi.fn();
+    render(<CheckupPanel sheet={messySheet()} busy={false} onApply={onApply} />);
+
+    // Duplicate rows is a safe fix (no policy question); censored is "needs your call".
+    expect(screen.getByText("Safe fixes — nothing is lost")).toBeInTheDocument();
+    expect(screen.getByText("Needs your call")).toBeInTheDocument();
+    const safeSection = screen.getByText("Safe fixes — nothing is lost").closest("section");
+    const callSection = screen.getByText("Needs your call").closest("section");
+    expect(safeSection.querySelector(".finding")).not.toBeNull();
+    expect(within(callSection).getByText(/Below\/above-limit results/i)).toBeInTheDocument();
+    // The censored finding must NOT be in the safe section.
+    expect(within(safeSection).queryByText(/Below\/above-limit results/i)).toBeNull();
+
+    // messySheet's safe fixes are duplicate rows + the Sex spelling variants;
+    // the censored Result finding needs a policy answer, so it stays unticked.
+    fireEvent.click(screen.getByRole("button", { name: /tick all safe fixes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /apply 2 selected fixes/i }));
+
+    const fixes = onApply.mock.calls[0][0];
+    expect(fixes.map((f) => f.normalizer).sort()).toEqual(["dedupeRows", "trimCase"]);
   });
 });
