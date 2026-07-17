@@ -1,3 +1,7 @@
+> **SUPERSEDED** by
+> [handoff-2026-07-17-p2-3-done.md](handoff-2026-07-17-p2-3-done.md) — P2-3
+> (the item this handoff pointed to next) is now done.
+
 # TidyTable — Handoff after P2-4 (per-step "How to use this step" panels) done (2026-07-17)
 
 Branch: `main`, off `main`. **NOT pushed** — TidyTable rule: never push to
