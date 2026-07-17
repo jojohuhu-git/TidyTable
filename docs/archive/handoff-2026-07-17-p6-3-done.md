@@ -95,6 +95,15 @@ scale), sharing only the row order/height so they read together.
 
 ## What's NOT done — the remaining queue
 
+> **UPDATE 2026-07-17 (after this handoff was written):** the owner reviewed
+> the parked items below in a brainstorming session. The current, canonical
+> parked list — with owner-reviewed scope, new items (plan-echo builder, PHI
+> mode), and paste-ready prompts — now lives at
+> `.claude/prompts/parked-2026-07-17-brainstormed-queue.md`. A new owner-facing
+> prompting guide lives at `docs/prompting-guide.md`. **Refer to those two
+> files for the most updated version; the list below is a snapshot.** The
+> owner decision that P6-5 is next is unchanged.
+
 Per the spec's execution order (steps 1–4 done in prior sessions; step 5 is
 `P6-1 → P6-2 → P6-4 → P6-3 → P6-5`, now all but the last done):
 

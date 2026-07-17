@@ -30,6 +30,7 @@ folder — they go where the table at the bottom says.**
 | `MAP.md` | This file — the building directory. |
 | `README.md` | The public description of the app for anyone visiting the code online. |
 | `docs/agent/` | The technical manuals (architecture, module map). |
+| `docs/prompting-guide.md` | **For you** — how to phrase requests in each step for accurate results, plus current limitations and the privacy rules. Kept current as features ship. |
 | `docs/archive/` | Old session notes and handoffs. Nothing here is current; kept for history. Safe to ignore. |
 | `.claude/prompts/` | Saved build specifications and past work orders for the AI assistant. |
 
