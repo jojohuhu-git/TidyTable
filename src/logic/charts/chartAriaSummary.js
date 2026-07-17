@@ -19,6 +19,9 @@ export function buildChartAriaSummary(dataset, cap = SUMMARY_CAP, opts = {}) {
     const rl = opts.referenceLine;
     summary += `. Reference line at ${rl.label === "average" ? `average (${rl.value})` : rl.value}`;
   }
+  // P6-3: the same "top K of N account for P%" caption shown on screen, so a
+  // screen-reader user gets the vital-few readout without seeing the dots.
+  if (opts.paretoSummary) summary += `. ${opts.paretoSummary}`;
   return summary;
 }
 

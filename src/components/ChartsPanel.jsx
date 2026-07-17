@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { buildDataset, buildCrosstabDataset, buildHistogramDataset, buildBoxDotDataset, groupSmallIntoOther, applyRankCap, describeExtreme } from "../logic/charts/aggregate.js";
+import { buildDataset, buildCrosstabDataset, buildHistogramDataset, buildBoxDotDataset, groupSmallIntoOther, applyRankCap, describeExtreme, buildParetoData, describeParetoSummary } from "../logic/charts/aggregate.js";
 import { parseChartTweak, sortDataset } from "../logic/charts/chartTweaks.js";
 import { recommendChart } from "../logic/charts/advisor.js";
 import { excelChartSteps } from "../logic/charts/excelChart.js";
@@ -45,6 +45,7 @@ export default function ChartsPanel({ sheet, seed }) {
   const [highlightLabel, setHighlightLabel] = useState(null); // P3-3: "highlight X" — one category named
   const [referenceLine, setReferenceLine] = useState(null); // P3-3: { value, label } — average/threshold dashed line
   const [bucket, setBucket] = useState(null); // P4-2: "month" | "quarter" | null — trend-request grouping
+  const [paretoOn, setParetoOn] = useState(false); // P6-3: "add cumulative % line" — off by default
   const svgRef = useRef(null);
 
   // Apply a resolved (or confirmed) plan to the pickers below, so the dropdowns
@@ -71,6 +72,7 @@ export default function ChartsPanel({ sheet, seed }) {
     setHighlightLabel(null);
     setReferenceLine(null);
     setBucket(plan.kind === "crosstab" ? null : (plan.bucket || null));
+    setParetoOn(false);
   }
 
   // Phase 8.5: apply a plain-word tweak to the chart already on screen. Each
@@ -184,9 +186,17 @@ export default function ChartsPanel({ sheet, seed }) {
     referenceLine: chartType === "bar" ? referenceLine : null,
     extremeCallout: dataset ? describeExtreme(dataset) : null,
   }), [highlightLabel, referenceLine, chartType, dataset]);
+  // P6-3: "add cumulative % line" — a ranked count bar only (buildParetoData
+  // itself declines a sum/average total, a time-series axis, or fewer than
+  // two categories); the toggle is only offered when it's chart type "bar",
+  // since the twin cumulative panel only exists in BarChart.
+  const paretoCandidate = useMemo(() => (dataset ? buildParetoData(dataset) : null), [dataset]);
+  const paretoEligible = chartType === "bar" && paretoCandidate != null;
+  const pareto = paretoEligible && paretoOn ? paretoCandidate : null;
+  const paretoSummary = pareto ? describeParetoSummary(pareto) : null;
   const steps = useMemo(
-    () => (dataset && chartType && chartType !== "none" ? excelChartSteps(chartType, dataset, rec || {}, emphasis) : []),
-    [dataset, chartType, rec, emphasis],
+    () => (dataset && chartType && chartType !== "none" ? excelChartSteps(chartType, dataset, rec || {}, emphasis, pareto) : []),
+    [dataset, chartType, rec, emphasis, pareto],
   );
   const chartTitle = useMemo(() => buildChartTitle(dataset), [dataset]);
   const qualitative = dataset && dataset.kind === "categorical" && isQualitative(dataset.points.length);
@@ -346,9 +356,18 @@ export default function ChartsPanel({ sheet, seed }) {
             title={chartTitle}
             highlightLabel={highlightLabel}
             referenceLine={chartType === "bar" ? referenceLine : null}
+            pareto={pareto}
             svgRef={svgRef}
             layout={rec.layout}
           />
+
+          {paretoEligible && (
+            <label className="chart-other-toggle">
+              <input type="checkbox" checked={paretoOn} onChange={(e) => setParetoOn(e.target.checked)} />
+              Add cumulative % line (Pareto) — which few {labelCol || dataset.labelName} account for most of the total
+            </label>
+          )}
+          {paretoSummary && <p className="hint">{paretoSummary}</p>}
 
           {/* Phase 8.5: adjust the chart in plain words. P6-1/P6-2: none of
               these verbs (top N, sort, highlight, reference line) apply to a

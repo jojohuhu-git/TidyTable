@@ -254,6 +254,40 @@ export function describeExtreme(dataset) {
   return `${verb}: ${top.label} (${top.value})`;
 }
 
+// P6-3: "add cumulative % line" for a ranked count bar — the stewardship
+// staple "which few drugs cover most use." Points are already sorted
+// largest-first, so this is a running sum, not a second aggregation. Only
+// meaningful for a COUNT bar (a share of a whole) — a sum/average total
+// isn't a share, so this declines (null) the same way describeExtreme does
+// for a non-count valueName. Also declines for a time-series axis (a
+// cumulative share of months isn't the comparison being asked for) and for
+// fewer than two categories (nothing to call "the few" out of).
+export function buildParetoData(dataset) {
+  if (!dataset || dataset.kind !== "categorical" || dataset.labelIsTime) return null;
+  if (dataset.valueName !== "count" || dataset.countTotal == null || dataset.countTotal <= 0) return null;
+  if (dataset.points.length < 2) return null;
+  let running = 0;
+  const points = dataset.points.map((p) => {
+    running += p.value;
+    return { label: p.label, value: p.value, cumValue: running, cumPct: (running / dataset.countTotal) * 100 };
+  });
+  return { points, total: dataset.countTotal };
+}
+
+// P6-3: "top K of N account for P%" — the vital-few readout, at the standard
+// 80/20 Pareto threshold. Finds the smallest K whose cumulative share is
+// >= 80%; when the real distribution is flat enough that even every category
+// falls short of 80%, K is every category and P is whatever they actually
+// cover — never inflated to claim a threshold the data didn't reach.
+export const PARETO_THRESHOLD = 80;
+
+export function describeParetoSummary(paretoData) {
+  if (!paretoData?.points?.length) return null;
+  const { points } = paretoData;
+  const k = points.findIndex((p) => p.cumPct >= PARETO_THRESHOLD) + 1;
+  return `Top ${k} of ${points.length} account for ${Math.round(points[k - 1].cumPct)}%.`;
+}
+
 // W4: fold every category below `thresholdPct` of the dataset's total into a
 // single "Other" bucket — offered, never forced, and always reversible (the
 // caller just re-builds the dataset without this applied). Time-series

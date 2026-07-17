@@ -264,6 +264,28 @@ function boxDotSteps(dataset) {
   return steps;
 }
 
+// P6-3: "add cumulative % line" — Excel 2016+ has a native Pareto chart
+// (Insert > Insert Statistic Chart > Histogram group > Pareto) that sorts
+// descending and draws the cumulative-% line on its own axis automatically,
+// the same trusted, non-hand-rolled convention already used for the native
+// Histogram and Box and Whisker chart types above — no manual combo-chart/
+// secondary-axis steps needed. `pareto` is buildParetoData(dataset)'s return
+// value (aggregate.js) — only present when the toggle is on.
+function paretoStep(dataset, pareto) {
+  if (!pareto) return null;
+  const rows = pareto.points.slice(0, 12).map((p) => `${p.label} — cumulative ${Math.round(p.cumPct)}%`).join("; ");
+  const more = pareto.points.length > 12 ? `, and ${pareto.points.length - 12} more` : "";
+  return {
+    title: "Add the cumulative % line",
+    instruction:
+      `Add a third column to the helper table above named "Cumulative %", with the running share of the total ` +
+      `next to each category, exactly as shown here: ${rows}${more}. Select all three helper columns, go to the ` +
+      `Insert tab, open "Insert Statistic Chart" in the Charts group, and choose "Pareto" (Excel 2016 and later, ` +
+      `Windows and Mac both have it) — it sorts the bars largest-first and draws the cumulative-% line for you, on ` +
+      `its own axis, automatically.`,
+  };
+}
+
 function colorNoteStep() {
   return {
     title: "Match the colors (optional)",
@@ -280,9 +302,11 @@ function colorNoteStep() {
 // `emphasis` (P3-3, optional): { highlightLabel, referenceLine, extremeCallout }
 // — whatever emphasis is currently on the in-app preview, named in words here
 // too so the two never drift apart.
+// `pareto` (P6-3, optional): buildParetoData(dataset)'s return value — only
+// present when the "add cumulative % line" toggle is on for a count bar.
 // Returns [{ title, instruction }] (no formulas — a chart is clicks, not a
 // formula).
-export function excelChartSteps(chartType, dataset, rec = {}, emphasis = {}) {
+export function excelChartSteps(chartType, dataset, rec = {}, emphasis = {}, pareto = null) {
   if (dataset.kind === "crosstab") return crosstabSteps(dataset, rec);
   if (dataset.kind === "distribution" && dataset.shape === "histogram") return histogramSteps(dataset);
   if (dataset.kind === "distribution" && dataset.shape === "boxdot") return boxDotSteps(dataset);
@@ -352,6 +376,9 @@ export function excelChartSteps(chartType, dataset, rec = {}, emphasis = {}) {
 
   const emphasisStepObj = emphasisStep(emphasis);
   if (emphasisStepObj) steps.push(emphasisStepObj);
+
+  const paretoStepObj = paretoStep(dataset, pareto);
+  if (paretoStepObj) steps.push(paretoStepObj);
 
   steps.push(colorNoteStep());
 

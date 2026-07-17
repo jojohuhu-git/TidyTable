@@ -4,7 +4,7 @@
 // given, that bar/point is the accent colour and every peer is grey.
 
 import { foldKey } from "../logic/checkup/normalizers.js";
-import { maxOf, countLabel, describeExtreme } from "../logic/charts/aggregate.js";
+import { maxOf, countLabel, describeExtreme, describeParetoSummary, PARETO_THRESHOLD } from "../logic/charts/aggregate.js";
 import { chartPalette } from "../logic/charts/palette.js";
 import { buildChartAriaSummary, buildCrosstabAriaSummary, buildHistogramAriaSummary, buildBoxDotAriaSummary } from "../logic/charts/chartAriaSummary.js";
 
@@ -40,7 +40,7 @@ function ChartTitle({ title, subtitle }) {
   );
 }
 
-export default function ChartPreview({ chartType, dataset, highlightLabel, referenceLine, title, svgRef, layout }) {
+export default function ChartPreview({ chartType, dataset, highlightLabel, referenceLine, pareto, title, svgRef, layout }) {
   if (!dataset) return null;
   // P6-1: a crosstab (two categorical columns) draws grouped/stacked/100%
   // stacked bars — a different enough shape (a category x subgroup grid, no
@@ -79,7 +79,7 @@ export default function ChartPreview({ chartType, dataset, highlightLabel, refer
   // for first place, or too few categories to compare.
   const subtitle = describeExtreme(dataset);
 
-  if (chartType === "bar") return <BarChart dataset={dataset} fill={fill} title={title} subtitle={subtitle} referenceLine={referenceLine} highlightLabel={highlightLabel} svgRef={svgRef} layout={layout} highlighting={highlightLabel != null} />;
+  if (chartType === "bar") return <BarChart dataset={dataset} fill={fill} title={title} subtitle={subtitle} referenceLine={referenceLine} pareto={pareto} highlightLabel={highlightLabel} svgRef={svgRef} layout={layout} highlighting={highlightLabel != null} />;
   if (chartType === "line") return <LineChart dataset={dataset} title={title} svgRef={svgRef} />;
   if (chartType === "pie") return <PieChart dataset={dataset} fill={fill} title={title} subtitle={subtitle} highlightLabel={highlightLabel} svgRef={svgRef} highlighting={highlightLabel != null} />;
   if (chartType === "scatter") return <ScatterChart dataset={dataset} title={title} svgRef={svgRef} />;
@@ -99,7 +99,16 @@ function niceMax(v) {
 // first — the horizontal all-rows layout the advisor recommends for many
 // categories. The bars are already horizontal in this component; `layout` and
 // the long-list path only change the height and the color ramp.
-function BarChart({ dataset, fill, title, subtitle, referenceLine, highlightLabel, svgRef, layout }) {
+// P6-3: the "add cumulative % line" panel is a separate strip to the right
+// of the bars, not a second scale overlaid on the bars themselves — one axis
+// per plot area (dataviz non-negotiable: never a dual-axis chart), reading
+// as a small-multiples twin rather than an arbitrary two-scale overlay. Each
+// row gets a dot at its own cumulative %, connected row-to-row by a line,
+// against a 0–100% scale with a dashed line at the standard 80% threshold.
+const PARETO_STRIP_W = 150;
+const PARETO_STRIP_PAD = 14;
+
+function BarChart({ dataset, fill, title, subtitle, referenceLine, pareto, highlightLabel, svgRef, layout }) {
   const padL = 130;
   // Phase 8.3: an n (%) value label ("2 (33%)") is wider than a bare number, so
   // the right margin has to leave room or the trailing ")" clips off the SVG.
@@ -110,6 +119,7 @@ function BarChart({ dataset, fill, title, subtitle, referenceLine, highlightLabe
   // A "long" list grows the canvas; a short one keeps the classic 300px chart.
   const isLong = points.length > 12 || layout === "horizontal";
   const chartH = isLong ? padY + 16 + points.length * LONG_ROW_H : H;
+  const chartW = W + (pareto ? PARETO_STRIP_W : 0);
   const values = points.map((p) => p.value);
   // P3-3: an explicit reference-line value can sit outside the bars' own
   // range (a stated threshold, not just their average) — fold it into the
@@ -133,12 +143,16 @@ function BarChart({ dataset, fill, title, subtitle, referenceLine, highlightLabe
   // B12: a data summary in the aria-label, not just the chart type, so a
   // screen reader user gets the numbers without seeing the SVG. P3-3: the
   // same summary now names a highlight or reference line when either is set.
-  const ariaOpts = { highlightLabel, referenceLine };
+  const paretoSummary = pareto ? describeParetoSummary(pareto) : null;
+  const ariaOpts = { highlightLabel, referenceLine, paretoSummary };
   const ariaLabel = title
     ? `Bar chart of ${title}: ${buildChartAriaSummary(dataset, undefined, ariaOpts)}`
     : `Bar chart: ${buildChartAriaSummary(dataset, undefined, ariaOpts)}`;
+  const stripX0 = W + PARETO_STRIP_PAD;
+  const stripInnerW = PARETO_STRIP_W - PARETO_STRIP_PAD * 2;
+  const paretoX = (pct) => stripX0 + (pct / 100) * stripInnerW;
   return (
-    <svg ref={svgRef} viewBox={`0 0 ${W} ${chartH}`} width={W} height={chartH} className="chart-svg" role="img" aria-label={ariaLabel}>
+    <svg ref={svgRef} viewBox={`0 0 ${chartW} ${chartH}`} width={chartW} height={chartH} className="chart-svg" role="img" aria-label={ariaLabel}>
       <ChartTitle title={title} subtitle={subtitle} />
       {negMax > 0 && <line x1={zeroX} y1={padY} x2={zeroX} y2={chartH - 16} stroke="var(--line)" />}
       {points.map((p, i) => {
@@ -185,6 +199,28 @@ function BarChart({ dataset, fill, title, subtitle, referenceLine, highlightLabe
           >
             {referenceLine.label === "average" ? `avg ${referenceLine.value}` : referenceLine.label}
           </text>
+        </g>
+      )}
+      {pareto && (
+        <g>
+          <text x={W + PARETO_STRIP_W / 2} y={16} textAnchor="middle" className="chart-label">Cumulative %</text>
+          {[0, 50, 100].map((pct) => (
+            <text key={pct} x={paretoX(pct)} y={padY - 4} textAnchor="middle" className="chart-label">{pct}%</text>
+          ))}
+          <line
+            x1={paretoX(PARETO_THRESHOLD)} y1={padY} x2={paretoX(PARETO_THRESHOLD)} y2={chartH - 16}
+            stroke="var(--line)" strokeDasharray="3 3"
+          />
+          {pareto.points.map((p, i) => {
+            if (i === 0) return null;
+            const prev = pareto.points[i - 1];
+            const y1 = padY + (i - 1) * rowH + rowH / 2;
+            const y2 = padY + i * rowH + rowH / 2;
+            return <line key={`pl${i}`} x1={paretoX(prev.cumPct)} y1={y1} x2={paretoX(p.cumPct)} y2={y2} stroke="var(--accent)" strokeWidth="1.5" />;
+          })}
+          {pareto.points.map((p, i) => (
+            <circle key={`pd${i}`} cx={paretoX(p.cumPct)} cy={padY + i * rowH + rowH / 2} r="3" fill="var(--accent)" />
+          ))}
         </g>
       )}
     </svg>
