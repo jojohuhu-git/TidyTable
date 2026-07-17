@@ -3,7 +3,7 @@ import { buildDataset, buildCrosstabDataset, buildHistogramDataset, buildBoxDotD
 import { parseChartTweak, sortDataset } from "../logic/charts/chartTweaks.js";
 import { recommendChart } from "../logic/charts/advisor.js";
 import { excelChartSteps } from "../logic/charts/excelChart.js";
-import { buildChartTitle } from "../logic/charts/chartTitle.js";
+import { buildChartTitle, buildCohortCaption } from "../logic/charts/chartTitle.js";
 import { downloadChartPng } from "../logic/charts/downloadChartPng.js";
 import { resolveChartRequest } from "../logic/charts/textToChart.js";
 import { isQualitative } from "../logic/charts/palette.js";
@@ -281,7 +281,7 @@ export default function ChartsPanel({ sheet, seed }) {
         </div>
       </details>
       {filter && (
-        <p className="hint">Only counting rows where "{filter.column}" is "{filter.value}". Clear the label picker to remove this.</p>
+        <p className="hint">{buildCohortCaption(dataset, filter)} Clear the label picker to remove this.</p>
       )}
       {valueCol === "" && !subgroupCol && numericColumns.length === 0 && labelCol && (
         <p className="hint">No numeric columns to total — showing a count of rows per {labelCol} instead.</p>

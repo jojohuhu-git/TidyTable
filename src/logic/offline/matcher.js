@@ -906,7 +906,10 @@ function extractCohort(request) {
 // contain (the never-guess promise). Returns a cohort {termText, start, end}
 // shaped exactly like extractCohort's, or null. Tries the rightmost marker first
 // so the closest trailing clause wins.
-function detectTrailingValueCohort(text, headers, index) {
+// P6-4: also reused by textToChart.js's histogram signal, so a plain-column
+// chart request ("durations chosen for cystitis") gets the same cohort-clause
+// parsing Step 3's Q&A already has — one brain, not a second implementation.
+export function detectTrailingValueCohort(text, headers, index) {
   const markers = [...String(text).matchAll(/\b(?:for|in|with|among)\s+/gi)];
   for (let i = markers.length - 1; i >= 0; i--) {
     const mk = markers[i];

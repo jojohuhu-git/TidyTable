@@ -17,7 +17,7 @@ import { findColumnCandidates, findValueCandidates, scoreTokenMatch, tokens } fr
 import { detectIntent, GROUP_WORDS, detectTopN } from "../offline/synonyms.js";
 import { foldKey } from "../checkup/normalizers.js";
 import { matchColumn } from "../recipes/recipe.js";
-import { matchRequest } from "../offline/matcher.js";
+import { matchRequest, detectTrailingValueCohort } from "../offline/matcher.js";
 
 // Generic filler words that carry no column/value meaning for a chart
 // request — separate from (and smaller than) the offline Q&A matcher's STOP
@@ -218,27 +218,51 @@ const HISTOGRAM_PATTERNS = [
   /^(.+?)\s+chosen$/i,
 ];
 const HISTOGRAM_GROUP_MARKER = /\b(by|per|across|within\s+each|for\s+each)\b/i;
+// P6-4: a plain histogram request can still carry its own cohort ("durations
+// chosen for cystitis") — cheap pre-check so the cost of building a value
+// index is only paid when the sentence actually looks histogram-shaped.
+const HISTOGRAM_TRIGGER = /\b(distribution|histogram|spread|chosen)\b/i;
+
+// P6-4: strip a trailing "for/in/with/among <value>" cohort clause from a
+// histogram request, same honest rule Step 3's Q&A already uses for "average
+// duration for UTI" (detectTrailingValueCohort) — only fires when the phrase
+// names a REAL, EXACT cell value, never a guess. Returns
+// { filter: {column, value}, strippedText } or null when there is no such
+// clause (the ordinary, cohort-free reading).
+function resolveHistogramCohort(text, headers, index) {
+  const cohort = detectTrailingValueCohort(text, headers, index);
+  if (!cohort) return null;
+  const phrase = termWords(cohort.termText).join(" ");
+  if (!phrase) return null;
+  const candidates = findValueCandidates(phrase, headers, index);
+  const exact = candidates.find((c) => c.exact);
+  if (!exact) return null;
+  const strippedText = (text.slice(0, cohort.start) + " " + text.slice(cohort.end)).replace(/\s+/g, " ").trim();
+  return { filter: { column: exact.column, value: exact.value }, strippedText };
+}
 
 function resolveHistogramSignal(raw, sheet, headers) {
+  const cohort = HISTOGRAM_TRIGGER.test(raw) ? resolveHistogramCohort(raw, headers, valueIndex(sheet)) : null;
+  const searchText = cohort ? cohort.strippedText : raw;
   for (const re of HISTOGRAM_PATTERNS) {
-    const m = raw.match(re);
+    const m = searchText.match(re);
     if (!m) continue;
     const phrase = m[1];
     if (HISTOGRAM_GROUP_MARKER.test(phrase)) continue; // a by-group ask, not a plain histogram
     const numericHeaders = headers.filter((h) => isNumeric(sheet, h.name));
     const span = bestColumnSpan(phrase, numericHeaders);
     if (!span) continue;
-    return { valueCol: span.column, stretched: span.score < 3 };
+    return { valueCol: span.column, stretched: span.score < 3, filter: cohort?.filter || null };
   }
   return null;
 }
 
-function finishHistogramPlan({ valueCol, stretched }) {
+function finishHistogramPlan({ valueCol, stretched, filter }) {
   return {
     status: "resolved", kind: "distribution", shape: "histogram",
-    valueCol, filter: null,
+    valueCol, filter: filter || null,
     confidence: stretched ? "stretched" : "exact",
-    lookedFor: `Distribution of "${valueCol}".`,
+    lookedFor: `Distribution of "${valueCol}"${filter ? ` where "${filter.column}" is "${filter.value}"` : ""}.`,
     ignored: null, ties: [], rank: null,
   };
 }
