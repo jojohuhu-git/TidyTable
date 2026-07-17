@@ -46,3 +46,28 @@ export function buildCrosstabAriaSummary(dataset, categoryCap = CROSSTAB_CATEGOR
   if (moreCats > 0) summary += `; and ${moreCats} more ${dataset.labelName || "categories"}`;
   return summary;
 }
+
+// P6-2: a screen-reader summary for a histogram — the bin rule, then a
+// capped list of "range: count" bars, same "a few numbers, honestly capped"
+// idiom as buildChartAriaSummary above.
+export function buildHistogramAriaSummary(dataset, cap = SUMMARY_CAP) {
+  if (!dataset?.bins?.length) return "";
+  const shown = dataset.bins.slice(0, cap);
+  const parts = shown.map((b) => `${b.label}: ${b.count}`);
+  const more = dataset.bins.length - shown.length;
+  if (more > 0) parts.push(`and ${more} more bins`);
+  let summary = `${dataset.n} values. ${parts.join(", ")}`;
+  if (dataset.binRule) summary += `. ${dataset.binRule}`;
+  return summary;
+}
+
+// P6-2: a screen-reader summary for a box+dot plot — per group, the median
+// and quartile range, capped the same way.
+export function buildBoxDotAriaSummary(dataset, cap = SUMMARY_CAP) {
+  if (!dataset?.groups?.length) return "";
+  const shown = dataset.groups.slice(0, cap);
+  const parts = shown.map((g) => `${g.label}: median ${g.stats.median}, range ${g.stats.q1}–${g.stats.q3}, n=${g.n}`);
+  const more = dataset.groups.length - shown.length;
+  if (more > 0) parts.push(`and ${more} more`);
+  return parts.join("; ");
+}

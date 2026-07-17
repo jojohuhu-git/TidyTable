@@ -201,6 +201,48 @@ function finishCrosstabPlan({ labelCol, subgroupCol, layout, stretched }) {
   };
 }
 
+// P6-2: "distribution of X" / "histogram of X" / "durations chosen" — a
+// single numeric column, no grouping at all. Checked ahead of the
+// single-column label/value search below, same "an explicit sentence
+// pattern wins" precedence as the crosstab check above. Skipped when the
+// phrase also names a by/per/across group marker — that's a numeric-by-group
+// ask (an average/sum bar, with box+dot offered as an alternative once it's
+// drawn — see advisor.js's boxDotAlternative), not a plain histogram, and
+// this file never tries to resolve two different chart shapes from one
+// sentence.
+const HISTOGRAM_PATTERNS = [
+  /^distribution\s+of\s+(.+)$/i,
+  /^histogram\s+of\s+(.+)$/i,
+  /^spread\s+of\s+(.+)$/i,
+  /^(.+?)\s+distribution$/i,
+  /^(.+?)\s+chosen$/i,
+];
+const HISTOGRAM_GROUP_MARKER = /\b(by|per|across|within\s+each|for\s+each)\b/i;
+
+function resolveHistogramSignal(raw, sheet, headers) {
+  for (const re of HISTOGRAM_PATTERNS) {
+    const m = raw.match(re);
+    if (!m) continue;
+    const phrase = m[1];
+    if (HISTOGRAM_GROUP_MARKER.test(phrase)) continue; // a by-group ask, not a plain histogram
+    const numericHeaders = headers.filter((h) => isNumeric(sheet, h.name));
+    const span = bestColumnSpan(phrase, numericHeaders);
+    if (!span) continue;
+    return { valueCol: span.column, stretched: span.score < 3 };
+  }
+  return null;
+}
+
+function finishHistogramPlan({ valueCol, stretched }) {
+  return {
+    status: "resolved", kind: "distribution", shape: "histogram",
+    valueCol, filter: null,
+    confidence: stretched ? "stretched" : "exact",
+    lookedFor: `Distribution of "${valueCol}".`,
+    ignored: null, ties: [], rank: null,
+  };
+}
+
 // Phase 8.1 — "one brain, two steps". A chart request is read through the SAME
 // Step 3 pipeline (matchRequest) FIRST, so every Step 3 improvement — synonyms,
 // learned aliases, negation, typo tolerance, cohort filters — transfers to
@@ -341,6 +383,12 @@ function resolveChartLocally(raw, sheet) {
   // single-column reading below.
   const crosstab = resolveCrosstabSignal(raw, sheet, headers);
   if (crosstab) return finishCrosstabPlan(crosstab);
+
+  // P6-2: "distribution of X" / "durations chosen" — a plain histogram,
+  // checked right after the crosstab signal, ahead of everything below that
+  // assumes a grouping column.
+  const histogram = resolveHistogramSignal(raw, sheet, headers);
+  if (histogram) return finishHistogramPlan(histogram);
 
   // Phase 4: "top 5"/"most common"/"least common"/"longest"/"shortest" — the
   // Step 9 mirror of the Q&A ranking family (offline/matcher.js's

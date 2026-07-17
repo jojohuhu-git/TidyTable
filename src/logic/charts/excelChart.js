@@ -161,6 +161,109 @@ function crosstabSteps(dataset, rec) {
   return steps;
 }
 
+// P6-2: Excel 2016+ has a native "Histogram" chart type (Insert > Statistic
+// Chart) that bins numbers itself — no helper table or workaround needed,
+// unlike the crosstab above. The one thing that has to match the preview
+// exactly is the bin width, so it's stated as its own step in the same units
+// the preview's caption already used.
+function histogramSteps(dataset) {
+  const steps = [];
+  steps.push({
+    title: "Select the number column",
+    instruction: `Select the "${dataset.valueName}" column, including its header row.`,
+  });
+  steps.push({
+    title: "Insert the histogram",
+    instruction: `Go to the Insert tab, open the "Insert Statistic Chart" button in the Charts group, and choose ` +
+      `"Histogram" (Excel 2016 and later, on both Windows and Mac). If you don't see it, use Insert > Recommended ` +
+      `Charts and search for "histogram".`,
+  });
+  steps.push({
+    title: "Set the bin width to match the preview",
+    instruction: dataset.unitBins
+      ? `Right-click the bottom axis > Format Axis > Bin width, and type 1 — this matches the preview, which gives ` +
+        `every whole number its own bar.`
+      : `Right-click the bottom axis > Format Axis > Bin width, and type ${dataset.binWidth} — this matches the ` +
+        `preview's bin size (${dataset.binRule.toLowerCase()}).`,
+  });
+  steps.push({
+    title: "Label the axes",
+    instruction: `Click the chart title and axis titles and type plain names (for example "${dataset.valueName}" ` +
+      `for the bottom axis, "Number of rows" for the side one).`,
+  });
+  if (dataset.filter) {
+    steps.push({
+      title: "Remember the filter",
+      instruction: `This chart only counts rows where "${dataset.filter.column}" is "${dataset.filter.value}" — ` +
+        `filter your data to that first (Data > Filter).`,
+    });
+  }
+  if (dataset.unreadableCount) {
+    steps.push({
+      title: "Note the excluded values",
+      instruction: `${dataset.unreadableCount} value${dataset.unreadableCount === 1 ? "" : "s"} in ` +
+        `"${dataset.valueName}" couldn't be read as a number and are left out of both the preview and this chart.`,
+    });
+  }
+  steps.push(colorNoteStep());
+  return steps;
+}
+
+// P6-2: Excel has no native "box plot with jittered dots" — the honest
+// workaround is a helper stats table (the same computeNumericStats numbers
+// the preview drew) plus Excel's native Box and Whisker chart type for the
+// shape; the raw dots are a documented manual step since Excel can't overlay
+// them on a box-and-whisker automatically.
+function boxDotHelperTableStep(dataset) {
+  const rows = dataset.groups.slice(0, 12)
+    .map((g) => `${g.label} — median ${g.stats.median}, Q1 ${g.stats.q1}, Q3 ${g.stats.q3}, min ${g.stats.min}, max ${g.stats.max}, n=${g.n}`)
+    .join("; ");
+  const more = dataset.groups.length > 12 ? `, and ${dataset.groups.length - 12} more` : "";
+  return {
+    title: "Build the helper table",
+    instruction:
+      `In two empty columns, type "${dataset.labelName}" and "${dataset.valueName}" as headers, then one row per ` +
+      `original record (not summarized) — the raw values are what Excel's Box and Whisker chart needs. For ` +
+      `reference, the summary this preview drew is: ${rows}${more}.`,
+  };
+}
+
+function boxDotSteps(dataset) {
+  const steps = [boxDotHelperTableStep(dataset)];
+  steps.push({
+    title: "Insert the box and whisker chart",
+    instruction: `Select both helper columns (including the header row), go to the Insert tab, open "Insert ` +
+      `Statistic Chart" in the Charts group, and choose "Box and Whisker" (Excel 2016 and later, Windows and Mac ` +
+      `both have it).`,
+  });
+  steps.push({
+    title: "Label the axes",
+    instruction: `Click the chart title and axis titles and type plain names (for example "${dataset.valueName}" ` +
+      `on the value axis, "${dataset.labelName}" on the other).`,
+  });
+  steps.push({
+    title: "About the dots",
+    instruction: `Excel's Box and Whisker chart draws the box, median, and outliers, but not every raw value as a ` +
+      `dot the way this app's preview does. The median line and box position will match exactly; the individual ` +
+      `dots are this app's own addition for reviewers who want to see the raw spread.`,
+  });
+  if (dataset.filter) {
+    steps.push({
+      title: "Remember the filter",
+      instruction: `This chart only uses rows where "${dataset.filter.column}" is "${dataset.filter.value}" — ` +
+        `filter your data to that first (Data > Filter), or the helper table above already reflects it.`,
+    });
+  }
+  if (dataset.noDataGroups?.length) {
+    steps.push({
+      title: "Note the excluded groups",
+      instruction: `${dataset.noDataGroups.join(", ")} — every value in ${dataset.noDataGroups.length === 1 ? "that group" : "those groups"} was unreadable as a number, so there was nothing to plot. Not the same as zero.`,
+    });
+  }
+  steps.push(colorNoteStep());
+  return steps;
+}
+
 function colorNoteStep() {
   return {
     title: "Match the colors (optional)",
@@ -181,6 +284,8 @@ function colorNoteStep() {
 // formula).
 export function excelChartSteps(chartType, dataset, rec = {}, emphasis = {}) {
   if (dataset.kind === "crosstab") return crosstabSteps(dataset, rec);
+  if (dataset.kind === "distribution" && dataset.shape === "histogram") return histogramSteps(dataset);
+  if (dataset.kind === "distribution" && dataset.shape === "boxdot") return boxDotSteps(dataset);
   const steps = [];
   const horizontal = chartType === "bar" && rec.layout === "horizontal";
   const label = CHART_LABEL[horizontal ? "bar-horizontal" : chartType] || "chart";

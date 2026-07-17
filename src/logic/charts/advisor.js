@@ -53,13 +53,49 @@ function recommendCrosstabLayout(dataset, opts) {
   };
 }
 
+// P6-2: histogram (one numeric column, no grouping) or box+dot (a numeric
+// column's spread within each group). Both are `kind: "distribution"`,
+// distinguished by `shape`, since neither has a plain `points` array — like
+// the crosstab above, dispatched before the `!dataset.points` guard below.
+function recommendDistribution(dataset) {
+  if (dataset.shape === "histogram") {
+    if (!dataset.bins?.length) return { type: "none", reason: "There is nothing to chart yet." };
+    return {
+      type: "histogram",
+      reason: `Histogram because "${dataset.valueName}" is a number with nothing to group it by — this shows how its values are spread out. ${dataset.binRule}`,
+      alternatives: [],
+    };
+  }
+  if (!dataset.groups?.length) return { type: "none", reason: "There is nothing to chart yet." };
+  const label = `"${dataset.labelName}"`;
+  const val = `"${dataset.valueName}"`;
+  return {
+    type: "boxdot",
+    reason: `Box and dot plot because this compares the SPREAD of ${val} across ${label}, not just one summary number — the box marks the middle 50%, the line is the median, and the dots are the real values.`,
+    alternatives: [{ type: "bar", reason: "Average bar instead, for a single summary number per group." }],
+  };
+}
+
+// P6-2: the cross-offer the spec asks for — an average/total-by-group bar
+// chart always offers "see the spread instead" (box+dot), and box+dot always
+// offers the summary bar back (above). Only a numeric-by-group bar qualifies
+// (not a plain count) — a spread of counts isn't a meaningful ask.
+function boxDotAlternative(dataset) {
+  if (dataset.valueName === "count" || typeof dataset.valueName !== "string" || !dataset.labelName) return null;
+  const noun = dataset.valueName.startsWith("average") ? "Averages" : "Totals";
+  return { type: "boxdot", reason: `${noun} hide spread — see the spread instead.` };
+}
+
 // dataset shapes:
 //   { kind: "categorical", points: [{label, value}], labelIsTime: boolean, valueName }
 //   { kind: "xy", points: [{x, y}], xName, yName }
 //   { kind: "crosstab", categories: [{label, total, values}], subgroups, labelName, subgroupName }
+//   { kind: "distribution", shape: "histogram", bins: [{label, from, to, count}], valueName }
+//   { kind: "distribution", shape: "boxdot", groups: [{label, stats, values, n}], labelName, valueName }
 export function recommendChart(dataset, opts = {}) {
   if (!dataset) return { type: "none", reason: "There is nothing to chart yet." };
   if (dataset.kind === "crosstab") return recommendCrosstabLayout(dataset, opts);
+  if (dataset.kind === "distribution") return recommendDistribution(dataset);
   if (!dataset.points || dataset.points.length === 0) {
     return { type: "none", reason: "There is nothing to chart yet." };
   }
@@ -91,11 +127,12 @@ export function recommendChart(dataset, opts = {}) {
   // every one of the n categories. No pie past PIE_MAX_SLICES anyway, so the
   // only decision left is the layout.
   if (n > MANY_CATEGORIES) {
+    const boxDotAlt = boxDotAlternative(dataset);
     return {
       type: "bar",
       layout: "horizontal",
       reason: `Horizontal bar chart because ${col} has ${n} categories — laid out largest first, so every one is still readable even though there are a lot of them.`,
-      alternatives: [],
+      alternatives: boxDotAlt ? [boxDotAlt] : [],
       noPieReason: `A ${n}-slice pie would be unreadable; horizontal bars compare all ${n} categories clearly.`,
       offerGroupOther: n > MANY_CATEGORIES * 2,
     };
@@ -114,6 +151,8 @@ export function recommendChart(dataset, opts = {}) {
   } else {
     noPieReason = `A ${n}-slice pie is hard to read; bars compare ${n} categories clearly.`;
   }
+  const boxDotAlt = boxDotAlternative(dataset);
+  if (boxDotAlt) alternatives.push(boxDotAlt);
 
   return {
     type: "bar",

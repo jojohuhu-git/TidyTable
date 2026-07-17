@@ -6,7 +6,7 @@
 import { foldKey } from "../logic/checkup/normalizers.js";
 import { maxOf, countLabel, describeExtreme } from "../logic/charts/aggregate.js";
 import { chartPalette } from "../logic/charts/palette.js";
-import { buildChartAriaSummary, buildCrosstabAriaSummary } from "../logic/charts/chartAriaSummary.js";
+import { buildChartAriaSummary, buildCrosstabAriaSummary, buildHistogramAriaSummary, buildBoxDotAriaSummary } from "../logic/charts/chartAriaSummary.js";
 
 export const CHART_W = 480;
 export const CHART_H = 300;
@@ -50,6 +50,18 @@ export default function ChartPreview({ chartType, dataset, highlightLabel, refer
   if (dataset.kind === "crosstab") {
     if (!dataset.categories?.length) return null;
     return <CrosstabBarChart dataset={dataset} title={title} layout={layout} svgRef={svgRef} />;
+  }
+  // P6-2: a histogram (one numeric column, no grouping) and a box+dot plot
+  // (a numeric column's spread within each group) are both `kind:
+  // "distribution"` — neither has a `points` array either, same reason the
+  // crosstab gets its own branch above.
+  if (dataset.kind === "distribution") {
+    if (dataset.shape === "histogram") {
+      if (!dataset.bins?.length) return null;
+      return <HistogramChart dataset={dataset} title={title} svgRef={svgRef} />;
+    }
+    if (!dataset.groups?.length) return null;
+    return <BoxDotChart dataset={dataset} title={title} svgRef={svgRef} />;
   }
   if (!dataset.points?.length) return null;
   const isSubject = (label) =>
@@ -373,6 +385,163 @@ function CrosstabBarChart({ dataset, title, layout, svgRef }) {
       {layout === "stacked100" && [0, 25, 50, 75, 100].map((p) => (
         <text key={p} x={padL + innerW * (p / 100)} y={chartH - 6} textAnchor="middle" className="chart-label">{p}%</text>
       ))}
+    </svg>
+  );
+}
+
+// P6-2: a histogram of one numeric column — vertical columns, unlike every
+// other bar in this app. Bins are a continuous number line, not named
+// categories, so reading left-to-right as "increasing value" is the
+// near-universal convention for a distribution — matches this app's other
+// two-axis chart (ScatterChart) rather than the "labels down the left" house
+// style the categorical bars use. Both axes carry a title AND numeric ticks
+// (bin ranges along the bottom, evenly spaced counts up the side): the
+// app's LineChart has neither yet, and a histogram should not repeat that gap.
+function HistogramChart({ dataset, title, svgRef }) {
+  const bins = dataset.bins;
+  const padL = 46;
+  const padR = 16;
+  const padB = 52;
+  const padT = 16 + (title ? TITLE_PAD : 0) + (dataset.binRule ? SUBTITLE_PAD : 0);
+  const innerW = W - padL - padR;
+  const innerH = H - padT - padB;
+  const maxCount = niceMax(maxOf(bins.map((b) => b.count), 0));
+  const barGap = bins.length > 15 ? 1 : 2;
+  const barW = innerW / bins.length;
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(maxCount * f));
+  const ariaLabel = title
+    ? `Histogram of ${title}: ${buildHistogramAriaSummary(dataset)}`
+    : `Histogram: ${buildHistogramAriaSummary(dataset)}`;
+  return (
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="chart-svg" role="img" aria-label={ariaLabel}>
+      <ChartTitle title={title} subtitle={dataset.binRule} />
+      <line x1={padL} y1={padT} x2={padL} y2={padT + innerH} stroke="var(--line)" />
+      <line x1={padL} y1={padT + innerH} x2={W - padR} y2={padT + innerH} stroke="var(--line)" />
+      {yTicks.map((t, i) => {
+        const y = padT + innerH - (maxCount ? (t / maxCount) * innerH : 0);
+        return (
+          <g key={i}>
+            <line x1={padL - 4} y1={y} x2={padL} y2={y} stroke="var(--line)" />
+            <text x={padL - 8} y={y} textAnchor="end" dominantBaseline="middle" className="chart-label">{t}</text>
+          </g>
+        );
+      })}
+      {bins.map((b, i) => {
+        const h = maxCount ? (b.count / maxCount) * innerH : 0;
+        const x = padL + i * barW + barGap / 2;
+        const w = Math.max(1, barW - barGap);
+        const y = padT + innerH - h;
+        const showLabel = bins.length <= 20;
+        return (
+          <g key={i}>
+            <rect x={x} y={y} width={w} height={h} fill="var(--accent)" rx="2" />
+            {showLabel && (
+              <text x={x + w / 2} y={padT + innerH + 14} textAnchor="middle" className="chart-label">
+                {b.label.length > 9 ? b.label.slice(0, 8) + "…" : b.label}
+              </text>
+            )}
+          </g>
+        );
+      })}
+      <text x={padL + innerW / 2} y={H - 6} textAnchor="middle" className="chart-label">{dataset.valueName}</text>
+      <text x={12} y={padT + innerH / 2} textAnchor="middle" className="chart-label" transform={`rotate(-90 12 ${padT + innerH / 2})`}>Number of rows</text>
+    </svg>
+  );
+}
+
+// P6-2: box + jittered-dot plot — the spread of a numeric column within each
+// group. Kept the app's horizontal "labels down the left" house style (like
+// BarChart and CrosstabBarChart above) rather than the histogram's vertical
+// style: unlike a histogram's numeric bins, a box+dot's rows are named
+// categories (diagnoses, wards) that can run long, and reading them down the
+// left edge is exactly the horizontal bar chart's own reasoning.
+const BOXDOT_ROW_H = 34;
+const BOXDOT_BOX_H = 16;
+
+// Deterministic (not Math.random): the same dataset always draws the same
+// dots, so a re-render or a downloaded PNG never looks different from what
+// was on screen a moment ago.
+function jitterOffset(i, n, maxSpread) {
+  if (n <= 1) return 0;
+  const frac = ((i * 2654435761) % 1000) / 1000;
+  return (frac - 0.5) * 2 * maxSpread;
+}
+
+function BoxDotChart({ dataset, title, svgRef }) {
+  const padL = 130;
+  const padR = 30;
+  const padB = 40;
+  const groups = dataset.groups;
+  const padT = 16 + (title ? TITLE_PAD : 0);
+  const chartH = padT + groups.length * BOXDOT_ROW_H + padB;
+  const allValues = groups.flatMap((g) => [g.stats.min, g.stats.max]);
+  // niceMax(0) returns 1 (a bare-zero axis ceiling would be a degenerate
+  // chart) — harmless for BarChart above, which only conditionally draws a
+  // zero LINE from it, but this chart also prints the axis as NUMBER ticks,
+  // which would show a dishonest "-1" tick for data that has no negative
+  // values at all. Only reserve negative axis space when a value actually is
+  // negative.
+  const hasNegative = allValues.some((v) => v < 0);
+  const posMax = niceMax(maxOf(allValues, 0));
+  const negMax = hasNegative ? niceMax(maxOf(allValues.map((v) => -v), 0)) : 0;
+  const innerW = W - padL - padR;
+  const scale = innerW / ((posMax + negMax) || 1);
+  const zeroX = padL + negMax * scale;
+  const xAt = (v) => zeroX + v * scale;
+  const palette = chartPalette(groups.length);
+  const ariaLabel = title
+    ? `Box and dot plot of ${title}: ${buildBoxDotAriaSummary(dataset)}`
+    : `Box and dot plot: ${buildBoxDotAriaSummary(dataset)}`;
+
+  return (
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${chartH}`} width={W} height={chartH} className="chart-svg" role="img" aria-label={ariaLabel}>
+      <ChartTitle title={title} />
+      {negMax > 0 && <line x1={zeroX} y1={padT} x2={zeroX} y2={chartH - padB} stroke="var(--line)" />}
+      {groups.map((g, gi) => {
+        const cy = padT + gi * BOXDOT_ROW_H + BOXDOT_ROW_H / 2;
+        const boxTop = cy - BOXDOT_BOX_H / 2;
+        const color = palette[gi] || "var(--accent)";
+        const dotSpread = Math.min(BOXDOT_ROW_H * 0.3, 9);
+        return (
+          <g key={gi}>
+            <text x={padL - 8} y={cy} textAnchor="end" dominantBaseline="middle" className="chart-label">
+              {g.label.length > 18 ? g.label.slice(0, 17) + "…" : g.label}
+            </text>
+            <line x1={xAt(g.stats.min)} y1={cy} x2={xAt(g.stats.max)} y2={cy} stroke="var(--line)" />
+            <line x1={xAt(g.stats.min)} y1={cy - 5} x2={xAt(g.stats.min)} y2={cy + 5} stroke="var(--line)" />
+            <line x1={xAt(g.stats.max)} y1={cy - 5} x2={xAt(g.stats.max)} y2={cy + 5} stroke="var(--line)" />
+            <rect
+              x={Math.min(xAt(g.stats.q1), xAt(g.stats.q3))}
+              y={boxTop}
+              width={Math.max(1, Math.abs(xAt(g.stats.q3) - xAt(g.stats.q1)))}
+              height={BOXDOT_BOX_H}
+              fill={color}
+              opacity="0.35"
+              stroke={color}
+            />
+            <line x1={xAt(g.stats.median)} y1={boxTop} x2={xAt(g.stats.median)} y2={boxTop + BOXDOT_BOX_H} stroke={color} strokeWidth="2" />
+            <text x={xAt(g.stats.median)} y={boxTop - 4} textAnchor="middle" className="chart-value">{g.stats.median}</text>
+            {g.values
+              ? g.values.map((v, vi) => (
+                <circle key={vi} cx={xAt(v)} cy={cy + jitterOffset(vi, g.values.length, dotSpread)} r="2.5" fill={color} opacity="0.7" />
+              ))
+              : (
+                <text x={xAt(g.stats.max) + 8} y={cy} dominantBaseline="middle" className="chart-label">
+                  n={g.n}, box only
+                </text>
+              )}
+          </g>
+        );
+      })}
+      {[0, 0.25, 0.5, 0.75, 1].map((f) => {
+        const v = -negMax + f * (posMax + negMax);
+        return (
+          <text key={f} x={xAt(v)} y={chartH - padB + 14} textAnchor="middle" className="chart-label">
+            {Math.round(v * 100) / 100}
+          </text>
+        );
+      })}
+      <text x={padL + innerW / 2} y={chartH - 6} textAnchor="middle" className="chart-label">{dataset.valueName}</text>
     </svg>
   );
 }

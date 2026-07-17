@@ -5,7 +5,7 @@
 // prefer a line.
 
 import { foldKey } from "../checkup/normalizers.js";
-import { toNumber, topNWithTies } from "../offline/cohort.js";
+import { toNumber, topNWithTies, computeNumericStats } from "../offline/cohort.js";
 
 const MONTHS = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i;
 const MONTH_INDEX = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
@@ -371,4 +371,154 @@ export function applyRankCap(dataset, rank) {
   }
   const points = topNWithTies(dataset.points, n, (p) => p.value, direction);
   return { ...dataset, points, rankRequestedN: n, rankShown: points.length };
+}
+
+// P1-6 (same reasoning as maxOf above): a plain Math.min(...arr)/Math.max(...arr)
+// blows the call stack on a large array. One safe pass for both.
+function minMaxOf(values) {
+  let min = values[0];
+  let max = values[0];
+  for (const v of values) {
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  return [min, max];
+}
+
+// P6-2: round a bin edge to a readable number for a caption/axis label —
+// whole numbers stay bare, anything else keeps at most 2 decimal places
+// (matching computeNumericStats' rounding elsewhere in the app).
+function fmtBinEdge(v) {
+  const r = Math.round(v * 100) / 100;
+  return Number.isInteger(r) ? String(r) : String(r);
+}
+
+// P6-2: pick a "nice" bin width (1, 2, 5, or 10 times a power of ten) so bin
+// edges are round numbers a reader can act on, not "4.5–6.5". Aims for
+// roughly `targetBins` bars across the data's range.
+function niceBinWidth(range, targetBins) {
+  const raw = range / targetBins;
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  const residual = raw / mag;
+  const niceResidual = residual < 1.5 ? 1 : residual < 3 ? 2 : residual < 7 ? 5 : 10;
+  return niceResidual * mag;
+}
+
+// P6-2: integer-friendly binning — the spec's own example is a duration
+// histogram that must show 5, 7, 10 days as their OWN bars, never a
+// "4.5–6.5" range that no real value could ever equal. When every value is a
+// whole number and the range is small enough to draw one bar per integer
+// without the chart turning into a wall of bars, bin width is exactly 1 and
+// each bar's label is the bare integer. Otherwise, a "nice" wider bin (see
+// niceBinWidth) is used and the label is a "from–to" range. Either way the
+// rule actually used is returned as one sentence, stated in the chart's
+// caption so the reader knows what a bar means without guessing.
+const INTEGER_UNIT_BIN_RANGE_CAP = 20;
+const HISTOGRAM_TARGET_BINS = 10;
+
+export function computeHistogramBins(values) {
+  const [min, max] = minMaxOf(values);
+  const range = max - min;
+  const allInteger = values.every(Number.isInteger);
+  const unitBins = allInteger && range <= INTEGER_UNIT_BIN_RANGE_CAP;
+  const width = unitBins ? 1 : niceBinWidth(range || 1, HISTOGRAM_TARGET_BINS);
+  const start = unitBins ? min : Math.floor(min / width) * width;
+  // Unit bins are INCLUSIVE of the max value as its own bar (min..max, one
+  // integer each) — end has to be one past max, not max itself, or the
+  // largest value would fold into the second-largest's bar instead of
+  // getting the bar the spec's own example promises it.
+  const end = unitBins ? max + 1 : Math.ceil(max / width) * width;
+  const numBins = Math.max(1, Math.round((end - start) / width));
+  const counts = new Array(numBins).fill(0);
+  for (const v of values) {
+    let idx = Math.floor((v - start) / width);
+    if (idx >= numBins) idx = numBins - 1; // the max value belongs in the last bin, inclusive
+    if (idx < 0) idx = 0;
+    counts[idx] += 1;
+  }
+  const bins = counts.map((count, i) => {
+    const from = start + i * width;
+    const to = from + width;
+    return { label: unitBins ? fmtBinEdge(from) : `${fmtBinEdge(from)}–${fmtBinEdge(to)}`, from, to, count };
+  });
+  const binRule = unitBins
+    ? "Each bar is one whole number — no value is split across bars."
+    : `Each bar covers a range of ${fmtBinEdge(width)}, chosen so every bar is a round number.`;
+  return { bins, binRule, binWidth: width, unitBins };
+}
+
+// P6-2: a histogram of one numeric column — "distribution of Duration_days",
+// "durations chosen". No grouping column at all (that's what makes this
+// different from every other dataset shape here): every readable number in
+// valueCol becomes one tally in the bins computeHistogramBins builds. A cell
+// that isn't a readable number is left out and counted honestly in
+// `unreadableCount`, never silently treated as 0 or dropped without a trace.
+export function buildHistogramDataset(sheet, valueCol, options = {}) {
+  const { filter = null } = options;
+  const rows = applyFilter(sheet.rows, filter);
+  const values = [];
+  let unreadableCount = 0;
+  for (const r of rows) {
+    const raw = r[valueCol];
+    if (raw == null || String(raw).trim() === "") continue;
+    const v = num(raw);
+    if (Number.isFinite(v)) values.push(v);
+    else unreadableCount += 1;
+  }
+  if (values.length === 0) {
+    return { kind: "distribution", shape: "histogram", valueName: valueCol, bins: [], n: 0, filter, unreadableCount };
+  }
+  const { bins, binRule, binWidth, unitBins } = computeHistogramBins(values);
+  return {
+    kind: "distribution", shape: "histogram", valueName: valueCol,
+    bins, binRule, binWidth, unitBins, n: values.length, filter,
+    ...(unreadableCount ? { unreadableCount } : {}),
+  };
+}
+
+// P6-2: box + jittered-dot plot — the spread of a numeric column WITHIN each
+// group ("duration by diagnosis" as spread, not just the mean). Reuses
+// computeNumericStats (the same quartile/median math the Q&A "describe"
+// answer and its Excel formulas already use) per group — one brain, no
+// second implementation. A group with zero readable numbers is left out and
+// named in noDataGroups (never silently drawn as a zero-width box). Raw
+// values are kept per group ONLY when there are few enough to draw as dots
+// without the chart turning into a smear (BOXDOT_MAX_DOTS) — past that the
+// box/median still draws, honestly labeled "box only" rather than a fake dot
+// cloud.
+const BOXDOT_MAX_DOTS = 50;
+
+export function buildBoxDotDataset(sheet, labelCol, valueCol, options = {}) {
+  const { filter = null } = options;
+  const rows = applyFilter(sheet.rows, filter);
+  const raw = new Map(); // foldKey -> { label, values }
+  for (const r of rows) {
+    const lRaw = r[labelCol];
+    if (lRaw == null || String(lRaw).trim() === "") continue;
+    const k = foldKey(lRaw);
+    if (!raw.has(k)) raw.set(k, { label: String(lRaw), values: [] });
+    const v = num(r[valueCol]);
+    if (Number.isFinite(v)) raw.get(k).values.push(v);
+  }
+  const noDataGroups = [];
+  const groups = [];
+  for (const { label, values } of raw.values()) {
+    if (values.length === 0) { noDataGroups.push(label); continue; }
+    groups.push({
+      label,
+      stats: computeNumericStats(values),
+      values: values.length <= BOXDOT_MAX_DOTS ? values : null,
+      n: values.length,
+    });
+  }
+  // House style: largest-first. A box+dot has no single "value" per group —
+  // median is the closest analog to the average-by-group bar it's offered as
+  // an alternative to, so groups sort by descending median.
+  groups.sort((a, b) => (b.stats.median ?? 0) - (a.stats.median ?? 0));
+  return {
+    kind: "distribution", shape: "boxdot",
+    labelName: labelCol, valueName: valueCol,
+    groups, filter,
+    ...(noDataGroups.length ? { noDataGroups } : {}),
+  };
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { buildDataset, buildCrosstabDataset, groupSmallIntoOther, applyRankCap, describeExtreme } from "../logic/charts/aggregate.js";
+import { buildDataset, buildCrosstabDataset, buildHistogramDataset, buildBoxDotDataset, groupSmallIntoOther, applyRankCap, describeExtreme } from "../logic/charts/aggregate.js";
 import { parseChartTweak, sortDataset } from "../logic/charts/chartTweaks.js";
 import { recommendChart } from "../logic/charts/advisor.js";
 import { excelChartSteps } from "../logic/charts/excelChart.js";
@@ -31,6 +31,7 @@ export default function ChartsPanel({ sheet, seed }) {
   const [aggMode, setAggMode] = useState("count"); // "count" | "sum" | "average"
   const [subgroupCol, setSubgroupCol] = useState(""); // P6-1: the "split by" column — a crosstab when set
   const [layoutHint, setLayoutHint] = useState(null); // P6-1: "grouped" | "stacked" | "stacked100" from text or a manual pick
+  const [distMode, setDistMode] = useState(null); // P6-2: "boxdot" when the "see the spread instead" alternative is chosen
   const [filter, setFilter] = useState(null); // W4: { column, value } from a free-text scope
   const [chosen, setChosen] = useState(null); // user override of the recommended type
   const [text, setText] = useState(""); // W4: the free-text request box
@@ -49,14 +50,18 @@ export default function ChartsPanel({ sheet, seed }) {
   // Apply a resolved (or confirmed) plan to the pickers below, so the dropdowns
   // always reflect what the text meant and the user learns the mapping.
   function applyPlan(plan) {
-    setLabelCol(plan.labelCol);
+    // P6-2: a histogram plan ("distribution of X") has no label column at
+    // all — the empty-labelCol-plus-valueCol combination IS what baseDataset
+    // below reads as "chart this one number's spread" (see baseDataset).
+    setLabelCol(plan.kind === "distribution" ? "" : plan.labelCol);
     // P6-1: a crosstab plan has no value column/aggregation/rank/bucket of its
     // own (always a count of rows, split two ways) — clear those explicitly
     // so a previous single-column plan's leftovers can't bleed through.
     setSubgroupCol(plan.kind === "crosstab" ? plan.subgroupCol : "");
     setLayoutHint(plan.kind === "crosstab" ? (plan.layout || "grouped") : null);
     setValueCol(plan.kind === "crosstab" ? "" : (plan.valueCol || ""));
-    setAggMode(plan.kind === "crosstab" ? "count" : plan.aggMode);
+    setAggMode(plan.kind === "crosstab" ? "count" : (plan.aggMode || "count"));
+    setDistMode(null); // a fresh plan always starts as its own default chart, never a leftover "see the spread" override
     setFilter(plan.filter || null);
     setChosen(null);
     setGroupOther(false);
@@ -145,12 +150,19 @@ export default function ChartsPanel({ sheet, seed }) {
   }, [seed?.nonce]);
 
   const baseDataset = useMemo(() => {
-    if (!labelCol) return null;
+    // P6-2: a numeric Value column picked with NO label to group it by has
+    // nothing to group — the honest reading of "just this number" is "show
+    // me how it's spread out", i.e. a histogram, not a silently-empty chart.
+    if (!labelCol) return valueCol ? buildHistogramDataset(sheet, valueCol, { filter }) : null;
     // P6-1: a "split by" column picked (by hand or from text) makes this a
     // crosstab — always a count, never sum/average (see buildCrosstabDataset).
     if (subgroupCol) return buildCrosstabDataset(sheet, labelCol, subgroupCol, { filter });
+    // P6-2: "see the spread instead" was chosen for this exact label/value
+    // pair — box+dot needs the SAME two columns buildDataset below would use,
+    // just kept as raw per-group values instead of one aggregated number.
+    if (distMode === "boxdot" && valueCol) return buildBoxDotDataset(sheet, labelCol, valueCol, { filter });
     return buildDataset(sheet, labelCol, valueCol || null, { aggMode, filter, bucket });
-  }, [sheet, labelCol, subgroupCol, valueCol, aggMode, filter, bucket]);
+  }, [sheet, labelCol, subgroupCol, valueCol, aggMode, filter, bucket, distMode]);
 
   const dataset = useMemo(() => {
     const grouped = baseDataset && groupOther ? groupSmallIntoOther(baseDataset) : baseDataset;
@@ -183,7 +195,7 @@ export default function ChartsPanel({ sheet, seed }) {
     <div className="charts-panel">
       <StepHelpPanel
         whatItDoes="Describe the chart in plain words (or pick columns by hand) and the app recommends one chart type, draws a preview, and gives numbered steps to build the same chart in Excel."
-        cantDoYet={["Two-column comparisons (grouped/stacked bars) always count rows — no averages or totals across two columns yet, and no distribution charts (histograms) yet either."]}
+        cantDoYet={["Two-column comparisons (grouped/stacked bars) always count rows — no averages or totals across two columns yet."]}
         examples={examples.map((text) => ({
           label: text,
           onClick: () => { setText(text); runText(text); },
@@ -221,7 +233,7 @@ export default function ChartsPanel({ sheet, seed }) {
         <div className="stats-pickers">
           <label>
             Labels (what to compare)
-            <select value={labelCol} onChange={(e) => { setLabelCol(e.target.value); setChosen(null); setFilter(null); setChartRank(null); setBucket(null); setSubgroupCol(""); setLayoutHint(null); }}>
+            <select value={labelCol} onChange={(e) => { setLabelCol(e.target.value); setChosen(null); setFilter(null); setChartRank(null); setBucket(null); setSubgroupCol(""); setLayoutHint(null); setDistMode(null); }}>
               <option value="">choose a column…</option>
               {columns.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
@@ -239,6 +251,7 @@ export default function ChartsPanel({ sheet, seed }) {
                 setLayoutHint(null);
                 setChosen(null);
                 setChartRank(null);
+                setDistMode(null);
               }}
             >
               <option value="">how many of each (count)</option>
@@ -258,6 +271,7 @@ export default function ChartsPanel({ sheet, seed }) {
                 setChosen(null);
                 setLayoutHint(null);
                 setChartRank(null);
+                setDistMode(null);
               }}
             >
               <option value="">none — one column</option>
@@ -271,6 +285,9 @@ export default function ChartsPanel({ sheet, seed }) {
       )}
       {valueCol === "" && !subgroupCol && numericColumns.length === 0 && labelCol && (
         <p className="hint">No numeric columns to total — showing a count of rows per {labelCol} instead.</p>
+      )}
+      {!labelCol && valueCol && (
+        <p className="hint">No "Labels" column chosen to group by — showing the distribution (a histogram) of {valueCol} instead. Pick a Labels column above to compare {valueCol} across groups instead.</p>
       )}
 
       {rec && rec.type === "none" && <p className="hint">{rec.reason}</p>}
@@ -304,7 +321,14 @@ export default function ChartsPanel({ sheet, seed }) {
                       <button
                         type="button"
                         className={`btn btn-ghost ${isActive ? "btn-primary" : ""}`}
-                        onClick={() => { setChosen(a.type); setLayoutHint(a.layout || null); }}
+                        onClick={() => {
+                          setChosen(a.type);
+                          setLayoutHint(a.layout || null);
+                          // P6-2: "see the spread instead" / "average bar
+                          // instead" toggles between the SAME label/value pair
+                          // built two different ways (see baseDataset above).
+                          setDistMode(a.type === "boxdot" ? "boxdot" : null);
+                        }}
                       >
                         {chartTypeName(a.type, a.layout)}
                       </button>
@@ -326,11 +350,11 @@ export default function ChartsPanel({ sheet, seed }) {
             layout={rec.layout}
           />
 
-          {/* Phase 8.5: adjust the chart in plain words. P6-1: none of these
-              verbs (top N, sort, highlight, reference line) apply to a
-              crosstab yet — hidden rather than silently no-opping while
-              claiming success. */}
-          {dataset.kind !== "crosstab" && (
+          {/* Phase 8.5: adjust the chart in plain words. P6-1/P6-2: none of
+              these verbs (top N, sort, highlight, reference line) apply to a
+              crosstab or a distribution chart yet — hidden rather than
+              silently no-opping while claiming success. */}
+          {dataset.kind !== "crosstab" && dataset.kind !== "distribution" && (
             <div className="chart-tweak-row">
               <label className="chart-text-label">
                 Adjust in words
@@ -347,7 +371,7 @@ export default function ChartsPanel({ sheet, seed }) {
               </button>
             </div>
           )}
-          {dataset.kind !== "crosstab" && tweakLog.length > 0 && (
+          {dataset.kind !== "crosstab" && dataset.kind !== "distribution" && tweakLog.length > 0 && (
             <p className="dim">Adjustments: {tweakLog.join(" ")}</p>
           )}
           {dataset.kind === "categorical" && (
@@ -376,7 +400,12 @@ export default function ChartsPanel({ sheet, seed }) {
           )}
           {dataset.noDataGroups?.length > 0 && (
             <p className="hint">
-              Not shown: {dataset.noDataGroups.join(", ")} — every value in {dataset.noDataGroups.length === 1 ? "that group" : "those groups"} was unreadable as a number, so there was nothing to average. Not the same as zero.
+              Not shown: {dataset.noDataGroups.join(", ")} — every value in {dataset.noDataGroups.length === 1 ? "that group" : "those groups"} was unreadable as a number, so there was nothing to {dataset.kind === "distribution" ? "plot" : "average"}. Not the same as zero.
+            </p>
+          )}
+          {dataset.kind === "distribution" && dataset.shape === "histogram" && dataset.unreadableCount > 0 && (
+            <p className="hint">
+              Left out: {dataset.unreadableCount} value{dataset.unreadableCount === 1 ? "" : "s"} in "{dataset.valueName}" couldn't be read as a number, so there was nothing to plot for {dataset.unreadableCount === 1 ? "it" : "them"}. Not the same as zero.
             </p>
           )}
           {dataset.unbucketableValues?.length > 0 && (
@@ -409,5 +438,5 @@ const CROSSTAB_LAYOUT_CHART_NAME = {
 function chartTypeName(type, layout) {
   if (type === "bar" && layout === "horizontal") return "horizontal bar chart";
   if (type === "bar" && CROSSTAB_LAYOUT_CHART_NAME[layout]) return CROSSTAB_LAYOUT_CHART_NAME[layout];
-  return { bar: "bar chart", line: "line chart", pie: "pie chart", scatter: "scatter plot" }[type] || type;
+  return { bar: "bar chart", line: "line chart", pie: "pie chart", scatter: "scatter plot", histogram: "histogram", boxdot: "box and dot plot" }[type] || type;
 }
