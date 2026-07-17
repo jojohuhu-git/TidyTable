@@ -1,3 +1,7 @@
+> **SUPERSEDED** by
+> [handoff-2026-07-17-p4-1-p4-2-p4-6-done.md](handoff-2026-07-17-p4-1-p4-2-p4-6-done.md)
+> — P4-1, P4-2, and P4-6 (the items it left as "next") are now done.
+
 # TidyTable — Handoff after P3-3 (request-aware chart emphasis) done (2026-07-17)
 
 Branch: `main`, off `main`. **NOT pushed** — TidyTable rule: never push to
