@@ -3,6 +3,7 @@ import ApiKeyPanel from "./components/ApiKeyPanel.jsx";
 import UploadPanel from "./components/UploadPanel.jsx";
 import CheckupPanel from "./components/CheckupPanel.jsx";
 import PromptPanel from "./components/PromptPanel.jsx";
+import PooledRankPicker from "./components/PooledRankPicker.jsx";
 import ResultsListPanel from "./components/ResultsListPanel.jsx";
 import RecipePanel from "./components/RecipePanel.jsx";
 import ReplayPanel from "./components/ReplayPanel.jsx";
@@ -717,7 +718,12 @@ export default function App() {
     runViaClaude(request, hint, { failedCode, error });
   }
 
-  async function handleRun() {
+  async function handleRun(promptOverride) {
+    // P1-4b: the checkbox picker builds request text and runs it immediately —
+    // it can't go through the `prompt` state var (setPrompt+handleRun in the
+    // same tick would run against last render's stale closure), so it passes
+    // the text straight in instead.
+    const raw = promptOverride !== undefined ? promptOverride : prompt;
     setError("");
     setNotice("");
     setPendingGrain(null);
@@ -735,13 +741,23 @@ export default function App() {
     // cohort carries over. Deterministic; if no confident rewrite is possible
     // (no prior question, or the swap value can't be located), the user's raw
     // words run as-is and decline honestly.
-    const followed = applyFollowUp(prompt, lastQuestion);
-    const effective = followed ? followed.request : prompt;
+    const followed = applyFollowUp(raw, lastQuestion);
+    const effective = followed ? followed.request : raw;
     // Phase 7.4: try a compound "and" split first. If it fully answers, show one
     // combined card; otherwise fall through to a single run (nothing changed).
     const parts = splitCompound(effective);
     if (parts && runCompound(parts, effective)) return;
     await runOfflineFlow(effective, {});
+  }
+
+  // P1-4b: the no-typing pooled-rank picker hands over its chosen columns;
+  // build the same English sentence P1-4a's matcher already parses ("most
+  // common value across X and Y") so it rides the identical pipeline, and
+  // fill the textarea too so the user sees what was asked.
+  function runPooledColumns(columns) {
+    const text = `most common value across ${columns.join(" and ")}`;
+    setPrompt(text);
+    handleRun(text);
   }
 
   // The user answered the grain question: "combine" runs per-entity, "rows" keeps
@@ -1029,7 +1045,7 @@ export default function App() {
             <PromptPanel
               prompt={prompt}
               setPrompt={setPrompt}
-              onRun={handleRun}
+              onRun={() => handleRun()}
               busy={busy}
               status={status}
               canRun={Boolean(prompt.trim())}
@@ -1039,6 +1055,7 @@ export default function App() {
               privacyMode={privacyMode}
               workbook={workbook}
             />
+            <PooledRankPicker sheet={workbook.sheets[0]} busy={busy} onRun={runPooledColumns} />
             <DefinitionsPanel store={definitionsStore} onChange={setDefinitionsStore} />
             {pendingGrain && (
               <ClarifyBox
