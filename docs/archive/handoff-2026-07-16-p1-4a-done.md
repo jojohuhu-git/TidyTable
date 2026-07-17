@@ -1,3 +1,7 @@
+> **Superseded** — see [handoff-2026-07-16-p1-4b-done.md](handoff-2026-07-16-p1-4b-done.md).
+> R6 live-verify closed and P1-4b (the checkbox picker this file deferred) is
+> now done too.
+
 # TidyTable — Handoff after P1-4a (pooled multi-column ranking) done (2026-07-16)
 
 Branch: `main`, off `main`. **NOT pushed** — TidyTable rule: never push to
