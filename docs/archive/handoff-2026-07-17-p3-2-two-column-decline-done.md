@@ -1,3 +1,7 @@
+> **SUPERSEDED** by
+> [handoff-2026-07-17-p3-3-emphasis-done.md](handoff-2026-07-17-p3-3-emphasis-done.md)
+> — P3-3 (the item this handoff left open next) is now done.
+
 # TidyTable — Handoff after P3-2 (honest interim decline for two-column chart requests) done (2026-07-17)
 
 Branch: `main`, off `main`. **NOT pushed** — TidyTable rule: never push to
