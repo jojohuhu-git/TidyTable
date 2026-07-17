@@ -1,5 +1,10 @@
 # TidyTable — Handoff after P1-3 (plural folding) done, P1-4 (pooled ranking) started (2026-07-11)
 
+> **SUPERSEDED** — see
+> [handoff-2026-07-16-p1-4a-done.md](handoff-2026-07-16-p1-4a-done.md). P1-4a
+> (the typed pooled-ranking capability this file's engine plan describes) is
+> now done and live-verified. Resume from that file, not this one.
+
 Branch: `main`, off `main`. **Pushed 1 commit ahead of origin** (`3a2276f`,
 P1-3) — TidyTable rule: never push to `main` without the owner's explicit
 go-ahead (pushing publishes the live site at
