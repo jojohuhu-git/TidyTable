@@ -41,6 +41,7 @@ export default function ChartsPanel({ sheet, seed }) {
   const [tweakLog, setTweakLog] = useState([]); // applied tweaks, in words, for replay/recipe
   const [highlightLabel, setHighlightLabel] = useState(null); // P3-3: "highlight X" — one category named
   const [referenceLine, setReferenceLine] = useState(null); // P3-3: { value, label } — average/threshold dashed line
+  const [bucket, setBucket] = useState(null); // P4-2: "month" | "quarter" | null — trend-request grouping
   const svgRef = useRef(null);
 
   // Apply a resolved (or confirmed) plan to the pickers below, so the dropdowns
@@ -57,6 +58,7 @@ export default function ChartsPanel({ sheet, seed }) {
     setTweakLog([]);
     setHighlightLabel(null);
     setReferenceLine(null);
+    setBucket(plan.bucket || null);
   }
 
   // Phase 8.5: apply a plain-word tweak to the chart already on screen. Each
@@ -137,8 +139,8 @@ export default function ChartsPanel({ sheet, seed }) {
 
   const baseDataset = useMemo(() => {
     if (!labelCol) return null;
-    return buildDataset(sheet, labelCol, valueCol || null, { aggMode, filter });
-  }, [sheet, labelCol, valueCol, aggMode, filter]);
+    return buildDataset(sheet, labelCol, valueCol || null, { aggMode, filter, bucket });
+  }, [sheet, labelCol, valueCol, aggMode, filter, bucket]);
 
   const dataset = useMemo(() => {
     const grouped = baseDataset && groupOther ? groupSmallIntoOther(baseDataset) : baseDataset;
@@ -209,7 +211,7 @@ export default function ChartsPanel({ sheet, seed }) {
         <div className="stats-pickers">
           <label>
             Labels (what to compare)
-            <select value={labelCol} onChange={(e) => { setLabelCol(e.target.value); setChosen(null); setFilter(null); setChartRank(null); }}>
+            <select value={labelCol} onChange={(e) => { setLabelCol(e.target.value); setChosen(null); setFilter(null); setChartRank(null); setBucket(null); }}>
               <option value="">choose a column…</option>
               {columns.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
@@ -333,6 +335,11 @@ export default function ChartsPanel({ sheet, seed }) {
           {dataset.noDataGroups?.length > 0 && (
             <p className="hint">
               Not shown: {dataset.noDataGroups.join(", ")} — every value in {dataset.noDataGroups.length === 1 ? "that group" : "those groups"} was unreadable as a number, so there was nothing to average. Not the same as zero.
+            </p>
+          )}
+          {dataset.unbucketableValues?.length > 0 && (
+            <p className="hint">
+              Left out of the {dataset.bucket} grouping: {dataset.unbucketableValues.join(", ")} — {dataset.unbucketableValues.length === 1 ? "this value" : "these values"} in "{labelCol}" couldn't be read as a date.
             </p>
           )}
 

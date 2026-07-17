@@ -80,6 +80,47 @@ function bestColumnSpan(text, headerPool) {
   return best;
 }
 
+// P4-2: "trend"/"over time"/"by month"/"by quarter" wording asks for a
+// time-series chart, grouped by calendar period rather than one point per
+// exact date. Scoped to Step 9 only (not synonyms.js's GROUP_WORDS, which
+// Step 3's Q&A engine also reads — "over" already means a numeric threshold
+// there, e.g. "duration over 7", so mixing the two vocabularies would create
+// a real ambiguity outside this file). Each entry's regex is global so every
+// occurrence of its phrasing (e.g. both "trend" and "over time" in the same
+// request) gets stripped, not just the first.
+const TIME_TREND_PATTERNS = [
+  { re: /\b(by\s+quarter|quarterly|per\s+quarter|over\s+the\s+quarters?)\b/gi, bucket: "quarter" },
+  { re: /\b(by\s+month|monthly|per\s+month)\b/gi, bucket: "month" },
+  { re: /\b(trend(?:s|ing)?|over\s+time|over\s+the\s+months?)\b/gi, bucket: "month" },
+];
+
+// Finds a time-trend phrase and resolves it to the sheet's one date-typed
+// column. Declines honestly (never guesses) when there is no date column, or
+// more than one and the request doesn't say which. Returns null when no
+// trend phrasing is present at all, so the caller falls through to the
+// ordinary "by X" grouping path.
+function resolveTimeTrend(text, headers) {
+  let matched = null;
+  for (const p of TIME_TREND_PATTERNS) {
+    p.re.lastIndex = 0;
+    if (p.re.test(text)) { matched = p; break; }
+  }
+  if (!matched) return null;
+  const dateCols = headers.filter((h) => h.type === "date");
+  if (dateCols.length !== 1) {
+    return {
+      status: "none",
+      reason: dateCols.length === 0 ? "no-date-column" : "ambiguous-date-column",
+      message: dateCols.length === 0
+        ? `This asks for a trend over time, but I couldn't find a column typed as a date yet. Fix the date column in Step 2 ("Dates in a mixed or text format") first, then try again.`
+        : `This asks for a trend over time, but there's more than one date column (${dateCols.map((h) => h.name).join(", ")}). Name the one you mean directly, or pick by hand below.`,
+    };
+  }
+  matched.re.lastIndex = 0;
+  const strippedText = text.replace(matched.re, " ").replace(/\s+/g, " ").trim();
+  return { dateCol: dateCols[0].name, bucket: matched.bucket, strippedText };
+}
+
 // A "by X" / "per X" / "grouped by X" marker whose phrase fuzzy-matches a
 // real header — the label/grouping column for the chart. Longest marker
 // first so "grouped by" wins over the bare "by" inside it.
@@ -251,23 +292,38 @@ function resolveChartLocally(raw, sheet) {
     }
   }
 
+  // P4-2: "trend"/"over time"/"by month"/"by quarter" resolves straight to
+  // the sheet's date-typed column, ahead of the ordinary "by X" marker —
+  // a trend request never also names its grouping column by name.
+  const trend = resolveTimeTrend(workingText, headers);
+  if (trend && trend.status === "none") return trend;
+  let bucket = null;
+  if (trend) {
+    workingText = trend.strippedText;
+    bucket = trend.bucket;
+  }
+
   const intent = detectIntent(workingText);
   let aggMode = "count";
   if (intent?.intent === "average") aggMode = "average";
   else if (intent?.intent === "sum") aggMode = "sum";
 
-  // 1) An explicit "by X"/"per X" grouping column, if the phrase after the
-  // marker actually names a real header.
-  const group = resolveGroupMarker(workingText, headers);
+  // 1) The trend-resolved date column, or an explicit "by X"/"per X" grouping
+  // column if the phrase after the marker actually names a real header.
   let labelCol = null;
   let labelStretched = false;
   let labelTies = [];
   let remainder = workingText;
-  if (group) {
-    labelCol = group.column;
-    labelStretched = group.stretched;
-    labelTies = group.ties;
-    remainder = (workingText.slice(0, group.start) + " " + workingText.slice(group.end)).trim();
+  if (trend) {
+    labelCol = trend.dateCol;
+  } else {
+    const group = resolveGroupMarker(workingText, headers);
+    if (group) {
+      labelCol = group.column;
+      labelStretched = group.stretched;
+      labelTies = group.ties;
+      remainder = (workingText.slice(0, group.start) + " " + workingText.slice(group.end)).trim();
+    }
   }
 
   // 2) A sum/average needs a numeric target column, searched near the intent
@@ -372,13 +428,14 @@ function resolveChartLocally(raw, sheet) {
 
   const confidence = labelStretched || valueStretched || filter?.stretched ? "stretched" : "exact";
   const rank = topInfo ? { n: topInfo.n ?? null, direction: topInfo.direction } : null;
-  const lookedFor = describeLookedFor({ labelCol, valueCol, aggMode, filter, rank });
+  const lookedFor = describeLookedFor({ labelCol, valueCol, aggMode, filter, rank, bucket });
 
   return {
     status: "resolved",
     labelCol, valueCol, aggMode, filter, confidence, lookedFor, ignored,
     ties: labelTies,
     rank,
+    bucket,
   };
 }
 
@@ -396,9 +453,10 @@ function removeSpan(text, span) {
   return out;
 }
 
-function describeLookedFor({ labelCol, valueCol, aggMode, filter, rank }) {
+function describeLookedFor({ labelCol, valueCol, aggMode, filter, rank, bucket }) {
   const what = aggMode === "count" ? "a count of rows" : `the ${aggMode} of "${valueCol}"`;
   const where = filter ? ` where "${filter.column}" is "${filter.value}"` : "";
   const capped = rank?.n != null ? `, top ${rank.n}${rank.direction === "least" ? " least common" : ""}` : "";
-  return `Comparing ${what} across "${labelCol}"${where}${capped}.`;
+  const grouping = bucket ? `, grouped by ${bucket}` : "";
+  return `Comparing ${what} across "${labelCol}"${where}${capped}${grouping}.`;
 }

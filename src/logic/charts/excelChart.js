@@ -59,6 +59,23 @@ function emphasisStep(emphasis) {
   return { title: "Match the emphasis", instruction: parts.join(" ") };
 }
 
+// P4-2: the preview's points are already grouped by month/quarter — a formula
+// so building the same helper table by hand starts from the same raw dates,
+// not from numbers that already have the grouping baked in.
+function bucketStep(dataset) {
+  if (!dataset.bucket) return null;
+  const formula = dataset.bucket === "quarter"
+    ? `=TEXT(A2,"yyyy")&"-Q"&ROUNDUP(MONTH(A2)/3,0)`
+    : `=TEXT(A2,"yyyy-mm")`;
+  return {
+    title: `Group the dates by ${dataset.bucket}`,
+    instruction:
+      `Add a helper column next to "${dataset.labelName}" with the formula ${formula} (adjust the cell reference ` +
+      `to your first data row, then fill down). Use that helper column, not the raw dates, as the labels in the ` +
+      `steps below.`,
+  };
+}
+
 function colorNoteStep() {
   return {
     title: "Match the colors (optional)",
@@ -82,6 +99,9 @@ export function excelChartSteps(chartType, dataset, rec = {}, emphasis = {}) {
   const horizontal = chartType === "bar" && rec.layout === "horizontal";
   const label = CHART_LABEL[horizontal ? "bar-horizontal" : chartType] || "chart";
   const manyRows = dataset.kind !== "xy" && dataset.points.length > 12;
+
+  const bucketStepObj = bucketStep(dataset);
+  if (bucketStepObj) steps.push(bucketStepObj);
 
   if (dataset.kind === "xy") {
     steps.push({

@@ -41,16 +41,23 @@ function normalizeCell(v, coerceNumericText) {
   return v;
 }
 
+// P4-2: the same sentinel-blank tokens normalizers.js's sentinelBlanks()
+// recognizes ("N/A", "none", "-", "."). A date column where the Step 2 date
+// fix was applied but the "missing values" fix wasn't left may still have a
+// few of these as literal text (never silently rewritten, per parseDates'
+// own honesty rule) — that alone shouldn't stop the whole column from being
+// typed "date", the same way a stray "N/A" doesn't stop a numeric column
+// from being typed "number"/"mixed" rather than falling back to "text".
+const DATE_BLANK_SENTINELS = new Set(["", "n/a", "na", "none", "-", "."]);
+const isIsoDateString = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v);
+const isDateBlankLike = (v) => typeof v === "string" && DATE_BLANK_SENTINELS.has(v.trim().toLowerCase());
+
 function inferType(values) {
   const nonNull = values.filter((v) => v != null);
   if (nonNull.length === 0) return "empty";
   if (nonNull.every((v) => typeof v === "number")) return "number";
   if (nonNull.every((v) => typeof v === "boolean")) return "true/false";
-  if (
-    nonNull.every(
-      (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v),
-    )
-  )
+  if (nonNull.some(isIsoDateString) && nonNull.every((v) => isIsoDateString(v) || isDateBlankLike(v)))
     return "date";
   if (nonNull.some((v) => typeof v === "number")) return "mixed (text + numbers)";
   return "text";

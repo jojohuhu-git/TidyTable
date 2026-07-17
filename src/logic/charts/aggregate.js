@@ -75,6 +75,19 @@ function isNumericColumn(sheet, col) {
   return vals.length > 0 && vals.every((v) => typeof v === "number" || (String(v).trim() !== "" && !isNaN(Number(v))));
 }
 
+// P4-2: fold a raw date-like value down to its month ("2024-01") or quarter
+// ("2024-Q1") for a trend chart, so the request groups by calendar period
+// instead of drawing one point per exact date. Returns null for a value that
+// isn't shaped like a date — the caller skips it rather than guessing a
+// bucket for unreadable text (e.g. a date the Step 2 fix declined to rewrite).
+function bucketDateLabel(raw, granularity) {
+  const m = String(raw).trim().match(/^(\d{4})-(\d{2})/);
+  if (!m) return null;
+  const [, y, mo] = m;
+  if (granularity === "quarter") return `${y}-Q${Math.ceil(Number(mo) / 3)}`;
+  return `${y}-${mo}`;
+}
+
 function labelsLookLikeTime(sheet, col) {
   const h = sheet.headers.find((x) => x.name === col);
   if (h && h.type === "date") return true;
@@ -113,7 +126,7 @@ function applyFilter(rows, filter) {
 // the rows before grouping (W4), never silently: the resolved dataset's
 // `filter` field is always handed back so the UI/Excel steps can show it.
 export function buildDataset(sheet, labelCol, valueCol, options = {}) {
-  const { filter = null } = options;
+  const { filter = null, bucket = null } = options;
   const rows = applyFilter(sheet.rows, filter);
   const labelNum = isNumericColumn(sheet, labelCol);
   const valueNum = valueCol ? isNumericColumn(sheet, valueCol) : false;
@@ -137,9 +150,18 @@ export function buildDataset(sheet, labelCol, valueCol, options = {}) {
 
   // Otherwise group by the label column.
   const groups = new Map(); // foldKey -> { label, value, n }
+  const unbucketable = []; // P4-2: raw values a requested bucket couldn't parse as a date
   for (const r of rows) {
-    const raw = r[labelCol];
+    let raw = r[labelCol];
     if (raw == null || String(raw).trim() === "") continue;
+    if (bucket) {
+      const bucketed = bucketDateLabel(raw, bucket);
+      if (bucketed == null) {
+        if (!unbucketable.includes(String(raw))) unbucketable.push(String(raw));
+        continue;
+      }
+      raw = bucketed;
+    }
     const k = foldKey(raw);
     if (!groups.has(k)) groups.set(k, { label: String(raw), value: 0, n: 0 });
     const g = groups.get(k);
@@ -206,6 +228,8 @@ export function buildDataset(sheet, labelCol, valueCol, options = {}) {
     filter,
     ...(isCount ? { countTotal } : {}),
     ...(noDataGroups.length ? { noDataGroups } : {}),
+    ...(bucket ? { bucket } : {}),
+    ...(unbucketable.length ? { unbucketableValues: unbucketable } : {}),
   };
 }
 
