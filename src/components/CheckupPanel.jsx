@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { checkupSheet } from "../logic/checkup/scan.js";
+import { checkupWorkbook } from "../logic/checkup/scan.js";
 import { matchCleanRequest, cleanRequestMessage } from "../logic/checkup/cleanRequestMatcher.js";
 import ClarifyBox from "./ClarifyBox.jsx";
 import StepHelpPanel from "./StepHelpPanel.jsx";
@@ -12,8 +12,11 @@ const CENSORED_OPTIONS = [
 
 // Step 2 (build prompt §6): show what the scan found and let the user pick which
 // fixes to apply. Nothing is changed until "Apply selected fixes" is pressed.
-export default function CheckupPanel({ sheet, busy, onApply }) {
-  const findings = useMemo(() => checkupSheet(sheet), [sheet]);
+// P4-4: `sheets` is every sheet in the workbook — findings from all of them
+// are combined into one list, each labeled with the sheet it came from.
+export default function CheckupPanel({ sheets, busy, onApply }) {
+  const findings = useMemo(() => checkupWorkbook(sheets), [sheets]);
+  const multiSheet = sheets.length > 1;
   const [selected, setSelected] = useState(() => new Set());
   const [dismissed, setDismissed] = useState(() => new Set());
   const [policies, setPolicies] = useState({}); // findingId -> policy
@@ -125,7 +128,7 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
     const fixes = fixable
       .filter((f) => selected.has(f.id))
       .map((f) => {
-        const fix = { normalizer: f.fix.normalizer, column: f.column, params: fixParams(f) };
+        const fix = { normalizer: f.fix.normalizer, column: f.column, sheet: f.sheet, params: fixParams(f) };
         if (f.fix.needsPolicy) fix.params[f.fix.paramKey || "policy"] = policies[f.id];
         return fix;
       });
@@ -136,8 +139,8 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
   // but example chips for it are a separate follow-on, not yet built.
   const helpPanel = (
     <StepHelpPanel
-      whatItDoes="Automatically scans your first sheet for common problems — duplicates, missing values, numbers stored as text, mixed date formats, spelling variants, impossible values, limit results, and packed cells — so you can tick the ones you want fixed."
-      cantDoYet={["Only checks the first sheet.", "Nothing changes until you tick a fix and press Apply."]}
+      whatItDoes={`Automatically scans ${multiSheet ? "every sheet in your file" : "your sheet"} for common problems — duplicates, missing values, numbers stored as text, mixed date formats, spelling variants, impossible values, limit results, and packed cells — so you can tick the ones you want fixed.`}
+      cantDoYet={["Nothing changes until you tick a fix and press Apply."]}
     />
   );
 
@@ -146,8 +149,8 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
       <div>
         {helpPanel}
         <p className="empty-state">
-          No common data problems were found in this sheet. You can move on to describing what
-          you want. (This check looks for duplicates, missing values, numbers stored as text,
+          No common data problems were found in your {multiSheet ? "sheets" : "sheet"}. You can move on to
+          describing what you want. (This check looks for duplicates, missing values, numbers stored as text,
           mixed date formats, spelling variants, impossible values, limit results, and packed
           cells.)
         </p>
@@ -166,6 +169,7 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
               onChange={() => toggle(f)}
               disabled={busy}
             />
+            {multiSheet && <span className="finding-sheet">{f.sheet}</span>}
             <span className="finding-title">{f.title}</span>
           </label>
           <span className="finding-count">{f.count} affected</span>
@@ -257,7 +261,7 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
                   }}
                   disabled={busy}
                 >
-                  {f.title}
+                  {multiSheet ? `${f.sheet}: ${f.title}` : f.title}
                 </button>
               ))}
             </div>
@@ -295,6 +299,7 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
             {flags.map((f) => (
               <li key={f.id} className="finding finding-flag">
                 <div className="finding-line">
+                  {multiSheet && <span className="finding-sheet">{f.sheet}</span>}
                   <span className="finding-title">{f.title}</span>
                   <span className="finding-count">for your review</span>
                   <button type="button" className="finding-dismiss" onClick={() => dismiss(f)} disabled={busy}>

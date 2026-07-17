@@ -895,36 +895,49 @@ export default function App() {
     setCheckupVersion((v) => v + 1);
   }
 
-  // Apply the checkup fixes the user picked: build an offline plan, run it on the
-  // full data, show the result, replace the sheet with the cleaned rows (so later
-  // steps use them), and append to the cleaning log. Checkup runs on the first
-  // sheet for now.
+  // Apply the checkup fixes the user picked: build an offline plan per affected
+  // sheet, run it on the full data, show one result card per sheet, replace
+  // each sheet with its cleaned rows (so later steps use them), and append to
+  // the cleaning log. P4-4: fixes can now come from any sheet in the workbook
+  // (Step 2 scans all of them) — group by the sheet each fix names and apply
+  // each sheet's own fixes against that sheet only.
   async function handleApplyFixes(fixes) {
     if (!fixes.length) return;
-    const sheet = workbook.sheets[0];
     setError("");
     setBusy(true);
     setStatus("Applying your fixes on this computer…");
     setUndoSnapshot({ workbook, sessionLog, recipe });
     try {
-      const { plan: fixPlan, log } = buildFixPlan(sheet, fixes);
-      const rows = await runTransform(fixPlan.transform_code, { [sheet.name]: sheet.rows });
-      const cleaned = deriveSheet(sheet.name, rows);
-      const nextWorkbook = { ...workbook, sheets: workbook.sheets.map((s, i) => (i === 0 ? cleaned : s)) };
-      setWorkbook(nextWorkbook);
-      setSessionLog((l) => [...l, makeLogEvent({ fileName: workbook.fileName, sheet: sheet.name, entries: log })]);
-      // Record each applied fix into the monthly recipe so it can be replayed
-      // on next month's file (build prompt §7).
-      setRecipe((r) => fixes.reduce((acc, fix) => addStep(acc, checkupStep(fix)), r));
+      const bySheetName = new Map();
+      for (const fix of fixes) {
+        if (!bySheetName.has(fix.sheet)) bySheetName.set(fix.sheet, []);
+        bySheetName.get(fix.sheet).push(fix);
+      }
+      let nextSheets = workbook.sheets;
+      const newLogEvents = [];
+      let nextRecipe = recipe;
+      for (const [sheetName, sheetFixes] of bySheetName) {
+        const idx = nextSheets.findIndex((s) => s.name === sheetName);
+        const sheet = nextSheets[idx];
+        const { plan: fixPlan, log } = buildFixPlan(sheet, sheetFixes);
+        const rows = await runTransform(fixPlan.transform_code, { [sheet.name]: sheet.rows });
+        const cleaned = deriveSheet(sheet.name, rows);
+        nextSheets = nextSheets.map((s, i) => (i === idx ? cleaned : s));
+        newLogEvents.push(makeLogEvent({ fileName: workbook.fileName, sheet: sheet.name, entries: log }));
+        nextRecipe = sheetFixes.reduce((acc, fix) => addStep(acc, checkupStep(fix)), nextRecipe);
+        recordResult({
+          label: `Result of: ${sheetFixes.length} checkup fix${sheetFixes.length === 1 ? "" : "es"}${bySheetName.size > 1 ? ` — sheet "${sheet.name}"` : ""}`,
+          answer: `${rows.length} row${rows.length === 1 ? "" : "s"} cleaned`,
+          plan: fixPlan,
+          resultRows: rows,
+          kind: "checkup",
+          savedToRoutine: true,
+        });
+      }
+      setWorkbook({ ...workbook, sheets: nextSheets });
+      setSessionLog((l) => [...l, ...newLogEvents]);
+      setRecipe(nextRecipe);
       setCheckupVersion((v) => v + 1);
-      recordResult({
-        label: `Result of: ${fixes.length} checkup fix${fixes.length === 1 ? "" : "es"}`,
-        answer: `${rows.length} row${rows.length === 1 ? "" : "s"} cleaned`,
-        plan: fixPlan,
-        resultRows: rows,
-        kind: "checkup",
-        savedToRoutine: true,
-      });
       setStatus("");
     } catch (err) {
       setUndoSnapshot(null);
@@ -999,7 +1012,7 @@ export default function App() {
             </p>
             <CheckupPanel
               key={`checkup-${checkupVersion}`}
-              sheet={workbook.sheets[0]}
+              sheets={workbook.sheets}
               busy={busy}
               onApply={handleApplyFixes}
             />

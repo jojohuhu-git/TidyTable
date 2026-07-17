@@ -16,7 +16,7 @@ function messySheet() {
 describe("CheckupPanel", () => {
   it("lists findings and only applies ticked fixes", () => {
     const onApply = vi.fn();
-    render(<CheckupPanel sheet={messySheet()} busy={false} onApply={onApply} />);
+    render(<CheckupPanel sheets={[messySheet()]} busy={false} onApply={onApply} />);
 
     // The duplicate-row finding is present and applies when ticked.
     const dupCheckbox = screen.getByText("Duplicate rows").closest("label").querySelector("input");
@@ -25,12 +25,12 @@ describe("CheckupPanel", () => {
 
     expect(onApply).toHaveBeenCalledTimes(1);
     const fixes = onApply.mock.calls[0][0];
-    expect(fixes).toEqual([{ normalizer: "dedupeRows", column: null, params: {} }]);
+    expect(fixes).toEqual([{ normalizer: "dedupeRows", column: null, sheet: "Patients", params: {} }]);
   });
 
   it("asks a policy question before a censored fix can be selected", () => {
     const onApply = vi.fn();
-    render(<CheckupPanel sheet={messySheet()} busy={false} onApply={onApply} />);
+    render(<CheckupPanel sheets={[messySheet()]} busy={false} onApply={onApply} />);
 
     const censoredLabel = screen.getByText(/Below\/above-limit results/i).closest("label");
     fireEvent.click(censoredLabel.querySelector("input"));
@@ -47,7 +47,7 @@ describe("CheckupPanel", () => {
   });
 
   it("lets any finding be dismissed", () => {
-    render(<CheckupPanel sheet={messySheet()} busy={false} onApply={() => {}} />);
+    render(<CheckupPanel sheets={[messySheet()]} busy={false} onApply={() => {}} />);
     expect(screen.getByText("Duplicate rows")).toBeInTheDocument();
     const dismiss = screen.getByText("Duplicate rows").closest(".finding").querySelector(".finding-dismiss");
     fireEvent.click(dismiss);
@@ -55,7 +55,7 @@ describe("CheckupPanel", () => {
   });
 
   it("P2-1: keeps the detail text and sample chips collapsed behind a 'What's this?' expander", () => {
-    render(<CheckupPanel sheet={messySheet()} busy={false} onApply={() => {}} />);
+    render(<CheckupPanel sheets={[messySheet()]} busy={false} onApply={() => {}} />);
     const item = screen.getByText("Duplicate rows").closest(".finding");
 
     // Detail text and sample chips exist in the DOM (inside <details>) but are collapsed by default.
@@ -75,7 +75,7 @@ describe("CheckupPanel", () => {
 
   it("P2-2: splits fixable findings into 'Safe fixes' vs 'Needs your call', and 'Tick all safe fixes' selects only the safe ones", () => {
     const onApply = vi.fn();
-    render(<CheckupPanel sheet={messySheet()} busy={false} onApply={onApply} />);
+    render(<CheckupPanel sheets={[messySheet()]} busy={false} onApply={onApply} />);
 
     // Duplicate rows is a safe fix (no policy question); censored is "needs your call".
     expect(screen.getByText("Safe fixes — nothing is lost")).toBeInTheDocument();
@@ -97,16 +97,17 @@ describe("CheckupPanel", () => {
   });
 
   it("P2-4: shows the 'How to use this step' panel with no clickable examples (no text box to fill yet)", () => {
-    render(<CheckupPanel sheet={messySheet()} busy={false} onApply={() => {}} />);
+    render(<CheckupPanel sheets={[messySheet()]} busy={false} onApply={() => {}} />);
     expect(screen.getByText("How to use this step")).toBeInTheDocument();
-    expect(screen.getByText(/Automatically scans your first sheet/i)).toBeInTheDocument();
-    expect(screen.getByText(/Only checks the first sheet/i)).toBeInTheDocument();
+    // P4-4: a single-sheet workbook no longer says "first sheet" — every sheet
+    // present is checked, and this fixture only has one.
+    expect(screen.getByText(/Automatically scans your sheet/i)).toBeInTheDocument();
     expect(screen.queryByText("Try these:")).toBeNull();
   });
 
   it("P2-3: typing 'remove the duplicates' ticks the matching finding and confirms it", () => {
     const onApply = vi.fn();
-    render(<CheckupPanel sheet={messySheet()} busy={false} onApply={onApply} />);
+    render(<CheckupPanel sheets={[messySheet()]} busy={false} onApply={onApply} />);
 
     const input = screen.getByLabelText("Or tell me what to clean…");
     fireEvent.change(input, { target: { value: "remove the duplicates" } });
@@ -118,11 +119,11 @@ describe("CheckupPanel", () => {
     // The box clears once resolved, and Apply now runs the ticked fix.
     expect(input.value).toBe("");
     fireEvent.click(screen.getByRole("button", { name: /apply 1 selected fix/i }));
-    expect(onApply.mock.calls[0][0]).toEqual([{ normalizer: "dedupeRows", column: null, params: {} }]);
+    expect(onApply.mock.calls[0][0]).toEqual([{ normalizer: "dedupeRows", column: null, sheet: "Patients", params: {} }]);
   });
 
   it("P2-3: recognized but absent intent says so honestly instead of guessing", () => {
-    render(<CheckupPanel sheet={messySheet()} busy={false} onApply={() => {}} />);
+    render(<CheckupPanel sheets={[messySheet()]} busy={false} onApply={() => {}} />);
     const input = screen.getByLabelText("Or tell me what to clean…");
     fireEvent.change(input, { target: { value: "fix the dates" } }); // messySheet has no date column
     fireEvent.click(screen.getByRole("button", { name: "Check" }));
@@ -130,7 +131,7 @@ describe("CheckupPanel", () => {
   });
 
   it("P2-3: an unrecognized request shows the honest fallback and keeps the text so it can be edited", () => {
-    render(<CheckupPanel sheet={messySheet()} busy={false} onApply={() => {}} />);
+    render(<CheckupPanel sheets={[messySheet()]} busy={false} onApply={() => {}} />);
     const input = screen.getByLabelText("Or tell me what to clean…");
     fireEvent.change(input, { target: { value: "make it sparkle" } });
     fireEvent.click(screen.getByRole("button", { name: "Check" }));

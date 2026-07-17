@@ -327,6 +327,10 @@ body {
 .finding-head { display: flex; align-items: center; gap: 0.55rem; cursor: pointer; flex: none; }
 .finding-head input { flex: none; }
 .finding-title { font-weight: 600; }
+.finding-sheet {
+  color: var(--ink-soft); font-size: 0.78rem; font-weight: 500;
+  border: 1px solid var(--line); border-radius: 4px; padding: 0.05rem 0.35rem;
+}
 .finding-count { margin-left: auto; color: var(--ink-soft); font-size: 0.82rem; white-space: nowrap; }
 .finding-expander { margin-top: 0.35rem; }
 .finding-expander summary {

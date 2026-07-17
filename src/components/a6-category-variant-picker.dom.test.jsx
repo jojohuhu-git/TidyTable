@@ -16,7 +16,7 @@ function sheet() {
 describe("A6 — CheckupPanel lets the user pick the surviving spelling in a category merge", () => {
   it("defaults to the most common spelling, and applying uses it", () => {
     const onApply = vi.fn();
-    render(<CheckupPanel sheet={sheet()} busy={false} onApply={onApply} />);
+    render(<CheckupPanel sheets={[sheet()]} busy={false} onApply={onApply} />);
 
     // Default canonical ("Male") chip is shown active; select the finding and apply.
     const maleChip = screen.getByRole("button", { name: /^Male \(2\)$/ });
@@ -32,7 +32,7 @@ describe("A6 — CheckupPanel lets the user pick the surviving spelling in a cat
 
   it("picking a different spelling changes which one survives", () => {
     const onApply = vi.fn();
-    render(<CheckupPanel sheet={sheet()} busy={false} onApply={onApply} />);
+    render(<CheckupPanel sheets={[sheet()]} busy={false} onApply={onApply} />);
 
     // Override the canonical spelling to the all-caps variant.
     fireEvent.click(screen.getByRole("button", { name: /^MALE \(1\)$/ }));

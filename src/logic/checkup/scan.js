@@ -553,3 +553,12 @@ export function checkupSheet(sheet) {
     ...findMixedUnits(sheet),
   ];
 }
+
+// P4-4: scan every sheet in the workbook, not just the first, and return one
+// combined list. Each finding already carries `sheet: sheet.name` (set by the
+// individual detectors above); checkupSheet resets its own id counter on
+// every call, so ids alone would collide across sheets (both could produce
+// "f1") — prefix by sheet index to keep every id globally unique.
+export function checkupWorkbook(sheets) {
+  return sheets.flatMap((sheet, i) => checkupSheet(sheet).map((f) => ({ ...f, id: `s${i}-${f.id}` })));
+}
