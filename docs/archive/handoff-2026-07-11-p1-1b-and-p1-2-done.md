@@ -1,5 +1,10 @@
 # TidyTable — Handoff after P1-1b (blank filter) + P1-2 (cohort target) of the steps-2/3/9 queue (2026-07-11)
 
+> **SUPERSEDED** — see
+> [handoff-2026-07-11-p1-3-done-p1-4-started.md](handoff-2026-07-11-p1-3-done-p1-4-started.md).
+> P1-3 is now done too, and P1-4 is in progress (failing test written, engine
+> not yet implemented). Resume from that file, not this one.
+
 Branch: `main`, off `main`. **NOT pushed** — TidyTable rule: never push to
 `main` without the owner's explicit go-ahead (pushing publishes the live site at
 https://jojohuhu-git.github.io/TidyTable/). `main` is currently **ahead of
