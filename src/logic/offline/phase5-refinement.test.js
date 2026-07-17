@@ -225,6 +225,14 @@ describe("G — miss log: round count + privacy", () => {
     });
     expect(listMisses()[0].detail.rejectedColumns).toEqual(["A", "B"]);
   });
+
+  it("P4-6: stores the honest message text alongside the reason, for the 'couldn't answer' list", () => {
+    logRefinement({
+      request: "the amox one", phrase: "amox", rounds: 2, outcome: "refined-exhausted",
+      rejectedColumns: ["Drug"], message: "I showed you every guess I had for \"amox\" and none of them fit.",
+    });
+    expect(listMisses()[0].message).toBe("I showed you every guess I had for \"amox\" and none of them fit.");
+  });
 });
 
 describe("H — cleanCondition strips allCandidates so executed plans stay identical", () => {

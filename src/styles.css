@@ -406,6 +406,11 @@ body {
   padding: 0.9rem 1rem; margin: 0.4rem 0 0.7rem; max-height: 22rem; overflow: auto;
 }
 
+/* P4-6: "Questions I couldn't answer this session" */
+.miss-list { margin: 0.4rem 0 0.7rem; padding-left: 1.2rem; }
+.miss-list li { margin-bottom: 0.6rem; }
+.miss-list .miss-request { color: var(--ink); }
+
 /* Recipes (step 5) */
 .recipe-steps { margin: 0 0 1rem; padding-left: 1.2rem; }
 .recipe-step { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.3rem; }

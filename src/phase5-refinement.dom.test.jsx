@@ -100,8 +100,10 @@ describe("Phase 5 (DOM) — 'None of these' pages to a smarter next round", () =
     await waitFor(() => expect(screen.getByRole("button", { name: /Duration_days.*column/i })).toBeTruthy());
     fireEvent.click(noneBtn()); // reject round 2 → exhausted
 
-    // With no API key: the honest-stop notice appears, no answer card.
-    await waitFor(() => expect(screen.getByText(/every guess I had/i)).toBeTruthy());
+    // With no API key: the honest-stop notice appears, no answer card. (P4-6:
+    // the same message also appears in the "couldn't answer this session"
+    // list, so it's on the page twice.)
+    await waitFor(() => expect(screen.getAllByText(/every guess I had/i).length).toBeGreaterThan(0));
     expect(screen.queryByText(/Result of: your question/i)).toBeNull();
     expect(document.querySelector(".clarify-q")).toBeNull();
 

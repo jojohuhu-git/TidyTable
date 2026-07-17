@@ -26,10 +26,19 @@ function write(list) {
 
 // Record a request the engine could not answer. `reason` is one of the matcher's
 // statuses (e.g. "none", "needs_definitions"); `detail` is optional context.
-export function logMiss({ request, reason, detail }) {
+// `message` (P4-6): the SAME plain-English decline text the user was actually
+// shown, so a later "what couldn't I answer" list reads exactly like the
+// honest explanation already given, not a re-derived summary that could drift.
+export function logMiss({ request, reason, detail, message }) {
   if (!request || !String(request).trim()) return;
   const list = read();
-  list.push({ request: String(request).trim(), reason: reason || "none", detail: detail || null, at: new Date().toISOString() });
+  list.push({
+    request: String(request).trim(),
+    reason: reason || "none",
+    detail: detail || null,
+    message: message || null,
+    at: new Date().toISOString(),
+  });
   write(list);
 }
 
@@ -39,7 +48,7 @@ export function logMiss({ request, reason, detail }) {
 // these") or "refined-exhausted". PRIVACY: `rejectedColumns` are column NAMES
 // only — a rejected value candidate contributes its column name, never the cell
 // value — so nothing sensitive is ever written to storage.
-export function logRefinement({ request, phrase, rounds, outcome, rejectedColumns }) {
+export function logRefinement({ request, phrase, rounds, outcome, rejectedColumns, message }) {
   if (!request || !String(request).trim()) return;
   const cols = Array.isArray(rejectedColumns) ? [...new Set(rejectedColumns.filter(Boolean))] : [];
   const list = read();
@@ -47,6 +56,7 @@ export function logRefinement({ request, phrase, rounds, outcome, rejectedColumn
     request: String(request).trim(),
     reason: outcome || "refined",
     detail: { phrase: phrase || null, rounds: rounds || null, rejectedColumns: cols },
+    message: message || null,
     at: new Date().toISOString(),
   });
   write(list);

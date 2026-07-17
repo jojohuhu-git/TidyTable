@@ -51,7 +51,9 @@ describe("Bug 1 (DOM) — averaging a text column shows a plain refusal", () => 
   it('says "words, not numbers" instead of answering', async () => {
     await upload(clinicFile());
     ask("average diagnosis");
-    await waitFor(() => expect(screen.getByText(/words, not numbers/i)).toBeTruthy());
+    // P4-6: the same honest refusal now also appears in the "Questions I
+    // couldn't answer this session" list, so it's on the page twice.
+    await waitFor(() => expect(screen.getAllByText(/words, not numbers/i).length).toBeGreaterThan(0));
     expect(screen.queryByText(/Result of: your question/i)).toBeNull();
   });
 });

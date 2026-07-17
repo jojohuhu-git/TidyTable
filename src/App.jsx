@@ -22,7 +22,7 @@ import { newRecipe, addStep, checkupStep, questionStep, defaultRoutineName } fro
 import { loadKeyStore } from "./logic/recipes/keyStore.js";
 import { runOffline } from "./logic/offline/runOffline.js";
 import { startRefinement, rejectShown, pickGroup } from "./logic/offline/refine.js";
-import { logRefinement } from "./logic/offline/missLog.js";
+import { logRefinement, listMisses } from "./logic/offline/missLog.js";
 import { logHit } from "./logic/offline/hitStore.js";
 import { planShapeFromMatch, planShapeFromAiPlan } from "./logic/offline/planShape.js";
 import { detectIntent, detectTopN } from "./logic/offline/synonyms.js";
@@ -211,6 +211,18 @@ export default function App() {
   // hiccup isn't a dead end — set on the first failure, cleared on success,
   // a fresh request, or a second failure (only one retry, ever).
   const [retryInfo, setRetryInfo] = useState(null); // { request, hint, failedCode, error }
+  // P4-6: "Questions I couldn't answer this session" — missLog/hitStore already
+  // recorded every miss locally with no UI to see them. sessionStartAt scopes
+  // the list to requests logged AFTER this page load (the persistent store
+  // spans many sessions); missVersion is bumped anywhere a miss is logged so
+  // the memo below re-reads localStorage and the list updates on screen.
+  const [sessionStartAt] = useState(() => new Date().toISOString());
+  const [missVersion, setMissVersion] = useState(0);
+  const bumpMissVersion = () => setMissVersion((v) => v + 1);
+  const sessionMisses = useMemo(
+    () => listMisses().filter((m) => m.at >= sessionStartAt && m.reason !== "refined-success"),
+    [missVersion, sessionStartAt],
+  );
   const resultsRef = useRef(null);
 
   const dataContext = useMemo(() => {
@@ -414,6 +426,7 @@ export default function App() {
       return;
     }
     // res.kind === "decline"
+    bumpMissVersion();
     if (!apiKey) {
       setNotice(res.message);
       // P0-3: if this run is itself a post-teach re-run and it STILL declined,
@@ -441,7 +454,7 @@ export default function App() {
       const res = runOffline(p, workbook, {
         definitionsStore, aliasMap, columnAliases, graduationStore,
       });
-      if (res.kind !== "answer") return false; // not fully answerable → fall back
+      if (res.kind !== "answer") { bumpMissVersion(); return false; } // not fully answerable → fall back
       partResults.push({ request: p, res });
     }
     const combinedPlan = {
@@ -543,14 +556,16 @@ export default function App() {
   // Claude if a key exists), reusing the existing decline machinery.
   function finishRefinementExhausted(state) {
     setPendingConfirm(null);
-    logRefinement({
-      request: state.request, phrase: state.phrase, rounds: state.round,
-      outcome: "refined-exhausted", rejectedColumns: state.rejected.map((c) => c.column),
-    });
     const message =
       `I showed you every guess I had for "${state.phrase}" and none of them fit. ` +
       `This is where the offline engine honestly stops — understanding the sentence a ` +
       `different way needs the AI.`;
+    logRefinement({
+      request: state.request, phrase: state.phrase, rounds: state.round,
+      outcome: "refined-exhausted", rejectedColumns: state.rejected.map((c) => c.column),
+      message,
+    });
+    bumpMissVersion();
     if (apiKey) {
       setNotice("");
       runViaClaude(
@@ -1180,6 +1195,23 @@ export default function App() {
                 )}
               </div>
             )}
+          </section>
+        )}
+
+        {workbook && sessionMisses.length > 0 && (
+          <section className="card">
+            <h2>Questions I couldn't answer this session</h2>
+            <p className="section-intro">
+              Every request the offline engine couldn't confidently answer, in the order you asked —
+              a teaching queue: rephrase one of these, or ask for it as a feature next.
+            </p>
+            <ul className="miss-list">
+              {sessionMisses.map((m, i) => (
+                <li key={i}>
+                  <span className="miss-request">"{m.request}"</span> — {m.message || "couldn't be answered offline."}
+                </li>
+              ))}
+            </ul>
           </section>
         )}
 

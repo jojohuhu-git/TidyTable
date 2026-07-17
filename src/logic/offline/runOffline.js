@@ -105,12 +105,13 @@ export function runOffline(request, workbook, options = {}) {
   }
 
   // Not our kind of request. Log it for the growth loop and offer Claude.
-  logMiss({ request, reason: match.reason || "none" });
+  const declineMessage = buildDeclineMessage(match);
+  logMiss({ request, reason: match.reason || "none", message: declineMessage });
   return {
     kind: "decline",
     reason: match.reason || "none",
     claudeHint: buildClaudeHint(match),
-    message: buildDeclineMessage(match),
+    message: declineMessage,
   };
 }
 
