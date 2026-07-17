@@ -147,15 +147,40 @@ describe("Learned-alias store — persistence + privacy boundary", () => {
     const sig = fileSignature(headers);
     let store = emptyAliasStore();
     store = rememberColumnAlias(store, sig, "treatment length", "Duration_days");
-    expect(columnAliasesFor(store, sig)[aliasKey("treatment length")]).toBe("Duration_days");
+    expect(columnAliasesFor(store, headers)[aliasKey("treatment length")]).toBe("Duration_days");
   });
 
-  it("a different file shape does not see another file's aliases", () => {
+  it("a genuinely different file shape does not see another file's aliases (P4-1: near-match only)", () => {
     const sigA = fileSignature(wb().sheets[0].headers);
-    const sigB = fileSignature(deriveSheet("Other", [{ Foo: 1, Bar: 2 }]).headers);
+    const headersB = deriveSheet("Other", [{ Foo: 1, Bar: 2 }]).headers;
     let store = emptyAliasStore();
     store = rememberColumnAlias(store, sigA, "treatment length", "Duration_days");
-    expect(columnAliasesFor(store, sigB)).toEqual({});
+    // headersB shares no columns with wb()'s shape (signature distance far above
+    // the near-match threshold), so it must not inherit wb()'s learned alias —
+    // even though "Duration_days" isn't a column of headersB either.
+    expect(columnAliasesFor(store, headersB)).toEqual({});
+  });
+
+  it("a near-match file shape (one column renamed) still sees the learned alias (P4-1)", () => {
+    const headersA = wb().sheets[0].headers;
+    const sigA = fileSignature(headersA);
+    let store = emptyAliasStore();
+    store = rememberColumnAlias(store, sigA, "treatment length", "Duration_days");
+    // Next month's export renames one unrelated column (Lab_value -> Lab_result);
+    // Duration_days is untouched, so the learned word should still apply.
+    const headersNextMonth = headersA.map((h) => (h.name === "Lab_value" ? { ...h, name: "Lab_result" } : h));
+    expect(columnAliasesFor(store, headersNextMonth)[aliasKey("treatment length")]).toBe("Duration_days");
+  });
+
+  it("does not guess when a near-match shape's target column is gone too (P4-1)", () => {
+    const headersA = wb().sheets[0].headers;
+    const sigA = fileSignature(headersA);
+    let store = emptyAliasStore();
+    store = rememberColumnAlias(store, sigA, "treatment length", "Duration_days");
+    // Duration_days itself was renamed — the near-match shape no longer has that
+    // column, so the alias must not resolve to a column that isn't there.
+    const headersRenamedTarget = headersA.map((h) => (h.name === "Duration_days" ? { ...h, name: "Length_of_stay" } : h));
+    expect(columnAliasesFor(store, headersRenamedTarget)[aliasKey("treatment length")]).toBeUndefined();
   });
 
   it("stores ONLY column names — never a cell value (privacy boundary)", () => {
@@ -172,11 +197,12 @@ describe("Learned-alias store — persistence + privacy boundary", () => {
 
   it("forgetting an alias removes it without touching others", () => {
     const sig = "a|b";
+    const headers = [{ name: "A" }, { name: "B" }];
     let store = emptyAliasStore();
     store = rememberColumnAlias(store, sig, "one", "A");
     store = rememberColumnAlias(store, sig, "two", "B");
     store = forgetColumnAlias(store, sig, "one");
-    const aliases = columnAliasesFor(store, sig);
+    const aliases = columnAliasesFor(store, headers);
     expect(aliases[aliasKey("one")]).toBeUndefined();
     expect(aliases[aliasKey("two")]).toBe("B");
   });

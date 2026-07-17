@@ -14,7 +14,7 @@
 // actual filter values are always re-read from the live sheet when a shape is
 // reused, never restored from storage.
 
-import { fileSignature, aliasKey } from "./aliasStore.js";
+import { fileSignature, aliasKey, signatureDistance, NEAR_MATCH_MAX_DISTANCE } from "./aliasStore.js";
 import { describeLookedForAggregation, describeLookedForTopN } from "./matcher.js";
 import { stripValues } from "./planShape.js";
 
@@ -49,6 +49,34 @@ export function graduationFor(store, signature, request) {
   return entry || null;
 }
 
+// P4-1: same near-match search as columnAliasesFor (aliasStore.js) — a
+// graduated shape learned for one file shape should still apply after next
+// month's export adds or renames one column, but a shape learned on a
+// genuinely different file must not silently apply just because a phrase or
+// column name happens to coincide. Declines (returns null) if two shapes at
+// the same nearest distance disagree, rather than guessing which one is right.
+function nearestGraduationFor(store, headers, request) {
+  if (!store || !Array.isArray(headers) || !headers.length) return null;
+  const currentSignature = fileSignature(headers);
+  const key = aliasKey(request);
+  let best = null; // { shape, dist }
+  let ambiguous = false;
+  for (const [storedSignature, phraseMap] of Object.entries(store.files || {})) {
+    const dist = signatureDistance(storedSignature, currentSignature);
+    if (dist > NEAR_MATCH_MAX_DISTANCE) continue;
+    const shape = phraseMap && phraseMap[key];
+    if (!shape) continue;
+    if (!best || dist < best.dist) {
+      best = { shape, dist };
+      ambiguous = false;
+    } else if (dist === best.dist && JSON.stringify(shape) !== JSON.stringify(best.shape)) {
+      ambiguous = true;
+    }
+  }
+  if (!best || ambiguous) return null;
+  return best.shape;
+}
+
 // --- reconstruct an executable, confident match from a stored shape ----------
 //
 // Only shapes with NO filters are auto-answered: an aggregation/top-N/distinct
@@ -61,8 +89,7 @@ export function applyGraduation(store, request, workbook) {
   const sheet = workbook?.sheets?.[0];
   if (!sheet) return null;
   const headers = sheet.headers;
-  const signature = fileSignature(headers);
-  const shape = graduationFor(store, signature, request);
+  const shape = nearestGraduationFor(store, headers, request);
   if (!shape) return null;
   if (Array.isArray(shape.filters) && shape.filters.length) return null; // filtered → don't auto-answer
 

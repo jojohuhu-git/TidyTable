@@ -131,10 +131,44 @@ describe("applyGraduation — reconstruct an offline answer from a remembered sh
     expect(grad.topN.targetColumn).toBe("Diagnosis");
   });
 
-  it("keys per file signature — a shape from another file shape does not apply", () => {
+  it("a genuinely different file shape does not apply another file's graduation (P4-1: near-match only)", () => {
     const m = matchRequest("average duration_days", wb(), {}, {});
     const shape = planShapeFromMatch(m);
     const store = rememberGraduation(emptyGraduationStore(), "some|other|signature", "average treatment window", shape);
     expect(applyGraduation(store, "average treatment window", wb())).toBeNull();
+  });
+
+  it("P4-1: a near-match file shape (one unrelated column renamed) still auto-answers", () => {
+    const plan = { summary: "Average of Duration_days.", transform_code: "r['Duration_days']", excel_steps: [] };
+    const shape = planShapeFromAiPlan({ request: "average treatment window", plan, headers: wb().sheets[0].headers, ...shapeHelpers });
+    const store = rememberGraduation(emptyGraduationStore(), sig(), "average treatment window", shape);
+
+    // Next month's export renames an unrelated column; Duration_days is untouched.
+    const nextMonth = {
+      fileName: "x",
+      sheets: [deriveSheet("S", [
+        { PatientID: "P1", Diagnosis: "UTI", Drug: "cephalexin", Duration_days: 10, Visit_time: "2026-01-01", Lab_value: 5 },
+        { PatientID: "P2", Diagnosis: "pneumonia", Drug: "amoxicillin", Duration_days: 7, Visit_time: "2026-01-02", Lab_value: 6 },
+      ])], // Visit_date renamed to Visit_time — everything else the same shape
+    };
+    const grad = applyGraduation(store, "average treatment window", nextMonth);
+    expect(grad.status).toBe("confident");
+    expect(grad.aggregation.targetColumn).toBe("Duration_days");
+  });
+
+  it("P4-1: does not guess when the near-match shape's own target column is gone too", () => {
+    const plan = { summary: "Average of Duration_days.", transform_code: "r['Duration_days']", excel_steps: [] };
+    const shape = planShapeFromAiPlan({ request: "average treatment window", plan, headers: wb().sheets[0].headers, ...shapeHelpers });
+    const store = rememberGraduation(emptyGraduationStore(), sig(), "average treatment window", shape);
+
+    // Duration_days itself was renamed — the shape's target no longer exists.
+    const renamedTarget = {
+      fileName: "x",
+      sheets: [deriveSheet("S", [
+        { PatientID: "P1", Diagnosis: "UTI", Drug: "cephalexin", Length_of_stay: 10, Visit_date: "2026-01-01", Lab_value: 5 },
+        { PatientID: "P2", Diagnosis: "pneumonia", Drug: "amoxicillin", Length_of_stay: 7, Visit_date: "2026-01-02", Lab_value: 6 },
+      ])],
+    };
+    expect(applyGraduation(store, "average treatment window", renamedTarget)).toBeNull();
   });
 });

@@ -219,15 +219,16 @@ export default function App() {
   }, [workbook, excluded, privacyMode]);
 
   // Phase 3: the current file's shape (its folded column set) and the column
-  // aliases learned for that shape, so a previously-confirmed everyday word is
-  // an exact hit again this visit.
+  // aliases learned for that shape (and near-matching shapes, P4-1), so a
+  // previously-confirmed everyday word is an exact hit again this visit even
+  // after next month's export adds or renames one column.
   const signature = useMemo(
     () => (workbook ? fileSignature(workbook.sheets[0].headers) : ""),
     [workbook],
   );
   const columnAliases = useMemo(
-    () => columnAliasesFor(aliasStore, signature),
-    [aliasStore, signature],
+    () => columnAliasesFor(aliasStore, workbook ? workbook.sheets[0].headers : []),
+    [aliasStore, workbook],
   );
   // Phase 7.7: remembered grain choices for the current file shape.
   const grainChoices = useMemo(
@@ -503,7 +504,7 @@ export default function App() {
     if (candidate?.kind === "column" && candidate.column && signature) {
       const nextStore = rememberColumnAlias(aliasStore, signature, phrase, candidate.column);
       setAliasStore(persistAliasStore(nextStore));
-      columnAliasesOverride = columnAliasesFor(nextStore, signature);
+      columnAliasesOverride = columnAliasesFor(nextStore, workbook.sheets[0].headers);
     }
     runOfflineFlow(request, {}, null, next, columnAliasesOverride);
   }
@@ -600,7 +601,7 @@ export default function App() {
     if (signature) {
       const nextStore = rememberColumnAlias(aliasStore, signature, phrase, columnName);
       setAliasStore(persistAliasStore(nextStore));
-      columnAliasesOverride = columnAliasesFor(nextStore, signature);
+      columnAliasesOverride = columnAliasesFor(nextStore, workbook.sheets[0].headers);
     }
     // P0-4: confirm the save is real, then re-run flagged as a post-teach run
     // (P0-3) so a still-declining re-run explains itself instead of looping.

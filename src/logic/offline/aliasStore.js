@@ -33,18 +33,66 @@ export function fileSignature(headers) {
   return keys.join("|");
 }
 
+// P4-1: next month's export routinely adds or renames ONE column, which changes
+// the signature entirely even though every learned word still applies. Instead
+// of requiring an exact signature match, we accept a NEAR match — the number of
+// columns that differ between the remembered shape and the current one — and
+// let the caller check the target column still exists. A distance of 2 covers
+// "added one column" (diff 1) and "renamed one column" (diff 2: old key gone,
+// new key added). Anything further apart is treated as a genuinely different
+// file, so an unrelated sheet that happens to share one column name still does
+// not inherit another file's learned words.
+export const NEAR_MATCH_MAX_DISTANCE = 2;
+
+export function signatureDistance(sigA, sigB) {
+  const a = new Set(sigA ? String(sigA).split("|").filter(Boolean) : []);
+  const b = new Set(sigB ? String(sigB).split("|").filter(Boolean) : []);
+  let diff = 0;
+  for (const k of a) if (!b.has(k)) diff++;
+  for (const k of b) if (!a.has(k)) diff++;
+  return diff;
+}
+
 // The folded phrase the user typed, used as the alias key — matches the session
 // aliasMap's keying (foldKey) so the two layers agree.
 export function aliasKey(phrase) {
   return foldKey(phrase);
 }
 
-// The learned aliases for one file shape, as a plain { foldedPhrase: columnName }
-// object the matcher can look up directly.
-export function columnAliasesFor(store, signature) {
-  if (!store || !signature) return {};
-  const entry = store.files?.[signature];
-  return entry && typeof entry === "object" ? { ...entry } : {};
+// The learned aliases that apply to the CURRENT file, as a plain
+// { foldedPhrase: columnName } object the matcher can look up directly.
+// Looks across every remembered file shape (not just an exact signature
+// match) so adding or renaming one column doesn't silently forget every
+// learned word (P4-1) — but a shape too far from the current one (a
+// genuinely different file) is skipped entirely, and a phrase that would
+// resolve to two different, still-present columns from two near-matching
+// shapes is dropped rather than guessed.
+export function columnAliasesFor(store, headers) {
+  if (!store || !Array.isArray(headers) || !headers.length) return {};
+  const currentSignature = fileSignature(headers);
+  const hasCol = (name) => headers.some((h) => h.name === name);
+
+  const candidatesByPhrase = new Map();
+  for (const [storedSignature, phraseMap] of Object.entries(store.files || {})) {
+    const dist = signatureDistance(storedSignature, currentSignature);
+    if (dist > NEAR_MATCH_MAX_DISTANCE) continue;
+    if (!phraseMap || typeof phraseMap !== "object") continue;
+    for (const [phrase, column] of Object.entries(phraseMap)) {
+      if (!column || !hasCol(column)) continue;
+      const list = candidatesByPhrase.get(phrase) || [];
+      list.push({ column, dist });
+      candidatesByPhrase.set(phrase, list);
+    }
+  }
+
+  const result = {};
+  for (const [phrase, list] of candidatesByPhrase) {
+    const minDist = Math.min(...list.map((c) => c.dist));
+    const nearest = new Set(list.filter((c) => c.dist === minDist).map((c) => c.column));
+    if (nearest.size === 1) result[phrase] = [...nearest][0];
+    // else: still ambiguous even after nearest-signature tie-break — decline.
+  }
+  return result;
 }
 
 // Remember phrase -> column for a file shape, returning a NEW store (never
