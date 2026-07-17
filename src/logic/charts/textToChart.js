@@ -348,11 +348,25 @@ function resolveChartLocally(raw, sheet) {
       filter = { column: top.column, value: top.value };
       if (!top.exact) valueStretched = valueStretched || true; // a stretched filter still confirms before drawing
       if (candidates.some((c) => c.score === top.score && c !== top)) labelStretched = true;
-    } else if (leftover.length >= 2 || bestColumnSpan(remainder, headers.filter((h) => h.name !== labelCol && h.name !== valueCol))) {
-      // Bug 2 companion: a leftover word that names a COLUMN (not a cell
-      // value, e.g. "drug" in "drug by diagnosis") can't be charted as a
-      // filter — say so plainly instead of dropping it into a silent count.
-      ignored = phrase;
+    } else {
+      const secondCol = bestColumnSpan(remainder, headers.filter((h) => h.name !== labelCol && h.name !== valueCol));
+      if (secondCol) {
+        // P3-2 (R7, 2026-07-11): the leftover names a second REAL column, not
+        // just a stray word — e.g. "diagnoses" in "compare drug use between
+        // diagnoses". Until P6-1 ships real two-column (grouped/stacked)
+        // charts, drawing a one-column chart here and marking it "exact"
+        // would silently answer a different question than the one asked.
+        // Decline plainly instead, naming both columns.
+        return {
+          status: "none",
+          reason: "two-column",
+          message: `That compares two things at once (${labelCol} and ${secondCol.column}). I can chart one at a time for now; pick one, or use Step 7.`,
+        };
+      } else if (leftover.length >= 2) {
+        // Bug 2 companion: leftover text that isn't a real column and isn't a
+        // value — say so plainly instead of dropping it into a silent count.
+        ignored = phrase;
+      }
     }
   }
 

@@ -42,11 +42,9 @@ describe("Bug 2 — chart free text never silently drops a numeric column word",
     expect(res.valueCol).toBeNull();
   });
 
-  it('a leftover word naming a TEXT column ("drug by diagnosis") is said, not dropped', () => {
+  it('a leftover word naming a TEXT column ("drug by diagnosis") declines as a two-column request (superseded by P3-2, 2026-07-17: this used to silently chart Diagnosis alone and report "drug" as ignored — now it declines up front, see fix-2026-07-11-p3-2-two-column-decline.test.js)', () => {
     const res = resolveChartRequest("drug by diagnosis", sheet());
-    expect(res.status).toBe("resolved");
-    expect(res.aggMode).toBe("count");
-    // The unplaceable column word is reported so the user sees it was left out.
-    expect(res.ignored).toBe("drug");
+    expect(res.status).toBe("none");
+    expect(res.reason).toBe("two-column");
   });
 });

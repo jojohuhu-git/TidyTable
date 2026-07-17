@@ -37,7 +37,11 @@ describe("Phase 4 — resolveChartRequest picks up the ranking family", () => {
   });
 
   it("a request with no ranking wording carries no rank field", () => {
-    const res = resolveChartRequest("drugs by diagnosis", sheet());
+    // "diagnosis" alone, not "drugs by diagnosis" — the latter names two real
+    // columns and now declines under P3-2 (see
+    // fix-2026-07-11-p3-2-two-column-decline.test.js), which isn't what this
+    // test is checking.
+    const res = resolveChartRequest("diagnosis", sheet());
     expect(res.status).toBe("resolved");
     expect(res.rank).toBeNull();
   });
