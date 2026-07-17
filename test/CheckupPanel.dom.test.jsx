@@ -53,4 +53,23 @@ describe("CheckupPanel", () => {
     fireEvent.click(dismiss);
     expect(screen.queryByText("Duplicate rows")).toBeNull();
   });
+
+  it("P2-1: keeps the detail text and sample chips collapsed behind a 'What's this?' expander", () => {
+    render(<CheckupPanel sheet={messySheet()} busy={false} onApply={() => {}} />);
+    const item = screen.getByText("Duplicate rows").closest(".finding");
+
+    // Detail text and sample chips exist in the DOM (inside <details>) but are collapsed by default.
+    const expander = item.querySelector(".finding-expander");
+    expect(expander).not.toBeNull();
+    expect(expander.hasAttribute("open")).toBe(false);
+    expect(item.querySelector(".finding-detail")).not.toBeNull();
+
+    // The one-line row keeps checkbox + title + count + Skip, without needing the expander open.
+    expect(item.querySelector(".finding-line .finding-title")).not.toBeNull();
+    expect(item.querySelector(".finding-line .finding-count")).not.toBeNull();
+    expect(item.querySelector(".finding-line .finding-dismiss")).not.toBeNull();
+
+    fireEvent.click(item.querySelector(".finding-expander summary"));
+    expect(expander.hasAttribute("open")).toBe(true);
+  });
 });

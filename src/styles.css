@@ -293,10 +293,18 @@ body {
   padding: 0.8rem 1rem; margin-bottom: 0.7rem; position: relative;
 }
 .finding-flag { background: var(--bg); }
-.finding-head { display: flex; align-items: center; gap: 0.55rem; cursor: pointer; }
+.finding-line { display: flex; align-items: center; gap: 0.55rem; }
+.finding-head { display: flex; align-items: center; gap: 0.55rem; cursor: pointer; flex: none; }
 .finding-head input { flex: none; }
 .finding-title { font-weight: 600; }
 .finding-count { margin-left: auto; color: var(--ink-soft); font-size: 0.82rem; white-space: nowrap; }
+.finding-expander { margin-top: 0.35rem; }
+.finding-expander summary {
+  cursor: pointer; color: var(--accent); font-weight: 600; font-size: 0.82rem; list-style: none;
+}
+.finding-expander summary::-webkit-details-marker { display: none; }
+.finding-expander summary::before { content: "▸ "; font-size: 0.75em; }
+.finding-expander[open] summary::before { content: "▾ "; }
 .finding-detail { margin: 0.4rem 0 0.5rem; color: var(--ink-soft); font-size: 0.92rem; }
 .finding-samples { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.3rem; }
 .sample-chip {
@@ -305,7 +313,7 @@ body {
 }
 .finding-dismiss {
   border: none; background: none; font: inherit; font-size: 0.82rem;
-  color: var(--ink-soft); cursor: pointer; padding: 0.2rem 0; text-decoration: underline;
+  color: var(--ink-soft); cursor: pointer; padding: 0.2rem 0; text-decoration: underline; white-space: nowrap;
 }
 .finding-dismiss:hover { color: var(--ink); }
 
