@@ -1186,6 +1186,16 @@ export function matchRequest(request, workbook, defs, options = {}) {
   // not compose with a "per X" breakdown or nested "of those" levels (out of
   // scope for this phase), so it resolves against the raw request directly.
   const topN = detectTopN(request);
+  // P1-4a: "combine X and Y and rank the types" / "rank everything in X and Y
+  // together" names no "most common"/"top N" phrase, just a bare "rank" verb
+  // — only meaningful here alongside a pooled-columns cue, so it never widens
+  // plain single-column detection (matchTopN still requires the real phrases).
+  const bareRank = !topN && /\brank(ing|ed)?\b/i.test(request);
+  const pooledTopInfo = topN && topN.family === "frequency" ? topN : bareRank ? { family: "frequency", direction: "most", n: null } : null;
+  if (pooledTopInfo) {
+    const pooledColumns = detectPooledColumns(request, headers, { aliasMap, index });
+    if (pooledColumns) return matchPooledRank(request, pooledTopInfo, pooledColumns, sheet, headers, index, defs, aliasMap, options);
+  }
   if (topN) return matchTopN(request, topN, sheet, headers, index, defs, aliasMap);
 
   const intent = detectIntent(request);
@@ -1501,6 +1511,142 @@ function matchTopN(request, topInfo, sheet, headers, index, defs, aliasMap) {
   };
 }
 
+// P1-4a (2026-07-16): cue words that ask 2+ named columns to be POOLED into one
+// tally, rather than each ranked separately — "most common values across
+// Primary Dx and Secondary Dx", "combine Primary and Secondary and rank the
+// types", "rank everything in X and Y together". Deliberately narrow (a
+// specific word, not a bare "and") so an ordinary two-column mention never
+// misfires into pooling.
+const POOLED_CUES = ["across", "combine", "combined with", "pooled", "pool", "together"];
+
+// Pull 2+ column names out of the pooled-cue segment of the request, reusing
+// the same fragment-split + resolve machinery table1Columns uses for its
+// column list (comma / "and" / "&" separated, EXACT/contained header or a
+// non-stretched concept hit only — a stretch here would need its own confirm
+// chip, out of scope for this phase). Returns the resolved columns in order,
+// deduped, or null if fewer than 2 resolved.
+function detectPooledColumns(request, headers, opts) {
+  const t = ` ${String(request || "").toLowerCase()} `;
+  let cueIdx = -1;
+  let cueLen = 0;
+  for (const cue of POOLED_CUES) {
+    const re = new RegExp(`\\b${cue.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+    const m = re.exec(t);
+    if (m && (cueIdx === -1 || m.index < cueIdx)) { cueIdx = m.index; cueLen = m[0].length; }
+  }
+  if (cueIdx === -1) return null;
+  let seg = t.slice(cueIdx + cueLen);
+  // "and rank the types together" / "and rank them" trails the column list —
+  // cut it off so it never gets read as a third fragment.
+  seg = seg.replace(/\band rank\b.*$/i, "").replace(/\btogether\b/gi, "");
+  const frags = seg.split(/,|\band\b|&/i).map((s) => s.trim()).filter(Boolean);
+  const columns = [];
+  for (const f of frags) {
+    const phrase = termWords(f).join(" ");
+    if (!phrase) continue;
+    let col = fuzzyColumn(phrase, headers) || fuzzyColumn(termWords(f).map(singularize).join(" "), headers);
+    if (!col) {
+      const ref = resolveColumnRef(phrase, headers, opts);
+      if (ref && !ref.stretched) col = ref.column;
+    }
+    if (col && !columns.includes(col)) columns.push(col);
+  }
+  return columns.length >= 2 ? columns : null;
+}
+
+// The same ID-like fallback heuristic detectGrain uses (scan.js's
+// findDuplicateIds trick): a column that names the entity directly (patient,
+// MRN, id), or failing that, any column that's almost-all-unique but still has
+// at least one repeat. Needed for the "patient" counting policy's entityColumn.
+function findPooledEntityColumn(sheet, headers) {
+  let col = headers.find((h) => {
+    const k = columnKey(h.name);
+    return k.includes("patient") || k.includes("mrn") || k === "id" || k.endsWith("id");
+  });
+  if (!col) {
+    for (const h of headers) {
+      const vals = sheet.rows.map((r) => r[h.name]).filter((v) => v != null && String(v).trim() !== "");
+      if (vals.length < 4) continue;
+      const distinctCount = new Set(vals.map(foldKey)).size;
+      if (distinctCount / vals.length < 0.9) continue;
+      if (distinctCount === vals.length) continue;
+      col = h;
+      break;
+    }
+  }
+  return col ? col.name : null;
+}
+
+// P1-4a: resolve a pooled multi-column ranking request. Mirrors matchTopN's
+// shape (same cohort-stage machinery, same confirm/needs_definitions/partial
+// gates) but ranks the POOLED columns via rankFrequencyPooled instead of a
+// single column via rankFrequency. Only the "frequency" family applies — a
+// magnitude pool ("longest across X and Y") isn't a coherent question, so
+// matchRequest never calls this unless topInfo.family === "frequency".
+//
+// Counting policy (Decision D, owner-approved 2026-07-11) is asked once per
+// file + column-pair and remembered (pooledPolicyStore.js, mirrors
+// grainStore.js) — never silently defaulted, so `options.pooledPolicy` must
+// be set (fresh answer) or `options.pooledPolicyChoices[poolKey]` must have a
+// remembered one before this can return "confident"; otherwise it returns
+// "needs_pooled_policy" with a suggested default for the UI to pre-select.
+function matchPooledRank(request, topInfo, columns, sheet, headers, index, defs, aliasMap, options) {
+  const cohort = extractCohort(request);
+  const rawStages = [];
+  if (cohort) rawStages.push({ text: cohort.termText, role: "cohort" });
+  const stages = rawStages
+    .flatMap((s) => resolveConditions(s.text, sheet, headers, index, defs, aliasMap).map((condition) => ({ ...s, condition })))
+    .filter((s) => s.condition);
+
+  const partial = stages.find((s) => s.condition.kind === "partial");
+  if (partial) {
+    return {
+      status: "partial",
+      understood: partial.condition.matched,
+      unmatchedText: partial.condition.unmatchedText,
+      clause: partial.condition.term,
+      request,
+    };
+  }
+  const missing = stages.filter((s) => s.condition.kind === "missing").map((s) => s.condition);
+  if (missing.length) {
+    return { status: "needs_definitions", missingTerms: missing, definitionsPresent: Boolean(defs?.present), request };
+  }
+  const confirm = buildConfirmation(stages, request);
+  if (confirm) return confirm;
+
+  const poolKey = columns.slice().sort().join("|");
+  const remembered = options.pooledPolicyChoices && options.pooledPolicyChoices[poolKey];
+  const policy = options.pooledPolicy || (remembered && remembered.policy) || null;
+  if (!policy) {
+    // Decision D's suggested default: patient-grain if this file's grain
+    // memory already says per-patient, otherwise occurrence. A suggestion,
+    // never applied silently — the caller still confirms it once.
+    const grainEntity = findPooledEntityColumn(sheet, headers);
+    const suggestedPolicy = grainEntity && options.grainChoices && options.grainChoices[grainEntity] === "group-then-test"
+      ? "patient" : "occurrence";
+    return { status: "needs_pooled_policy", columns, poolKey, suggestedPolicy, entityColumn: grainEntity, request };
+  }
+  const entityColumn = policy === "patient" ? ((remembered && remembered.entityColumn) || findPooledEntityColumn(sheet, headers)) : null;
+  if (policy === "patient" && !entityColumn) {
+    return { status: "none", reason: "no-entity-column-for-patient-policy", columns, request };
+  }
+
+  const n = topInfo.n != null ? topInfo.n : DEFAULT_TOPN.frequency;
+  const cleanedStages = cleanStages(stages);
+  const pooled = { columns, policy, n, direction: topInfo.direction, entityColumn };
+  return {
+    status: "confident",
+    intent: "pooledRank",
+    pooled,
+    pooledPolicyFromMemory: Boolean(remembered && !options.pooledPolicy),
+    stages: cleanedStages,
+    grainMode: "row",
+    lookedFor: describeLookedForPooled(pooled, cleanedStages),
+    sheetName: sheet.name,
+  };
+}
+
 export function conditionPhrase(c) {
   if (c.kind === "threshold") {
     // Phase 7.3: state the unit conversion in the trust line, so "more than a
@@ -1559,4 +1705,17 @@ export function describeLookedForTopN(topN, stages) {
   }
   const verb = topN.direction === "least" ? "least common" : "most common";
   return `Ranking "${topN.targetColumn}" by how ${verb} each value is${cap}${where}.`;
+}
+
+// P1-4a: the trust panel line for a pooled multi-column ranking request.
+export function describeLookedForPooled(pooled, stages) {
+  const parts = stages.map((s) => conditionPhrase(s.condition));
+  const where = parts.length ? ` where ${parts.join(", then ")}` : "";
+  const cap = pooled.n === Infinity ? "" : ` (top ${pooled.n})`;
+  const verb = pooled.direction === "least" ? "least common" : "most common";
+  const cols = pooled.columns.map((c) => `"${c}"`).join(" + ");
+  const policyNote = pooled.policy === "row" ? ", once per row"
+    : pooled.policy === "patient" ? `, once per patient ("${pooled.entityColumn}")`
+    : ", counting every occurrence";
+  return `Pooling ${cols} and ranking by how ${verb} each value is${cap}${policyNote}${where}.`;
 }

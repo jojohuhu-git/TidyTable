@@ -33,6 +33,9 @@ export function runOffline(request, workbook, options = {}) {
       grainFromMemory: match.grainFromMemory || false,
       grainEntity: match.grainEntity || null,
       grainMode: match.grainMode || "row",
+      // P1-4a: let the UI note when a remembered pooled-ranking policy was applied.
+      pooledPolicyFromMemory: match.pooledPolicyFromMemory || false,
+      pooled: match.pooled || null,
     };
   }
 
@@ -55,6 +58,19 @@ export function runOffline(request, workbook, options = {}) {
 
   if (match.status === "grain") {
     return { kind: "clarify-grain", grain: match.grain, request };
+  }
+
+  // P1-4a: pooled-ranking counting policy (Decision D) — ask once per file +
+  // column-pair, same never-guess pattern as the grain question above.
+  if (match.status === "needs_pooled_policy") {
+    return {
+      kind: "clarify-pooled-policy",
+      columns: match.columns,
+      poolKey: match.poolKey,
+      suggestedPolicy: match.suggestedPolicy,
+      entityColumn: match.entityColumn,
+      request,
+    };
   }
 
   // W2d: the app had to stretch (an abbreviation, a partial/prefix value

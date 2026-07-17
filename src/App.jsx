@@ -52,6 +52,9 @@ import { splitCompound } from "./logic/offline/compound.js";
 import {
   loadGrainStore, persistGrainStore, rememberGrainChoice, forgetGrainChoice, grainChoicesFor,
 } from "./logic/offline/grainStore.js";
+import {
+  loadPooledPolicyStore, persistPooledPolicyStore, rememberPooledPolicy, forgetPooledPolicy, pooledPolicyChoicesFor,
+} from "./logic/offline/pooledPolicyStore.js";
 
 // W3: how many result cards "Your results so far" keeps per session, oldest
 // dropped first — the same bounded-history spirit the old run-history chips
@@ -158,6 +161,11 @@ export default function App() {
   // A small "counting per patient — change" note shown after an answer that used
   // a remembered grain choice. { entityColumn, mode, request }.
   const [grainNote, setGrainNote] = useState(null);
+  // P1-4a: same never-ask-twice pattern as grain, for pooled-ranking's
+  // counting policy (Decision D — occurrence / row / patient).
+  const [pooledPolicyStore, setPooledPolicyStore] = useState(() => loadPooledPolicyStore());
+  const [pendingPooledPolicy, setPendingPooledPolicy] = useState(null); // { columns, poolKey, suggestedPolicy, entityColumn, request }
+  const [pooledPolicyNote, setPooledPolicyNote] = useState(null); // { columns, poolKey, policy, entityColumn, request }
   // Phase 7.9: when the engine declines and there's no API key, offer a small
   // "teach it" form so a novice can define a word and re-run — no key, no Excel
   // round-trip. { request }.
@@ -224,6 +232,11 @@ export default function App() {
   const grainChoices = useMemo(
     () => grainChoicesFor(grainStore, signature),
     [grainStore, signature],
+  );
+  // P1-4a: remembered pooled-ranking counting-policy choices for this file shape.
+  const pooledPolicyChoices = useMemo(
+    () => pooledPolicyChoicesFor(pooledPolicyStore, signature),
+    [pooledPolicyStore, signature],
   );
 
   // B5/W3: persist the log/recipe/results trail (small JSON — results are
@@ -322,6 +335,8 @@ export default function App() {
       // An explicit override (from "change") wins over current state, which may
       // not have re-rendered yet after forgetting a choice.
       grainChoices: options.grainChoices || grainChoices,
+      // P1-4a: remembered pooled-ranking counting-policy choices for this file.
+      pooledPolicyChoices: options.pooledPolicyChoices || pooledPolicyChoices,
     });
     if (res.kind === "answer") {
       // Phase 6 in-app growth: a confident offline answer is a success worth
@@ -356,6 +371,11 @@ export default function App() {
       setGrainNote(res.grainFromMemory && res.grainEntity
         ? { entityColumn: res.grainEntity, mode: res.grainMode, request }
         : null);
+      // P1-4a: same "as you chose earlier — change" note, for a pooled-ranking
+      // answer that applied a remembered counting policy.
+      setPooledPolicyNote(res.pooledPolicyFromMemory && res.pooled
+        ? { columns: res.pooled.columns, policy: res.pooled.policy, entityColumn: res.pooled.entityColumn, request }
+        : null);
       return;
     }
     if (res.kind === "block") {
@@ -368,6 +388,13 @@ export default function App() {
     }
     if (res.kind === "clarify-grain") {
       setPendingGrain({ grain: res.grain, request });
+      return;
+    }
+    if (res.kind === "clarify-pooled-policy") {
+      setPendingPooledPolicy({
+        columns: res.columns, poolKey: res.poolKey, suggestedPolicy: res.suggestedPolicy,
+        entityColumn: res.entityColumn, request,
+      });
       return;
     }
     if (res.kind === "confirm-value") {
@@ -694,11 +721,13 @@ export default function App() {
     setError("");
     setNotice("");
     setPendingGrain(null);
+    setPendingPooledPolicy(null);
     setPendingDefinitions(null);
     setPendingConfirm(null);
     setCompanionOffer(null);
     setRetryInfo(null);
     setGrainNote(null);
+    setPooledPolicyNote(null);
     setPendingTeach(null);
     setLearnedNote(""); // P0-4: a fresh ask starts without a stale "Learned:" line
     // Phase 7.1: a short follow-up ("of those, …" / "what about X?") is rewritten
@@ -747,6 +776,35 @@ export default function App() {
     runOfflineFlow(note.request, { grainChoices: choices });
   }
 
+  // P1-4a: the user answered the pooled-ranking counting-policy question —
+  // remember it per file shape + column pair (Decision D), then re-run.
+  function answerPooledPolicy(policy) {
+    const pending = pendingPooledPolicy;
+    setPendingPooledPolicy(null);
+    if (!pending?.request) return;
+    const entityColumn = policy === "patient" ? pending.entityColumn : null;
+    if (signature && pending.columns?.length) {
+      const next = rememberPooledPolicy(pooledPolicyStore, signature, pending.columns, policy, entityColumn);
+      setPooledPolicyStore(persistPooledPolicyStore(next));
+    }
+    runOfflineFlow(pending.request, { pooledPolicy: policy });
+  }
+
+  // P1-4a: the user clicked "change" on the remembered pooled-policy note —
+  // forget the stored choice for this column pair and re-ask.
+  function changePooledPolicy() {
+    const note = pooledPolicyNote;
+    setPooledPolicyNote(null);
+    if (!note) return;
+    let choices = pooledPolicyChoices;
+    if (signature && note.columns?.length) {
+      const next = forgetPooledPolicy(pooledPolicyStore, signature, note.columns);
+      setPooledPolicyStore(persistPooledPolicyStore(next));
+      choices = pooledPolicyChoicesFor(next, signature);
+    }
+    runOfflineFlow(note.request, { pooledPolicyChoices: choices });
+  }
+
   function handleWorkbook(wb) {
     setWorkbook(wb);
     setOriginalWorkbook(wb);
@@ -759,11 +817,13 @@ export default function App() {
     setError("");
     setNotice("");
     setPendingGrain(null);
+    setPendingPooledPolicy(null);
     setPendingDefinitions(null);
     setPendingConfirm(null);
     setCompanionOffer(null);
     setLastQuestion(null); // Phase 7.1: a fresh file starts a fresh conversation
     setGrainNote(null); // Phase 7.7: no remembered-grain note until one applies
+    setPooledPolicyNote(null); // P1-4a: no remembered-policy note until one applies
     setPendingTeach(null); // Phase 7.9: no teach-it form until a decline
     setAliasMap(new Map()); // W2d: a session-level alias map, fresh per workbook
     setDefinitionsStore(emptyDefinitionsStore());
@@ -991,6 +1051,20 @@ export default function App() {
                 onCancel={() => setPendingGrain(null)}
               />
             )}
+            {pendingPooledPolicy && (
+              <ClarifyBox
+                question={`When "${pendingPooledPolicy.columns.join('" and "')}" repeat a value, how should it be counted?`}
+                options={[
+                  { value: "occurrence", label: "Every occurrence", detail: "counts each non-blank cell" },
+                  { value: "row", label: "Once per row", detail: "a repeat on the same row counts once" },
+                  ...(pendingPooledPolicy.entityColumn
+                    ? [{ value: "patient", label: `Once per "${pendingPooledPolicy.entityColumn}"`, detail: "a repeat for the same patient counts once" }]
+                    : []),
+                ]}
+                onAnswer={answerPooledPolicy}
+                onCancel={() => setPendingPooledPolicy(null)}
+              />
+            )}
             {pendingConfirm && (
               <ClarifyBox
                 question={confirmQuestion(pendingConfirm)}
@@ -1047,6 +1121,22 @@ export default function App() {
                     : `Counting rows as they are, as you chose earlier for this file. `}
                 </span>
                 <button type="button" className="btn btn-ghost" onClick={changeGrain}>
+                  Change
+                </button>
+              </div>
+            )}
+            {pooledPolicyNote && (
+              <div className="notice-box pooled-policy-note" role="status" aria-live="polite">
+                <span>
+                  {`Counting "${pooledPolicyNote.columns.join('" + "')}" `}
+                  {pooledPolicyNote.policy === "row"
+                    ? "once per row"
+                    : pooledPolicyNote.policy === "patient"
+                      ? `once per "${pooledPolicyNote.entityColumn}"`
+                      : "by every occurrence"}
+                  {", as you chose earlier for this file. "}
+                </span>
+                <button type="button" className="btn btn-ghost" onClick={changePooledPolicy}>
                   Change
                 </button>
               </div>

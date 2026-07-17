@@ -382,6 +382,92 @@ export function executeTopN(match, workbook) {
   return { family, targetColumn, direction, n, total, unreadable, ranked };
 }
 
+// P1-4 (2026-07-11): pools 2+ related columns (e.g. Primary/Secondary
+// diagnosis) into one frequency tally, so "most common value across X and Y"
+// has an answer. Counting policy (Decision D, owner-approved 2026-07-11):
+// - "occurrence" (default): count every non-blank cell across the columns.
+// - "row": count a value once per row, even if it repeats across columns on
+//   that row (a same-row duplicate isn't double work).
+// - "patient": count a value once per entity (`entityColumn`) across all of
+//   that entity's rows and columns — the per-patient answer, not per-cell.
+// A blank cell is excluded, never treated as a value; `blankCells` reports
+// how many were skipped so the caller can state an honest denominator.
+export function rankFrequencyPooled(rows, columns, policy, entityColumn) {
+  var groups = {};
+  var order = [];
+  var blankCells = 0;
+  var mentions = 0;
+
+  if (policy === "row") {
+    for (var i = 0; i < rows.length; i++) {
+      var seen = {};
+      for (var c = 0; c < columns.length; c++) {
+        var v = rows[i][columns[c]];
+        if (v == null || String(v).trim() === "") { blankCells++; continue; }
+        var k = foldKey(v);
+        if (seen[k]) continue;
+        seen[k] = true;
+        if (!groups[k]) { groups[k] = { label: v, count: 0 }; order.push(k); }
+        groups[k].count++;
+        mentions++;
+      }
+    }
+  } else if (policy === "patient") {
+    var entityGroups = {};
+    var entityOrder = [];
+    for (var i2 = 0; i2 < rows.length; i2++) {
+      var ent = rows[i2][entityColumn];
+      var ek = ent == null ? "" : String(ent);
+      if (!entityGroups[ek]) { entityGroups[ek] = {}; entityOrder.push(ek); }
+      for (var c2 = 0; c2 < columns.length; c2++) {
+        var v2 = rows[i2][columns[c2]];
+        if (v2 == null || String(v2).trim() === "") { blankCells++; continue; }
+        var k2 = foldKey(v2);
+        if (entityGroups[ek][k2]) continue;
+        entityGroups[ek][k2] = v2;
+      }
+    }
+    for (var e = 0; e < entityOrder.length; e++) {
+      var perEntity = entityGroups[entityOrder[e]];
+      for (var vk in perEntity) {
+        var vv = perEntity[vk];
+        if (!groups[vk]) { groups[vk] = { label: vv, count: 0 }; order.push(vk); }
+        groups[vk].count++;
+        mentions++;
+      }
+    }
+  } else {
+    for (var i3 = 0; i3 < rows.length; i3++) {
+      for (var c3 = 0; c3 < columns.length; c3++) {
+        var v3 = rows[i3][columns[c3]];
+        if (v3 == null || String(v3).trim() === "") { blankCells++; continue; }
+        var k3 = foldKey(v3);
+        if (!groups[k3]) { groups[k3] = { label: v3, count: 0 }; order.push(k3); }
+        groups[k3].count++;
+        mentions++;
+      }
+    }
+  }
+
+  var entries = [];
+  for (var j = 0; j < order.length; j++) entries.push(groups[order[j]]);
+  return { entries: entries, mentions: mentions, blankCells: blankCells, total: rows.length };
+}
+
+// match: a "confident" match with match.pooled set (see matcher.js). Runs the
+// cohort filter stages first (same predicate() machinery every other
+// execute* function uses), then pools + ranks via rankFrequencyPooled +
+// topNWithTies (both reused, not reimplemented).
+export function executePooledRank(match, workbook) {
+  const sheet = workbook.sheets.find((s) => s.name === match.sheetName) || workbook.sheets[0];
+  let rows = sheet.rows;
+  for (const stage of match.stages) rows = rows.filter(predicate(stage.condition));
+  const { columns, policy, n, direction, entityColumn } = match.pooled;
+  const { entries, mentions, blankCells, total } = rankFrequencyPooled(rows, columns, policy, entityColumn);
+  const ranked = topNWithTies(entries, n == null ? Infinity : n, (e) => e.count, direction);
+  return { columns, policy, direction, n, total, mentions, blankCells, entityColumn, distinctValues: entries.length, ranked };
+}
+
 // match: a "confident" match with match.aggregation set (see matcher.js).
 export function executeAggregation(match, workbook) {
   const sheet = workbook.sheets.find((s) => s.name === match.sheetName) || workbook.sheets[0];

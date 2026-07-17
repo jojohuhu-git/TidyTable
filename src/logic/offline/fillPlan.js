@@ -5,7 +5,7 @@
 // counts so re-running on new data stays honest.
 
 import {
-  executeCohort, executeAggregation, executeTopN, toNumber, topNWithTies,
+  executeCohort, executeAggregation, executeTopN, executePooledRank, toNumber, topNWithTies,
 } from "./cohort.js";
 import { excelRowExtent, excelRowExtentNote } from "../workbook.js";
 import { describeLookedForAggregation } from "./matcher.js";
@@ -699,6 +699,11 @@ export function summarizeAnswer(match, exec) {
     const top = exec.ranked[0];
     return exec.family === "frequency" ? `${top.label} (${top.count})` : String(top.value);
   }
+  if (match.pooled) {
+    if (!exec.ranked.length) return "no data";
+    const top = exec.ranked[0];
+    return `${top.label} (${top.count})`;
+  }
   if (match.aggregation) {
     if (exec.mode === "group") {
       return `${exec.results.length} group${exec.results.length === 1 ? "" : "s"}`;
@@ -1198,6 +1203,256 @@ function fillTopNPlan(match, workbook, sheet) {
   return { plan, resultRows, exec };
 }
 
+// P1-4a (2026-07-16): pooled multi-column ranking summary — same n (%) shape
+// as a single-column frequency ranking, plus stating which columns were
+// pooled and how repeats were counted (Decision D), so the policy is never
+// silently assumed.
+const POOLED_POLICY_LABEL = {
+  occurrence: "counting every occurrence",
+  row: "counting a value once per row, even if it appeared in more than one of the pooled columns on that row",
+  patient: "counting a value once per patient, even across that patient's several rows",
+};
+
+function buildPooledRankSummary(match, exec) {
+  const lines = [match.lookedFor, ""];
+  const denom = exec.mentions;
+  const colsList = exec.columns.map((c) => `"${c}"`).join(" + ");
+  const dirWord = exec.direction === "least" ? "least common first" : "most common first";
+  lines.push(`Pooling ${colsList} in "${match.sheetName}" (${POOLED_POLICY_LABEL[exec.policy]}), ranking by how often each value appears (${dirWord}):`);
+  for (const e of exec.ranked) {
+    lines.push(`- ${e.label}: ${formatNPercent(e.count, denom)}.`);
+  }
+  if (exec.blankCells) {
+    lines.push(`(${exec.blankCells} pooled cell${exec.blankCells === 1 ? "" : "s"} were blank — excluded from the ranking and from the ${denom} used as the percentage base.)`);
+  }
+  if (exec.ranked.length < exec.distinctValues) {
+    const extended = exec.ranked.length > exec.n ? "; extended to include a tie at the cutoff" : "";
+    lines.push(`Showing ${exec.ranked.length} of ${exec.distinctValues} distinct values (asked for top ${exec.n}${extended}).`);
+  } else if (exec.ranked.length > exec.n) {
+    lines.push(`Asked for the top ${exec.n}; showing all ${exec.ranked.length} because of a tie at the cutoff.`);
+  }
+  lines.push("");
+  lines.push("This was answered on your computer, with no data sent anywhere. The Excel steps and R script below reproduce the same counts.");
+  return lines.join("\n");
+}
+
+// Hand-mirrored literal text, same reason RANK_FREQUENCY_BLOCK above is: it
+// closes over the module-level `foldKey` IMPORT, which breaks once pasted
+// into the worker transform (see the comment on RANK_FREQUENCY_BLOCK). Kept
+// in sync with cohort.js's rankFrequencyPooled deliberately, never toString()'d.
+const RANK_FREQUENCY_POOLED_BLOCK = `
+var rankFrequencyPooled = function (rows, columns, policy, entityColumn) {
+  var groups = {}; var order = []; var blankCells = 0; var mentions = 0;
+  function addVal(k, v) { if (!groups[k]) { groups[k] = { label: v, count: 0 }; order.push(k); } groups[k].count++; mentions++; }
+  if (policy === "row") {
+    for (var i = 0; i < rows.length; i++) {
+      var seen = {};
+      for (var c = 0; c < columns.length; c++) {
+        var v = rows[i][columns[c]];
+        if (v == null || String(v).trim() === "") { blankCells++; continue; }
+        var k = foldKey(v);
+        if (seen[k]) continue;
+        seen[k] = true;
+        addVal(k, v);
+      }
+    }
+  } else if (policy === "patient") {
+    var entityGroups = {}; var entityOrder = [];
+    for (var i2 = 0; i2 < rows.length; i2++) {
+      var ent = rows[i2][entityColumn];
+      var ek = ent == null ? "" : String(ent);
+      if (!entityGroups[ek]) { entityGroups[ek] = {}; entityOrder.push(ek); }
+      for (var c2 = 0; c2 < columns.length; c2++) {
+        var v2 = rows[i2][columns[c2]];
+        if (v2 == null || String(v2).trim() === "") { blankCells++; continue; }
+        var k2 = foldKey(v2);
+        if (entityGroups[ek][k2]) continue;
+        entityGroups[ek][k2] = v2;
+      }
+    }
+    for (var e = 0; e < entityOrder.length; e++) {
+      var perEntity = entityGroups[entityOrder[e]];
+      for (var vk in perEntity) addVal(vk, perEntity[vk]);
+    }
+  } else {
+    for (var i3 = 0; i3 < rows.length; i3++) {
+      for (var c3 = 0; c3 < columns.length; c3++) {
+        var v3 = rows[i3][columns[c3]];
+        if (v3 == null || String(v3).trim() === "") { blankCells++; continue; }
+        addVal(foldKey(v3), v3);
+      }
+    }
+  }
+  var entries = [];
+  for (var j = 0; j < order.length; j++) entries.push(groups[order[j]]);
+  return { entries: entries, mentions: mentions, blankCells: blankCells, total: rows.length };
+};
+`;
+
+function buildPooledRankTransformCode(match, exec) {
+  const stages = match.stages.map((s) => s.condition);
+  return `
+var foldKey = function (v) { return String(v).trim().toLowerCase().replace(/\\s+/g, " "); };
+${toNumber.toString()}
+${RANK_FREQUENCY_POOLED_BLOCK}
+${topNWithTies.toString()}
+var cmp = function (n, op, t) { switch (op) { case ">": return n > t; case ">=": return n >= t; case "<": return n < t; case "<=": return n <= t; case "<>": return n !== t; default: return n === t; } };
+var STAGES = ${JSON.stringify(stages)};
+var COLUMNS = ${JSON.stringify(exec.columns)};
+var POLICY = ${JSON.stringify(exec.policy)};
+var ENTITY_COLUMN = ${JSON.stringify(exec.entityColumn)};
+var N = ${exec.n === Infinity ? "Infinity" : JSON.stringify(exec.n)};
+var DIRECTION = ${JSON.stringify(exec.direction)};
+var SHEET = ${JSON.stringify(match.sheetName)};
+var rows = sheets[SHEET] || [];
+var pred = function (c) { return function (r) {
+  if (c.kind === "blank") { var bv = r[c.column]; var bt = bv == null ? "" : String(bv).trim().toLowerCase(); var bm = (bt === "" || bt === "n/a" || bt === "na" || bt === "none" || bt === "-" || bt === "."); return c.present ? !bm : bm; }
+  if (c.kind === "value") { if (c.op === "<>") { return r[c.column] == null || foldKey(r[c.column]) !== foldKey(c.value); } return r[c.column] != null && foldKey(r[c.column]) === foldKey(c.value); }
+  if (c.kind === "set") { var set = {}; for (var i = 0; i < c.values.length; i++) { set[foldKey(c.values[i])] = 1; } if (c.op === "not-in") { return r[c.column] == null || set[foldKey(r[c.column])] !== 1; } return r[c.column] != null && set[foldKey(r[c.column])] === 1; }
+  if (c.kind === "threshold") { if (c.when) { var wv = r[c.when.column]; if (wv == null || foldKey(wv) !== foldKey(c.when.value)) return false; } var n = toNumber(r[c.column]); if (n == null) return false; return cmp(n, c.op, c.value); }
+  return false;
+}; };
+var filtered = rows;
+for (var s = 0; s < STAGES.length; s++) { filtered = filtered.filter(pred(STAGES[s])); }
+var pooled = rankFrequencyPooled(filtered, COLUMNS, POLICY, ENTITY_COLUMN);
+var ranked = topNWithTies(pooled.entries, N, function (e) { return e.count; }, DIRECTION);
+var denom = pooled.mentions;
+var out = ranked.map(function (e) {
+  var row = {};
+  row["Value"] = e.label;
+  row["Count"] = e.count;
+  row["Share of total"] = (denom ? Math.round(e.count / denom * 1000) / 10 : 0) + "%";
+  return row;
+});
+return out;
+`.trim();
+}
+
+// Excel has no native pooled-tally formula (same honesty gap a single-column
+// ranking has — see buildTopNFrequencyExcelSteps). For "occurrence" (the
+// default), each value's count is exactly the sum of a COUNTIFS over every
+// pooled column, so a real spot-check formula is possible. "row" and
+// "patient" need a value to be de-duplicated per row/entity first, which no
+// single Excel formula does — those get a PivotTable + helper-column recipe
+// instead of a formula, same as this file's Table-1 categorical steps do.
+function buildPooledRankExcelSteps(match, exec, sheet) {
+  const extent = excelRowExtent(sheet);
+  const lastRow = extent.lastRow;
+  const range = (col) => `'${sheet.name}'!${letterFor(sheet, col)}2:${letterFor(sheet, col)}${lastRow}`;
+  const crit = (op, value) => (op === "=" ? `"${escapeCriteria(value)}"` : `"${op}${escapeCriteria(value)}"`);
+  const hasSet = match.stages.some((s) => needsFilterFallback(s.condition));
+  const colsList = exec.columns.map((c) => `"${c}"`).join(" and ");
+
+  const intro = {
+    title: `Pool ${colsList} and rank by frequency`,
+    where: `Sheet "${sheet.name}"`,
+    formula: "",
+    instruction:
+      `Excel has no single "pool these columns and rank" formula. Build a helper area that stacks ${exec.columns.map((c) => `"${c}"`).join(", ")} into one column ` +
+      "(copy each column's values below the previous one, or use Data > Get Data > Append Queries), then build a PivotTable on the stacked column with " +
+      `Count in Values, sorted ${exec.direction === "least" ? "smallest to largest" : "largest to smallest"} — the top rows are the ranking.` +
+      (exec.policy !== "occurrence"
+        ? ` This counts every ${exec.policy === "row" ? "row's" : "patient's"} occurrence once: before stacking, drop duplicate ${exec.policy === "row" ? "row + value" : `"${exec.entityColumn}" + value`} pairs within each source column ` +
+          "(Data > Remove Duplicates on a helper table of those two columns) so a repeat on the same " + (exec.policy === "row" ? "row" : "patient") + " isn't counted twice."
+        : ` The COUNTIFS formulas below confirm each value's count by hand (summed across both columns)${hasSet ? ", once you've filtered to the conditions above" : ""}.`),
+  };
+
+  if (exec.policy !== "occurrence" || hasSet) {
+    const extra = hasSet
+      ? [{
+        title: "Filter first",
+        where: `Sheet "${sheet.name}"`,
+        formula: "",
+        instruction: "Turn on Data > Filter and filter each column to the values that count for the conditions above, then build the stacked helper area from the filtered rows.",
+      }]
+      : [];
+    return withExtentNote([intro, ...extra], extent);
+  }
+
+  const filterPairs = [];
+  for (const stage of match.stages) {
+    const c = stage.condition;
+    filterPairs.push(`${range(c.column)}, ${crit(c.op, c.value)}`);
+    if (c.when) filterPairs.push(`${range(c.when.column)}, "${escapeCriteria(c.when.value)}"`);
+  }
+  const steps = exec.ranked.map((e, i) => {
+    const perColumnCounts = exec.columns.map((col) => `COUNTIFS(${[`${range(col)}, ${crit("=", e.label)}`, ...filterPairs].join(", ")})`);
+    const step = {
+      title: `${e.label}`,
+      where: "An empty cell",
+      formula: `=${perColumnCounts.join("+")}`,
+      instruction: `Adds up how many times "${e.label}" appears across ${colsList}${filterPairs.length ? ", within the conditions above" : ""}. It should equal ${e.count}.`,
+    };
+    if (i === 0) step.teaches = "COUNTIFS counts one column at a time; summing one call per pooled column gives the combined tally.";
+    return step;
+  });
+  return withExtentNote([intro, ...steps], extent);
+}
+
+// R's tidyr::pivot_longer is the exact tool for "several columns, same
+// vocabulary, pool them" — stack the pooled columns into one `value` column,
+// drop blanks, then count (de-duplicating first for "row"/"patient", the same
+// de-dup the offline engine and the Excel helper-column recipe both apply).
+function buildPooledRankRScript(match, exec, sheet) {
+  const cols = exec.columns.map((c) => `"${c}"`).join(", ");
+  const lines = [
+    "# Reproduces the pooled ranking TidyTable computed on your computer.",
+    "library(readxl)",
+    "library(tidyr)",
+    "library(dplyr)",
+    "",
+    `df <- read_excel("your_file.xlsx", sheet = "${sheet.name}")`,
+    "",
+  ];
+  if (exec.policy === "row") {
+    lines.push(
+      "pooled <- df |>",
+      "  mutate(.row_id = row_number()) |>",
+      `  pivot_longer(cols = c(${cols}), names_to = "source_column", values_to = "value") |>`,
+      "  filter(!is.na(value), trimws(value) != \"\") |>",
+      "  distinct(.row_id, value) |>",       // once per row even if repeated across columns
+      "  count(value, sort = TRUE, name = \"Count\")",
+    );
+  } else if (exec.policy === "patient") {
+    lines.push(
+      "pooled <- df |>",
+      `  pivot_longer(cols = c(${cols}), names_to = "source_column", values_to = "value") |>`,
+      "  filter(!is.na(value), trimws(value) != \"\") |>",
+      `  distinct(.data[[${JSON.stringify(exec.entityColumn)}]], value) |>`,
+      "  count(value, sort = TRUE, name = \"Count\")",
+    );
+  } else {
+    lines.push(
+      "pooled <- df |>",
+      `  pivot_longer(cols = c(${cols}), names_to = "source_column", values_to = "value") |>`,
+      "  filter(!is.na(value), trimws(value) != \"\") |>",
+      "  count(value, sort = TRUE, name = \"Count\")",
+    );
+  }
+  lines.push("", "pooled  # matches the result table above, most common first");
+  return lines.join("\n") + "\n";
+}
+
+function fillPooledRankPlan(match, workbook, sheet) {
+  const exec = executePooledRank(match, workbook);
+  const resultRows = exec.ranked.map((e) => ({
+    Value: e.label,
+    Count: e.count,
+    "Share of total": `${exec.mentions ? Math.round((e.count / exec.mentions) * 1000) / 10 : 0}%`,
+  }));
+
+  const plan = {
+    engine: "offline",
+    looked_for: match.lookedFor,
+    summary: buildPooledRankSummary(match, exec),
+    transform_code: buildPooledRankTransformCode(match, exec),
+    excel_steps: buildPooledRankExcelSteps(match, exec, sheet),
+    r_script: buildPooledRankRScript(match, exec, sheet),
+    r_run_notes: "Install readxl/tidyr/dplyr if needed (install.packages(...)), point read_excel at your real file, then run. The result should match the table above.",
+  };
+  return { plan, resultRows, exec };
+}
+
 // Phase 7.5: the Table-1 builder — a publication-style descriptive table over
 // several named columns at once. Categorical columns as n (%) per level,
 // numeric columns as median (IQR) with mean (SD), missing counts per column.
@@ -1493,6 +1748,7 @@ export function fillPlan(match, workbook) {
   if (match.list) return fillListPlan(match, workbook, sheet);
   if (match.intent === "table1") return fillTable1Plan(match, workbook, sheet);
   if (match.intent === "describe") return fillDescribePlan(match, workbook, sheet);
+  if (match.pooled) return fillPooledRankPlan(match, workbook, sheet);
   if (match.topN) return fillTopNPlan(match, workbook, sheet);
   if (match.aggregation) return fillAggregationPlan(match, workbook, sheet);
   if (match.groupColumn) return fillGroupCountPlan(match, workbook, sheet);
