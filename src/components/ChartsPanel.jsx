@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { buildDataset, groupSmallIntoOther, applyRankCap, describeExtreme } from "../logic/charts/aggregate.js";
+import { buildDataset, buildCrosstabDataset, groupSmallIntoOther, applyRankCap, describeExtreme } from "../logic/charts/aggregate.js";
 import { parseChartTweak, sortDataset } from "../logic/charts/chartTweaks.js";
 import { recommendChart } from "../logic/charts/advisor.js";
 import { excelChartSteps } from "../logic/charts/excelChart.js";
@@ -29,6 +29,8 @@ export default function ChartsPanel({ sheet, seed }) {
   const [labelCol, setLabelCol] = useState("");
   const [valueCol, setValueCol] = useState("");
   const [aggMode, setAggMode] = useState("count"); // "count" | "sum" | "average"
+  const [subgroupCol, setSubgroupCol] = useState(""); // P6-1: the "split by" column — a crosstab when set
+  const [layoutHint, setLayoutHint] = useState(null); // P6-1: "grouped" | "stacked" | "stacked100" from text or a manual pick
   const [filter, setFilter] = useState(null); // W4: { column, value } from a free-text scope
   const [chosen, setChosen] = useState(null); // user override of the recommended type
   const [text, setText] = useState(""); // W4: the free-text request box
@@ -48,17 +50,22 @@ export default function ChartsPanel({ sheet, seed }) {
   // always reflect what the text meant and the user learns the mapping.
   function applyPlan(plan) {
     setLabelCol(plan.labelCol);
-    setValueCol(plan.valueCol || "");
-    setAggMode(plan.aggMode);
+    // P6-1: a crosstab plan has no value column/aggregation/rank/bucket of its
+    // own (always a count of rows, split two ways) — clear those explicitly
+    // so a previous single-column plan's leftovers can't bleed through.
+    setSubgroupCol(plan.kind === "crosstab" ? plan.subgroupCol : "");
+    setLayoutHint(plan.kind === "crosstab" ? (plan.layout || "grouped") : null);
+    setValueCol(plan.kind === "crosstab" ? "" : (plan.valueCol || ""));
+    setAggMode(plan.kind === "crosstab" ? "count" : plan.aggMode);
     setFilter(plan.filter || null);
     setChosen(null);
     setGroupOther(false);
-    setChartRank(plan.rank || null);
+    setChartRank(plan.kind === "crosstab" ? null : (plan.rank || null));
     setSortMode(null);
     setTweakLog([]);
     setHighlightLabel(null);
     setReferenceLine(null);
-    setBucket(plan.bucket || null);
+    setBucket(plan.kind === "crosstab" ? null : (plan.bucket || null));
   }
 
   // Phase 8.5: apply a plain-word tweak to the chart already on screen. Each
@@ -139,8 +146,11 @@ export default function ChartsPanel({ sheet, seed }) {
 
   const baseDataset = useMemo(() => {
     if (!labelCol) return null;
+    // P6-1: a "split by" column picked (by hand or from text) makes this a
+    // crosstab — always a count, never sum/average (see buildCrosstabDataset).
+    if (subgroupCol) return buildCrosstabDataset(sheet, labelCol, subgroupCol, { filter });
     return buildDataset(sheet, labelCol, valueCol || null, { aggMode, filter, bucket });
-  }, [sheet, labelCol, valueCol, aggMode, filter, bucket]);
+  }, [sheet, labelCol, subgroupCol, valueCol, aggMode, filter, bucket]);
 
   const dataset = useMemo(() => {
     const grouped = baseDataset && groupOther ? groupSmallIntoOther(baseDataset) : baseDataset;
@@ -153,7 +163,7 @@ export default function ChartsPanel({ sheet, seed }) {
     return capped && sortMode ? sortDataset(capped, sortMode) : capped;
   }, [baseDataset, groupOther, chartRank, sortMode]);
 
-  const rec = useMemo(() => (dataset ? recommendChart(dataset) : null), [dataset]);
+  const rec = useMemo(() => (dataset ? recommendChart(dataset, { requestedLayout: layoutHint }) : null), [dataset, layoutHint]);
   const chartType = chosen || rec?.type;
   // P3-3: only a bar chart draws the reference line, so it isn't carried into
   // the Excel recipe for a chart type it can't apply to.
@@ -173,7 +183,7 @@ export default function ChartsPanel({ sheet, seed }) {
     <div className="charts-panel">
       <StepHelpPanel
         whatItDoes="Describe the chart in plain words (or pick columns by hand) and the app recommends one chart type, draws a preview, and gives numbered steps to build the same chart in Excel."
-        cantDoYet={["One comparison per chart for now — two-variable requests are declined rather than drawn wrong."]}
+        cantDoYet={["Two-column comparisons (grouped/stacked bars) always count rows — no averages or totals across two columns yet, and no distribution charts (histograms) yet either."]}
         examples={examples.map((text) => ({
           label: text,
           onClick: () => { setText(text); runText(text); },
@@ -211,7 +221,7 @@ export default function ChartsPanel({ sheet, seed }) {
         <div className="stats-pickers">
           <label>
             Labels (what to compare)
-            <select value={labelCol} onChange={(e) => { setLabelCol(e.target.value); setChosen(null); setFilter(null); setChartRank(null); setBucket(null); }}>
+            <select value={labelCol} onChange={(e) => { setLabelCol(e.target.value); setChosen(null); setFilter(null); setChartRank(null); setBucket(null); setSubgroupCol(""); setLayoutHint(null); }}>
               <option value="">choose a column…</option>
               {columns.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
@@ -225,6 +235,8 @@ export default function ChartsPanel({ sheet, seed }) {
                 if (v.startsWith("avg::")) { setValueCol(v.slice(5)); setAggMode("average"); }
                 else if (v) { setValueCol(v); setAggMode("sum"); }
                 else { setValueCol(""); setAggMode("count"); }
+                setSubgroupCol(""); // P6-1: a value column and a split-by column are mutually exclusive for now
+                setLayoutHint(null);
                 setChosen(null);
                 setChartRank(null);
               }}
@@ -234,12 +246,30 @@ export default function ChartsPanel({ sheet, seed }) {
               {numericColumns.map((c) => <option key={`avg-${c}`} value={`avg::${c}`}>average {c}</option>)}
             </select>
           </label>
+          <label>
+            Split by (optional)
+            <select
+              value={subgroupCol}
+              disabled={!labelCol || valueCol !== ""}
+              onChange={(e) => {
+                const v = e.target.value;
+                setSubgroupCol(v);
+                if (v) { setValueCol(""); setAggMode("count"); }
+                setChosen(null);
+                setLayoutHint(null);
+                setChartRank(null);
+              }}
+            >
+              <option value="">none — one column</option>
+              {columns.filter((c) => c !== labelCol).map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
         </div>
       </details>
       {filter && (
         <p className="hint">Only counting rows where "{filter.column}" is "{filter.value}". Clear the label picker to remove this.</p>
       )}
-      {valueCol === "" && numericColumns.length === 0 && labelCol && (
+      {valueCol === "" && !subgroupCol && numericColumns.length === 0 && labelCol && (
         <p className="hint">No numeric columns to total — showing a count of rows per {labelCol} instead.</p>
       )}
 
@@ -250,6 +280,7 @@ export default function ChartsPanel({ sheet, seed }) {
           <div className="stats-conclusion">
             <strong>Recommended: {chartTypeName(rec.type, rec.layout)}.</strong> {rec.reason}
             {rec.noPieReason && <div className="dim" style={{ marginTop: "0.3rem" }}>{rec.noPieReason}</div>}
+            {rec.otherGroupedNote && <div className="dim" style={{ marginTop: "0.3rem" }}>{rec.otherGroupedNote}</div>}
           </div>
 
           {rec.offerGroupOther && (
@@ -263,18 +294,24 @@ export default function ChartsPanel({ sheet, seed }) {
             <details className="charts-alts">
               <summary>Other options</summary>
               <ul>
-                {[{ type: rec.type, reason: "the recommended one" }, ...rec.alternatives].map((a) => (
-                  <li key={a.type}>
-                    <button
-                      type="button"
-                      className={`btn btn-ghost ${chartType === a.type ? "btn-primary" : ""}`}
-                      onClick={() => setChosen(a.type)}
-                    >
-                      {chartTypeName(a.type)}
-                    </button>
-                    <span className="dim"> — {a.reason}</span>
-                  </li>
-                ))}
+                {[{ type: rec.type, layout: rec.layout, reason: "the recommended one" }, ...rec.alternatives].map((a, i) => {
+                  // P6-1: a crosstab's alternatives are all type "bar" with a
+                  // different layout — the layout, not the type, is what
+                  // distinguishes "currently active" here.
+                  const isActive = a.type === chartType && (a.layout || null) === (a.type === "bar" ? (rec.layout || null) : null);
+                  return (
+                    <li key={`${a.type}-${a.layout || i}`}>
+                      <button
+                        type="button"
+                        className={`btn btn-ghost ${isActive ? "btn-primary" : ""}`}
+                        onClick={() => { setChosen(a.type); setLayoutHint(a.layout || null); }}
+                      >
+                        {chartTypeName(a.type, a.layout)}
+                      </button>
+                      <span className="dim"> — {a.reason}</span>
+                    </li>
+                  );
+                })}
               </ul>
             </details>
           )}
@@ -289,23 +326,28 @@ export default function ChartsPanel({ sheet, seed }) {
             layout={rec.layout}
           />
 
-          {/* Phase 8.5: adjust the chart in plain words. */}
-          <div className="chart-tweak-row">
-            <label className="chart-text-label">
-              Adjust in words
-              <input
-                className="chart-text-input"
-                value={tweakText}
-                placeholder='e.g. "only top 5" or "sort alphabetically"'
-                onChange={(e) => setTweakText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") runTweak(); }}
-              />
-            </label>
-            <button type="button" className="btn btn-ghost" onClick={() => runTweak()} disabled={!tweakText.trim()}>
-              Apply
-            </button>
-          </div>
-          {tweakLog.length > 0 && (
+          {/* Phase 8.5: adjust the chart in plain words. P6-1: none of these
+              verbs (top N, sort, highlight, reference line) apply to a
+              crosstab yet — hidden rather than silently no-opping while
+              claiming success. */}
+          {dataset.kind !== "crosstab" && (
+            <div className="chart-tweak-row">
+              <label className="chart-text-label">
+                Adjust in words
+                <input
+                  className="chart-text-input"
+                  value={tweakText}
+                  placeholder='e.g. "only top 5" or "sort alphabetically"'
+                  onChange={(e) => setTweakText(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") runTweak(); }}
+                />
+              </label>
+              <button type="button" className="btn btn-ghost" onClick={() => runTweak()} disabled={!tweakText.trim()}>
+                Apply
+              </button>
+            </div>
+          )}
+          {dataset.kind !== "crosstab" && tweakLog.length > 0 && (
             <p className="dim">Adjustments: {tweakLog.join(" ")}</p>
           )}
           {dataset.kind === "categorical" && (
@@ -358,7 +400,14 @@ export default function ChartsPanel({ sheet, seed }) {
   );
 }
 
+const CROSSTAB_LAYOUT_CHART_NAME = {
+  grouped: "grouped bar chart",
+  stacked: "stacked bar chart",
+  stacked100: "100% stacked bar chart",
+};
+
 function chartTypeName(type, layout) {
   if (type === "bar" && layout === "horizontal") return "horizontal bar chart";
+  if (type === "bar" && CROSSTAB_LAYOUT_CHART_NAME[layout]) return CROSSTAB_LAYOUT_CHART_NAME[layout];
   return { bar: "bar chart", line: "line chart", pie: "pie chart", scatter: "scatter plot" }[type] || type;
 }

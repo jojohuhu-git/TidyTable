@@ -42,9 +42,12 @@ describe("Bug 2 — chart free text never silently drops a numeric column word",
     expect(res.valueCol).toBeNull();
   });
 
-  it('a leftover word naming a TEXT column ("drug by diagnosis") declines as a two-column request (superseded by P3-2, 2026-07-17: this used to silently chart Diagnosis alone and report "drug" as ignored — now it declines up front, see fix-2026-07-11-p3-2-two-column-decline.test.js)', () => {
+  it('a leftover word naming a TEXT column ("drug by diagnosis") resolves as a two-column crosstab, not a silent one-column chart (P6-1, 2026-07-17: this used to silently chart Diagnosis alone and report "drug" as ignored; the P3-2 interim fix declined it plainly; P6-1 now draws it for real — see p6-1-grouped-stacked-charts.test.js)', () => {
     const res = resolveChartRequest("drug by diagnosis", sheet());
-    expect(res.status).toBe("none");
-    expect(res.reason).toBe("two-column");
+    expect(res.status).toBe("resolved");
+    expect(res.kind).toBe("crosstab");
+    expect(res.labelCol).toBe("Diagnosis");
+    expect(res.subgroupCol).toBe("Drug");
+    expect(res.layout).toBe("grouped");
   });
 });

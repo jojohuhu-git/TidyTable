@@ -6,7 +6,7 @@
 import { foldKey } from "../logic/checkup/normalizers.js";
 import { maxOf, countLabel, describeExtreme } from "../logic/charts/aggregate.js";
 import { chartPalette } from "../logic/charts/palette.js";
-import { buildChartAriaSummary } from "../logic/charts/chartAriaSummary.js";
+import { buildChartAriaSummary, buildCrosstabAriaSummary } from "../logic/charts/chartAriaSummary.js";
 
 export const CHART_W = 480;
 export const CHART_H = 300;
@@ -41,7 +41,17 @@ function ChartTitle({ title, subtitle }) {
 }
 
 export default function ChartPreview({ chartType, dataset, highlightLabel, referenceLine, title, svgRef, layout }) {
-  if (!dataset || !dataset.points?.length) return null;
+  if (!dataset) return null;
+  // P6-1: a crosstab (two categorical columns) draws grouped/stacked/100%
+  // stacked bars — a different enough shape (a category x subgroup grid, no
+  // single "points" array) that it gets its own branch rather than being
+  // squeezed through the single-axis BarChart below. Highlighting a single
+  // bar and a reference line are P6-4 (cohort-scoped) territory, not this one.
+  if (dataset.kind === "crosstab") {
+    if (!dataset.categories?.length) return null;
+    return <CrosstabBarChart dataset={dataset} title={title} layout={layout} svgRef={svgRef} />;
+  }
+  if (!dataset.points?.length) return null;
   const isSubject = (label) =>
     highlightLabel != null && foldKey(label) === foldKey(highlightLabel);
   // W4: with no highlight, color the bars/slices from the chart palette
@@ -247,6 +257,122 @@ function PieChart({ dataset, fill, title, subtitle, highlightLabel, svgRef }) {
           </g>
         );
       })}
+    </svg>
+  );
+}
+
+// P6-1: a mandatory legend for the crosstab's subgroup colors — up to 8
+// swatches (Okabe-Ito), wrapped 4 to a row since the cap never exceeds 8.
+const LEGEND_COLS = 4;
+const LEGEND_ROW_H = 18;
+
+function legendHeight(n) {
+  return 8 + Math.ceil(n / LEGEND_COLS) * LEGEND_ROW_H;
+}
+
+function Legend({ subgroups, palette, x, y, width }) {
+  const colW = width / Math.min(LEGEND_COLS, subgroups.length);
+  return (
+    <g>
+      {subgroups.map((name, i) => {
+        const col = i % LEGEND_COLS;
+        const row = Math.floor(i / LEGEND_COLS);
+        const cx = x + col * colW;
+        const cy = y + row * LEGEND_ROW_H;
+        const label = name.length > 16 ? name.slice(0, 15) + "…" : name;
+        return (
+          <g key={name}>
+            <rect x={cx} y={cy} width="10" height="10" fill={palette[i]} rx="2" />
+            <text x={cx + 14} y={cy + 9} className="chart-label" dominantBaseline="middle">{label}</text>
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+// P6-1: grouped / stacked / 100%-stacked bars for a two-categorical-column
+// crosstab (aggregate.js buildCrosstabDataset). Keeps this app's one house
+// style — bars grow rightward from a left-hand category label, same as the
+// single-axis BarChart above — rather than switching to vertical columns:
+// "matching but distinct" applies to chart orientation too, not just color.
+// grouped: one thin sub-bar per subgroup, sharing one scale across the whole
+// chart. stacked: one bar per category, subgroup segments end to end, sharing
+// one scale (the largest category total). stacked100: same as stacked but
+// each bar is individually rescaled to fill the full width — the length axis
+// becomes "% of that category" (0/25/50/75/100% ticks along the bottom), and
+// each category's true n is appended to its label so the percent scaling
+// never hides the real sample size.
+const GROUP_SUB_BAR_H = 14;
+const GROUP_SUB_GAP = 2;
+const STACK_BAR_H = 26;
+const CROSSTAB_BLOCK_GAP = 10;
+
+function CrosstabBarChart({ dataset, title, layout, svgRef }) {
+  const padL = 130;
+  const padR = 44;
+  const categories = dataset.categories;
+  const subgroups = dataset.subgroups;
+  const palette = chartPalette(subgroups.length);
+  const legendH = legendHeight(subgroups.length);
+  const padTop = 16 + (title ? TITLE_PAD : 0);
+  const padY = padTop + legendH;
+  const padB = layout === "stacked100" ? 30 : 16;
+
+  const blockH = layout === "grouped"
+    ? subgroups.length * GROUP_SUB_BAR_H + (subgroups.length - 1) * GROUP_SUB_GAP
+    : STACK_BAR_H;
+  const chartH = padY + categories.length * (blockH + CROSSTAB_BLOCK_GAP) + padB;
+
+  const innerW = W - padL - padR;
+  const maxCell = layout === "grouped" ? niceMax(maxOf(categories.flatMap((c) => c.values), 0)) : null;
+  const maxTotal = layout === "stacked" ? niceMax(maxOf(categories.map((c) => c.total), 0)) : null;
+
+  const ariaLabel = title
+    ? `Bar chart of ${title}: ${buildCrosstabAriaSummary(dataset)}`
+    : `Bar chart: ${buildCrosstabAriaSummary(dataset)}`;
+
+  let y = padY;
+  const blocks = categories.map((c) => {
+    const top = y;
+    y += blockH + CROSSTAB_BLOCK_GAP;
+    return { c, top };
+  });
+
+  return (
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${chartH}`} width={W} height={chartH} className="chart-svg" role="img" aria-label={ariaLabel}>
+      <ChartTitle title={title} />
+      <Legend subgroups={subgroups} palette={palette} x={padL} y={padTop + 4} width={innerW} />
+      {blocks.map(({ c, top }, ci) => {
+        const label = layout === "stacked100" ? `${c.label} (n=${c.total})` : c.label;
+        return (
+          <g key={ci}>
+            <text x={padL - 8} y={top + blockH / 2} textAnchor="end" dominantBaseline="middle" className="chart-label">
+              {label.length > 22 ? label.slice(0, 21) + "…" : label}
+            </text>
+            {layout === "grouped" && c.values.map((v, si) => {
+              if (!v) return null;
+              const rowY = top + si * (GROUP_SUB_BAR_H + GROUP_SUB_GAP);
+              const w = Math.max(1, (v / maxCell) * innerW);
+              return <rect key={si} x={padL} y={rowY} width={w} height={GROUP_SUB_BAR_H} fill={palette[si]} rx="2" />;
+            })}
+            {layout !== "grouped" && (() => {
+              const scale = layout === "stacked100" ? innerW / (c.total || 1) : innerW / (maxTotal || 1);
+              let x = padL;
+              return c.values.map((v, si) => {
+                if (!v) return null;
+                const w = v * scale;
+                const rect = <rect key={si} x={x} y={top} width={w} height={blockH} fill={palette[si]} />;
+                x += w;
+                return rect;
+              });
+            })()}
+          </g>
+        );
+      })}
+      {layout === "stacked100" && [0, 25, 50, 75, 100].map((p) => (
+        <text key={p} x={padL + innerW * (p / 100)} y={chartH - 6} textAnchor="middle" className="chart-label">{p}%</text>
+      ))}
     </svg>
   );
 }

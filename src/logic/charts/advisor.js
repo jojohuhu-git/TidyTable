@@ -16,11 +16,51 @@
 const PIE_MAX_SLICES = 4;
 const MANY_CATEGORIES = 12;
 
+// P6-1: grouped/stacked/100%-stacked bars for a crosstab of two categorical
+// columns. The advisor doesn't choose the layout from the data shape (all
+// three are always equally "valid" for the same crosstab) — it reads back
+// whatever layout the request's wording asked for (opts.requestedLayout, set
+// by textToChart.js from words like "mix"/"breakdown"/"stacked"/"compare"),
+// defaulting to "grouped" — comparing sizes side by side — when a hand-picked
+// pair of columns carries no wording to go on. The other two layouts are
+// offered as alternatives, same "one recommended, others collapsed" pattern
+// as every other chart type here.
+const CROSSTAB_LAYOUTS = ["grouped", "stacked", "stacked100"];
+const CROSSTAB_LAYOUT_NAME = { grouped: "Grouped bars", stacked: "Stacked bars", stacked100: "100% stacked bars" };
+
+function recommendCrosstabLayout(dataset, opts) {
+  if (!dataset.categories || dataset.categories.length === 0) {
+    return { type: "none", reason: "There is nothing to chart yet." };
+  }
+  const layout = CROSSTAB_LAYOUTS.includes(opts.requestedLayout) ? opts.requestedLayout : "grouped";
+  const label = `"${dataset.labelName}"`;
+  const sub = `"${dataset.subgroupName}"`;
+  const reason = {
+    grouped: `Grouped bar chart because you're comparing how ${sub} sizes differ across ${label} — each category gets its own cluster of bars, one per ${dataset.subgroupName}.`,
+    stacked: `Stacked bar chart because this asks what makes up each ${label} — the ${sub} counts stack into one bar per category.`,
+    stacked100: `100% stacked bar chart because this asks for the share or mix of ${sub} within each ${label} — bars scale to 100% so you compare proportions, not raw counts.`,
+  }[layout];
+  const alternatives = CROSSTAB_LAYOUTS
+    .filter((l) => l !== layout)
+    .map((l) => ({ type: "bar", layout: l, reason: `${CROSSTAB_LAYOUT_NAME[l]} instead.` }));
+  return {
+    type: "bar",
+    layout,
+    reason,
+    alternatives,
+    legend: true,
+    ...(dataset.otherGrouped ? { otherGroupedNote: `The smallest ${dataset.otherGrouped} ${dataset.subgroupName} values are folded into "Other" so the legend stays readable.` } : {}),
+  };
+}
+
 // dataset shapes:
 //   { kind: "categorical", points: [{label, value}], labelIsTime: boolean, valueName }
 //   { kind: "xy", points: [{x, y}], xName, yName }
-export function recommendChart(dataset) {
-  if (!dataset || !dataset.points || dataset.points.length === 0) {
+//   { kind: "crosstab", categories: [{label, total, values}], subgroups, labelName, subgroupName }
+export function recommendChart(dataset, opts = {}) {
+  if (!dataset) return { type: "none", reason: "There is nothing to chart yet." };
+  if (dataset.kind === "crosstab") return recommendCrosstabLayout(dataset, opts);
+  if (!dataset.points || dataset.points.length === 0) {
     return { type: "none", reason: "There is nothing to chart yet." };
   }
 

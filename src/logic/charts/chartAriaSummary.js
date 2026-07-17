@@ -21,3 +21,28 @@ export function buildChartAriaSummary(dataset, cap = SUMMARY_CAP, opts = {}) {
   }
   return summary;
 }
+
+// P6-1: a screen-reader summary for a grouped/stacked/100%-stacked crosstab —
+// "UTI: cephalexin 3, amoxicillin 2; pneumonia: azithromycin 2, and 1 more"
+// — same "a few numbers, honestly capped" idea as buildChartAriaSummary
+// above, just two axes deep instead of one.
+const CROSSTAB_CATEGORY_CAP = 4;
+const CROSSTAB_SUBGROUP_CAP = 4;
+
+export function buildCrosstabAriaSummary(dataset, categoryCap = CROSSTAB_CATEGORY_CAP, subgroupCap = CROSSTAB_SUBGROUP_CAP) {
+  if (!dataset?.categories?.length) return "";
+  const shownCats = dataset.categories.slice(0, categoryCap);
+  const parts = shownCats.map((c) => {
+    const nonZero = c.values
+      .map((v, i) => ({ label: dataset.subgroups[i], v }))
+      .filter((x) => x.v > 0)
+      .sort((a, b) => b.v - a.v);
+    const shownSub = nonZero.slice(0, subgroupCap).map((x) => `${x.label} ${x.v}`);
+    const moreSub = nonZero.length - shownSub.length;
+    return `${c.label}: ${shownSub.join(", ")}${moreSub > 0 ? `, and ${moreSub} more` : ""}`;
+  });
+  const moreCats = dataset.categories.length - shownCats.length;
+  let summary = parts.join("; ");
+  if (moreCats > 0) summary += `; and ${moreCats} more ${dataset.labelName || "categories"}`;
+  return summary;
+}

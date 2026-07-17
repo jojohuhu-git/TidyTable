@@ -142,6 +142,65 @@ function resolveGroupMarker(text, headers) {
   return null;
 }
 
+// P6-1 (R7 — flips the old P3-2 interim decline into real support): a
+// two-categorical-column request — grouped/stacked/100% stacked bars, the
+// subgroup column color-coded within each label category. Tried BEFORE the
+// single-column pipeline below so an explicit two-column phrasing ("drug mix
+// by diagnosis") is never misread as one column with leftover noise. Each
+// pattern's first capture is the SUBGROUP (the inner, color-coded axis) and
+// the second is the LABEL (the outer axis, one cluster/stack per value) —
+// the same "the word after by/per/across is the outer axis" convention
+// resolveGroupMarker already uses everywhere else in this file.
+const CROSSTAB_PATTERNS = [
+  { re: /\bbreakdown\s+of\s+(.+?)\s+within\s+each\s+(.+)/i, layout: "stacked100" },
+  { re: /\bbreakdown\s+of\s+(.+?)\s+(?:by|across|per)\s+(.+)/i, layout: "stacked100" },
+  { re: /^(.+?)\s+mix(?:es)?\s+by\s+(.+)$/i, layout: "stacked100" },
+  { re: /\bshares?\s+of\s+(.+?)\s+(?:by|across|per|within\s+each)\s+(.+)/i, layout: "stacked100" },
+  { re: /\bproportions?\s+of\s+(.+?)\s+(?:by|across|per|within\s+each)\s+(.+)/i, layout: "stacked100" },
+  { re: /^(.+?)\s+by\s+(.+?)\s+stacked\s*$/i, layout: "stacked" },
+  { re: /^(.+?)\s+by\s+(.+?)\s+(?:grouped|clustered)\s*$/i, layout: "grouped" },
+  { re: /\bcompar(?:e|ing)\s+(.+?)\s+(?:use\s+)?(?:between|across)\s+(.+)/i, layout: "grouped" },
+];
+
+const CROSSTAB_LAYOUT_LABEL = { grouped: "grouped bars", stacked: "stacked bars", stacked100: "100% stacked bars" };
+
+// A layout word anywhere in the request, for the bare "X by Y" fallback
+// (below) that has no dedicated sentence pattern of its own — same signal
+// words, looser match.
+function detectCrosstabLayoutWord(text) {
+  if (/\b(mix(?:es)?|breakdown|shares?\s+of|proportions?\s+of|100%?\s*stacked)\b/i.test(text)) return "stacked100";
+  if (/\bstacked\b/i.test(text)) return "stacked";
+  if (/\b(compar(?:e|ing)|grouped|clustered)\b/i.test(text)) return "grouped";
+  return null;
+}
+
+function resolveCrosstabSignal(raw, sheet, headers) {
+  for (const { re, layout } of CROSSTAB_PATTERNS) {
+    const m = raw.match(re);
+    if (!m) continue;
+    const subgroupSpan = bestColumnSpan(m[1], headers);
+    const labelSpan = bestColumnSpan(m[2], headers);
+    if (!subgroupSpan || !labelSpan) continue;
+    if (subgroupSpan.column === labelSpan.column) continue;
+    if (isNumeric(sheet, subgroupSpan.column) || isNumeric(sheet, labelSpan.column)) continue;
+    return {
+      labelCol: labelSpan.column, subgroupCol: subgroupSpan.column, layout,
+      stretched: subgroupSpan.score < 3 || labelSpan.score < 3,
+    };
+  }
+  return null;
+}
+
+function finishCrosstabPlan({ labelCol, subgroupCol, layout, stretched }) {
+  return {
+    status: "resolved", kind: "crosstab",
+    labelCol, subgroupCol, layout, filter: null,
+    confidence: stretched ? "stretched" : "exact",
+    lookedFor: `Comparing "${subgroupCol}" within each "${labelCol}" (${CROSSTAB_LAYOUT_LABEL[layout]}).`,
+    ignored: null, ties: [], rank: null,
+  };
+}
+
 // Phase 8.1 — "one brain, two steps". A chart request is read through the SAME
 // Step 3 pipeline (matchRequest) FIRST, so every Step 3 improvement — synonyms,
 // learned aliases, negation, typo tolerance, cohort filters — transfers to
@@ -277,6 +336,12 @@ function finishMatchedPlan({ labelCol, valueCol, aggMode, filter, rank }) {
 function resolveChartLocally(raw, sheet) {
   const headers = sheet.headers;
 
+  // P6-1: an explicit two-column sentence pattern ("drug mix by diagnosis",
+  // "compare drug use between diagnoses") is checked first, ahead of every
+  // single-column reading below.
+  const crosstab = resolveCrosstabSignal(raw, sheet, headers);
+  if (crosstab) return finishCrosstabPlan(crosstab);
+
   // Phase 4: "top 5"/"most common"/"least common"/"longest"/"shortest" — the
   // Step 9 mirror of the Q&A ranking family (offline/matcher.js's
   // detectTopN). Only the cap/direction transfers to a chart (a full ranked
@@ -407,16 +472,26 @@ function resolveChartLocally(raw, sheet) {
     } else {
       const secondCol = bestColumnSpan(remainder, headers.filter((h) => h.name !== labelCol && h.name !== valueCol));
       if (secondCol) {
-        // P3-2 (R7, 2026-07-11): the leftover names a second REAL column, not
-        // just a stray word — e.g. "diagnoses" in "compare drug use between
-        // diagnoses". Until P6-1 ships real two-column (grouped/stacked)
-        // charts, drawing a one-column chart here and marking it "exact"
-        // would silently answer a different question than the one asked.
-        // Decline plainly instead, naming both columns.
+        // P6-1 (R7 — flips the old P3-2 interim decline): the leftover names
+        // a second REAL column, not just a stray word — e.g. "diagnoses" in
+        // "compare drug use between diagnoses". With no numeric value column
+        // already claimed and both columns categorical, this is a genuine
+        // two-categorical-column crosstab; build it (default layout
+        // "grouped", or whatever layout word is present) instead of
+        // declining. A value column already claimed (a third variable, e.g.
+        // "average duration by ward and diagnosis") stays out of scope —
+        // decline, naming every column, rather than silently dropping one.
+        if (!valueCol && !isNumeric(sheet, labelCol) && !isNumeric(sheet, secondCol.column)) {
+          return finishCrosstabPlan({
+            labelCol, subgroupCol: secondCol.column,
+            layout: detectCrosstabLayoutWord(raw) || "grouped",
+            stretched: labelStretched || secondCol.score < 3,
+          });
+        }
         return {
           status: "none",
           reason: "two-column",
-          message: `That compares two things at once (${labelCol} and ${secondCol.column}). I can chart one at a time for now; pick one, or use Step 7.`,
+          message: `That compares more than one thing at once (${labelCol}, ${secondCol.column}${valueCol ? `, ${valueCol}` : ""}). I can chart one relationship at a time for now; pick one, or use Step 7.`,
         };
       } else if (leftover.length >= 2) {
         // Bug 2 companion: leftover text that isn't a real column and isn't a

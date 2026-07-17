@@ -279,6 +279,80 @@ export function groupSmallIntoOther(dataset, thresholdPct = 2) {
   return { ...dataset, points, otherGrouped: otherCount };
 }
 
+// P6-1: two-categorical-column crosstab (label x subgroup -> counts) for
+// grouped/stacked/100%-stacked bars — "drug mix by diagnosis", "drug use
+// compared between diagnoses". Counts only (no sum/average — the ask is
+// always "how many of each subgroup within each category"). Categories
+// (outer axis) are never capped or folded (that is P6-5's small-multiples
+// territory); subgroups (the color-coded inner axis) ARE capped at the
+// Okabe-Ito 8-color palette — beyond that, the smallest subgroups fold into
+// one "Other" bucket per category, named the same way groupSmallIntoOther
+// already names a folded "Other" bar, so a legend never needs a 9th color.
+const CROSSTAB_SUBGROUP_CAP = 8;
+
+export function buildCrosstabDataset(sheet, labelCol, subgroupCol, options = {}) {
+  const { filter = null } = options;
+  const rows = applyFilter(sheet.rows, filter);
+
+  const labelTotals = new Map(); // foldKey -> { label, total }
+  const subgroupTotals = new Map(); // foldKey -> { label, total }
+  const cells = new Map(); // labelKey -> Map(subgroupKey -> count)
+
+  for (const r of rows) {
+    const lRaw = r[labelCol];
+    const sRaw = r[subgroupCol];
+    if (lRaw == null || String(lRaw).trim() === "") continue;
+    if (sRaw == null || String(sRaw).trim() === "") continue;
+    const lKey = foldKey(lRaw);
+    const sKey = foldKey(sRaw);
+    if (!labelTotals.has(lKey)) labelTotals.set(lKey, { label: String(lRaw), total: 0 });
+    labelTotals.get(lKey).total += 1;
+    if (!subgroupTotals.has(sKey)) subgroupTotals.set(sKey, { label: String(sRaw), total: 0 });
+    subgroupTotals.get(sKey).total += 1;
+    if (!cells.has(lKey)) cells.set(lKey, new Map());
+    const m = cells.get(lKey);
+    m.set(sKey, (m.get(sKey) || 0) + 1);
+  }
+
+  const labelOrder = [...labelTotals.entries()].sort((a, b) => b[1].total - a[1].total);
+  let subgroupOrder = [...subgroupTotals.entries()].sort((a, b) => b[1].total - a[1].total);
+
+  let otherGrouped = 0;
+  let otherKeys = new Set();
+  if (subgroupOrder.length > CROSSTAB_SUBGROUP_CAP) {
+    const folded = subgroupOrder.slice(CROSSTAB_SUBGROUP_CAP - 1);
+    otherGrouped = folded.length;
+    otherKeys = new Set(folded.map(([k]) => k));
+    subgroupOrder = subgroupOrder.slice(0, CROSSTAB_SUBGROUP_CAP - 1);
+  }
+  const subgroups = subgroupOrder.map(([, v]) => v.label);
+  if (otherGrouped > 0) subgroups.push(`Other (${otherGrouped} smaller groups)`);
+  const subgroupIndex = new Map(subgroupOrder.map(([k], i) => [k, i]));
+  const otherIndex = otherGrouped > 0 ? subgroups.length - 1 : -1;
+
+  const categories = labelOrder.map(([lKey, lv]) => {
+    const values = new Array(subgroups.length).fill(0);
+    const rowCells = cells.get(lKey);
+    if (rowCells) {
+      for (const [sKey, count] of rowCells) {
+        const idx = otherKeys.has(sKey) ? otherIndex : subgroupIndex.get(sKey);
+        if (idx != null) values[idx] += count;
+      }
+    }
+    return { label: lv.label, total: values.reduce((s, v) => s + v, 0), values };
+  });
+
+  return {
+    kind: "crosstab",
+    labelName: labelCol,
+    subgroupName: subgroupCol,
+    categories,
+    subgroups,
+    filter,
+    ...(otherGrouped > 0 ? { otherGrouped } : {}),
+  };
+}
+
 // Phase 4 (2026-07-10): the Step 9 mirror of the Q&A "most common"/"top N"
 // ranking family (see offline/matcher.js's detectTopN) — "top 5 drugs" caps
 // the bar chart at 5, sorted by count, largest first; "least common" reorders

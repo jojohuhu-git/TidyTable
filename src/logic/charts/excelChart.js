@@ -14,6 +14,13 @@ const CHART_LABEL = {
   scatter: "Scatter (X Y)",
 };
 
+// P6-1: the crosstab's own layout -> Excel chart name mapping.
+const CROSSTAB_CHART_LABEL = {
+  grouped: "Clustered Column",
+  stacked: "Stacked Column",
+  stacked100: "100% Stacked Column",
+};
+
 // W4: a helper aggregation table step, spelled out exactly (the same rows,
 // in the same order, that the preview drew) — so building the chart from
 // numbers already worked out by hand is possible even when the raw sheet
@@ -76,6 +83,84 @@ function bucketStep(dataset) {
   };
 }
 
+// P6-1: the helper table for a crosstab is a small grid (one row per label
+// category, one column per subgroup) — always a helper table, never "select
+// these columns side by side", since the raw sheet is one row per record,
+// not already shaped like a crosstab.
+function crosstabHelperTableStep(dataset) {
+  const header = [dataset.labelName, ...dataset.subgroups].join(" | ");
+  const rows = dataset.categories.slice(0, 12)
+    .map((c) => `${c.label} — ${dataset.subgroups.map((s, i) => `${s}: ${c.values[i]}`).join(", ")}`)
+    .join("; ");
+  const more = dataset.categories.length > 12 ? `, and ${dataset.categories.length - 12} more` : "";
+  return {
+    title: "Build the helper table",
+    instruction:
+      `In a block of empty columns, type these headers across the top row: ${header}. Then one row per ` +
+      `${dataset.labelName}, with each ${dataset.subgroupName} count in its own column, exactly as shown here: ` +
+      `${rows}${more}. This is the same table the preview above drew from — matching it row-for-row is how you ` +
+      `know the chart will match.`,
+  };
+}
+
+// P6-1: numbered Excel steps for a grouped/stacked/100%-stacked crosstab.
+// `rec` is the advisor's recommendation (recommendChart's return value) —
+// only `rec.layout` is read. Kept as a separate function (rather than folded
+// into excelChartSteps below) because a crosstab's dataset shape has no
+// `points`/`valueName` — every existing step-builder below assumes those.
+function crosstabSteps(dataset, rec) {
+  const layout = rec.layout || "grouped";
+  const label = CROSSTAB_CHART_LABEL[layout] || CROSSTAB_CHART_LABEL.grouped;
+  const steps = [crosstabHelperTableStep(dataset)];
+
+  steps.push({
+    title: "Insert the chart",
+    instruction: `Select the helper table above (including its header row), then go to the Insert tab and choose ` +
+      `"${label}" from the Charts group. On Windows and Mac the Insert tab is in the same place; the chart buttons ` +
+      `look slightly different but carry the same names.`,
+  });
+
+  steps.push({
+    title: "Turn on the legend",
+    instruction: `Click the chart, then the "+" (Chart Elements) button next to it and make sure "Legend" is ` +
+      `checked — with ${dataset.subgroups.length} ${dataset.subgroupName} colors on screen, the legend is what ` +
+      `tells them apart.`,
+  });
+
+  if (layout === "stacked100") {
+    steps.push({
+      title: "Check the axis is in percent",
+      instruction: `Excel's "100% Stacked Column" scales each bar to 100% automatically. Click the vertical axis ` +
+        `and confirm the numbers read as percentages (right-click the axis > Format Axis > Number > Percentage if not).`,
+    });
+  }
+
+  steps.push({
+    title: "Label the axes",
+    instruction: `Click the chart title and axis titles and type plain names (for example "${dataset.subgroupName} ` +
+      `by ${dataset.labelName}"). Clear labels are the difference between a chart people trust and one they don't.`,
+  });
+
+  if (dataset.otherGrouped) {
+    steps.push({
+      title: "Remember the folded groups",
+      instruction: `The smallest ${dataset.otherGrouped} ${dataset.subgroupName} values are combined into "Other" ` +
+        `in the helper table above, so the legend stays readable — they are not missing, just grouped together.`,
+    });
+  }
+
+  if (dataset.filter) {
+    steps.push({
+      title: "Remember the filter",
+      instruction: `This chart only counts rows where "${dataset.filter.column}" is "${dataset.filter.value}" — ` +
+        `filter your data to that first (Data > Filter), or the helper table above already reflects it.`,
+    });
+  }
+
+  steps.push(colorNoteStep());
+  return steps;
+}
+
 function colorNoteStep() {
   return {
     title: "Match the colors (optional)",
@@ -95,6 +180,7 @@ function colorNoteStep() {
 // Returns [{ title, instruction }] (no formulas — a chart is clicks, not a
 // formula).
 export function excelChartSteps(chartType, dataset, rec = {}, emphasis = {}) {
+  if (dataset.kind === "crosstab") return crosstabSteps(dataset, rec);
   const steps = [];
   const horizontal = chartType === "bar" && rec.layout === "horizontal";
   const label = CHART_LABEL[horizontal ? "bar-horizontal" : chartType] || "chart";
