@@ -1,3 +1,6 @@
+> **Superseded** by `docs/archive/handoff-2026-07-16-p2-1-done.md` (P2-1 done,
+> baseline now 816 passing). Kept for its P1-4b/R6 design-decision detail.
+
 # TidyTable — Handoff after R6 live-verify + P1-4b (checkbox picker) done (2026-07-16)
 
 Branch: `main`, off `main`. **NOT pushed** — TidyTable rule: never push to
