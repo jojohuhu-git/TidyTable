@@ -1,3 +1,8 @@
+> **SUPERSEDED** by
+> [handoff-2026-07-17-p3-2-two-column-decline-done.md](handoff-2026-07-17-p3-2-two-column-decline-done.md)
+> — P3-2 (the item the owner chose next, out of the queue this handoff left
+> open) is now done.
+
 # TidyTable — Handoff after P2-3 (plain-English cleaning box in Step 2) done (2026-07-17)
 
 Branch: `main`, off `main`. **NOT pushed** — TidyTable rule: never push to
