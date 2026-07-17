@@ -1,5 +1,9 @@
 # TidyTable — Handoff after P4-4 done (2026-07-17)
 
+> **SUPERSEDED** by [handoff-2026-07-17-p6-1-done.md](handoff-2026-07-17-p6-1-done.md)
+> — this handoff's open question (P6-1 vs. the Step-2 example-chips item)
+> was asked and answered in that later session; P6-1 is now done too.
+
 > **SUPERSEDES** [handoff-2026-07-17-p4-1-p4-2-p4-6-done.md](handoff-2026-07-17-p4-1-p4-2-p4-6-done.md)
 > — that handoff's one open question (which P4-4 UI shape) was asked and
 > answered this session; P4-4 is now done.
