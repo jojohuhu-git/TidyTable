@@ -3,7 +3,9 @@ import { analyze } from "../logic/stats/runStats.js";
 import { rTTest, rChiSquare } from "../logic/rscripts/templates.js";
 import { downloadText } from "../logic/workbook.js";
 import { columnPickerOptions } from "../logic/columnPickerOptions.js";
+import { buildStatsExamples } from "../logic/offline/examplePrompts.js";
 import { CopyButton } from "./ResultsPanel.jsx";
+import StepHelpPanel from "./StepHelpPanel.jsx";
 
 // P2-22: the t-test crosscheck used to print every raw value inline, which
 // is unreadable (and slow to render) for a real-sized group. Show at most
@@ -20,6 +22,7 @@ export default function StatsPanel({ sheet }) {
   // "Patient ID" as a grouping column.
   const groupingOptions = useMemo(() => columnPickerOptions(sheet, "grouping"), [sheet]);
   const outcomeOptions = useMemo(() => columnPickerOptions(sheet, "outcome"), [sheet]);
+  const examples = useMemo(() => buildStatsExamples(sheet), [sheet]);
   const [colA, setColA] = useState("");
   const [colB, setColB] = useState("");
 
@@ -41,6 +44,14 @@ export default function StatsPanel({ sheet }) {
 
   return (
     <div className="stats-panel">
+      <StepHelpPanel
+        whatItDoes="Pick a grouping column and an outcome column and the app chooses the right statistical test, builds the table the numbers come from, and shows every step."
+        cantDoYet={["Compares exactly two columns at a time.", "The grouping column needs two (or a handful of) distinct values, not a free-text or ID column."]}
+        examples={examples.map((ex) => ({
+          label: ex.label,
+          onClick: () => { setColA(ex.colA); setColB(ex.colB); },
+        }))}
+      />
       <div className="stats-pickers">
         <label>
           Grouping column

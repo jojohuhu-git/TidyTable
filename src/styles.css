@@ -247,6 +247,19 @@ body {
 .offline-cheatsheet ul { margin: 0.5rem 0 0; padding-left: 1.2rem; font-size: 0.9rem; }
 .offline-cheatsheet li { margin-bottom: 0.35rem; }
 
+/* P2-4: the shared "How to use this step" panel on every step card. */
+.step-help { margin: 0 0 0.9rem; }
+.step-help summary {
+  cursor: pointer; color: var(--accent); font-weight: 600; font-size: 0.9rem; list-style: none;
+}
+.step-help summary::-webkit-details-marker { display: none; }
+.step-help summary::before { content: "▸ "; font-size: 0.75em; }
+.step-help[open] summary::before { content: "▾ "; }
+.step-help-does { margin: 0.5rem 0 0.3rem; font-size: 0.9rem; }
+.step-help-cant { margin: 0 0 0.5rem; font-size: 0.9rem; color: var(--ink-soft); }
+.step-help-examples { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.step-help-examples-label { font-size: 0.78rem; color: var(--ink-soft); margin-right: 0.2rem; }
+
 .summary-box {
   background: var(--accent-soft); border-radius: var(--rad);
   padding: 0.8rem 1rem; margin-bottom: 0.9rem;

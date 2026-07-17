@@ -979,11 +979,7 @@ export default function App() {
             <h2><span className="step-label">Step 2</span> — Check your data for problems</h2>
             <p className="section-intro">
               Before you do anything else, here is what an automatic check found in your data —
-              duplicates, missing values, numbers stored as text, and more. Tick the ones you
-              want fixed and apply them. Nothing changes until you choose it.
-              {workbook.sheets.length > 1 && (
-                <> Only the first sheet, "{workbook.sheets[0].name}", is checked for now.</>
-              )}
+              tick the ones you want fixed and apply them.
             </p>
             <CheckupPanel
               key={`checkup-${checkupVersion}`}
@@ -1265,9 +1261,8 @@ export default function App() {
             <section className="card">
               <h2><span className="step-label">Step 7</span> — Compare two groups (statistics)</h2>
               <p className="section-intro">
-                Pick a grouping column and an outcome column. The app builds the table the
-                numbers come from, chooses the right test, and shows every step — so you can
-                see where each number came from and check it yourself. No key needed.
+                Pick a grouping column and an outcome column and the app builds the table, picks
+                the right test, and shows every step. No key needed.
                 {workbook.sheets.length > 1 && (
                   <> Only the first sheet, "{workbook.sheets[0].name}", is used here.</>
                 )}
@@ -1289,8 +1284,8 @@ export default function App() {
             <section className="card">
               <h2><span className="step-label">Step 9</span> — Make a chart</h2>
               <p className="section-intro">
-                Pick what to compare. The app recommends the one chart that fits your data, shows a
-                preview here, and gives numbered steps to build the same chart in Excel.
+                Pick what to compare and the app recommends the one chart that fits, with numbered
+                steps to build the same chart in Excel.
                 {workbook.sheets.length > 1 && (
                   <> Only the first sheet, "{workbook.sheets[0].name}", is used here.</>
                 )}
@@ -1308,9 +1303,8 @@ export default function App() {
             <section className="card">
               <h2><span className="step-label">Step 10</span> — Combine and reshape</h2>
               <p className="section-intro">
-                Common multi-step moves: find rows missing from another sheet, look up a value from a
-                second sheet, split paired list cells, or switch between one row per visit and one row
-                per patient. Nothing is guessed — anything that doesn't line up is shown, not dropped.
+                Common multi-step moves: find rows missing from another sheet, look up a value, split
+                paired list cells, or switch between one row per visit and one row per patient.
                 {workbook.sheets.length > 1 && (
                   <> The first sheet, "{workbook.sheets[0].name}", is always the starting point; pick which other sheet to bring in below.</>
                 )}

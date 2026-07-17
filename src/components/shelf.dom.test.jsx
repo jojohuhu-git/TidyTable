@@ -31,3 +31,34 @@ describe("ShelfPanel — long2wide collision notice", () => {
     expect(screen.getByRole("status")).toHaveTextContent(/1 value was overwritten/i);
   });
 });
+
+// P2-4: the shared "How to use this step" panel, wired to the one shelf
+// operation ("one row per patient" -> wide-to-long) that needs only the
+// first sheet, so its example chip can honestly run with no second sheet.
+function onePatientPerRowWorkbook() {
+  const patients = deriveSheet("Patients", [
+    { PatientID: "P1", Age: "70", Weight: "80" },
+    { PatientID: "P2", Age: "60", Weight: "65" },
+    { PatientID: "P3", Age: "55", Weight: "90" },
+    { PatientID: "P4", Age: "40", Weight: "70" },
+  ]);
+  return { fileName: "p.xlsx", sheets: [patients] };
+}
+
+describe("ShelfPanel — P2-4 how-to-use panel", () => {
+  it("shows the panel and a single-sheet reshape example that fills the pickers and runs", () => {
+    render(<ShelfPanel workbook={onePatientPerRowWorkbook()} />);
+    expect(screen.getByText("How to use this step")).toBeInTheDocument();
+
+    const chip = screen.getByRole("button", { name: /PatientID/i });
+    fireEvent.click(chip);
+
+    expect(screen.getAllByRole("combobox")[0].value).toBe("wide2long");
+    expect(screen.getByText(/\d+ rows\./)).toBeInTheDocument();
+  });
+
+  it("says most operations need a second sheet, for a single-sheet workbook", () => {
+    render(<ShelfPanel workbook={onePatientPerRowWorkbook()} />);
+    expect(screen.getByText(/Most of these need a second sheet/i)).toBeInTheDocument();
+  });
+});

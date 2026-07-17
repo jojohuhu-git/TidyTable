@@ -4,6 +4,8 @@ import { downloadRowsAsXlsx } from "../logic/workbook.js";
 import {
   antiJoin, leftJoinLookup, explodePairedLists, asOfJoin, reshapeLongToWide, reshapeWideToLong,
 } from "../logic/offline/shelf.js";
+import { buildShelfExamples } from "../logic/offline/examplePrompts.js";
+import StepHelpPanel from "./StepHelpPanel.jsx";
 
 // Step 10 (build prompt §8, recipe shelf): the multi-step data moves, each run on
 // this computer. Every operation reports what didn't line up (unmatched rows,
@@ -32,6 +34,7 @@ export default function ShelfPanel({ workbook }) {
   const aCols = A.headers.map((h) => h.name);
   const bCols = B ? B.headers.map((h) => h.name) : [];
   const opDef = OPS.find((o) => o.id === op);
+  const examples = useMemo(() => buildShelfExamples(A), [A]);
 
   const result = useMemo(() => {
     if (!op) return null;
@@ -57,6 +60,18 @@ export default function ShelfPanel({ workbook }) {
 
   return (
     <div className="shelf-panel">
+      <StepHelpPanel
+        whatItDoes="Multi-step moves that need more than a single count: find rows missing from another sheet, look up or attach a value from a second sheet, split paired list cells, or switch between one row per visit and one row per patient."
+        cantDoYet={[
+          sheets.length < 2
+            ? "Most of these need a second sheet in your file — only the reshape below works with one sheet."
+            : "Nothing is guessed — any row or list pair that doesn't line up is shown, not dropped.",
+        ]}
+        examples={examples.map((ex) => ({
+          label: ex.label,
+          onClick: () => { setOp("wide2long"); setKey(ex.key); setBring(ex.bring); },
+        }))}
+      />
       <div className="wizard-q">
         <p className="wizard-label">What do you want to do?</p>
         <select value={op} onChange={(e) => { setOp(e.target.value); setBring([]); }}>

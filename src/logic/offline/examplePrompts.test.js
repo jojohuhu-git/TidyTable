@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { buildExamplePrompts, OFFLINE_INTENTS } from "./examplePrompts.js";
+import {
+  buildExamplePrompts, OFFLINE_INTENTS, buildChartExamplePrompts, buildStatsExamples, buildShelfExamples,
+} from "./examplePrompts.js";
 import { matchRequest } from "./matcher.js";
+import { resolveChartRequest } from "../charts/textToChart.js";
+import { analyze } from "../stats/runStats.js";
 import { deriveSheet } from "../workbook.js";
 
 // W2f: every example prompt must be genuinely answerable offline (verified
@@ -64,6 +68,68 @@ describe("buildExamplePrompts — verified, data-driven example questions", () =
     const wb = dcAntibioticsWorkbook();
     const examples = buildExamplePrompts(wb);
     expect(examples.some((e) => e.pattern.includes("group"))).toBe(true);
+  });
+});
+
+// P2-4: Steps 7, 9, and 10 get their own verified, data-driven "Try these"
+// builders (Step 3's buildExamplePrompts stays the model). Each candidate is
+// actually run through the same function the real UI action calls, so a
+// shown chip is never a promise the step can't keep.
+describe("buildChartExamplePrompts — verified chart requests for Step 9", () => {
+  it("returns [] with no rows", () => {
+    expect(buildChartExamplePrompts(null)).toEqual([]);
+    expect(buildChartExamplePrompts(deriveSheet("Empty", []))).toEqual([]);
+  });
+
+  it("every returned text resolves through resolveChartRequest, using real column names", () => {
+    const wb = dcAntibioticsWorkbook();
+    const examples = buildChartExamplePrompts(wb.sheets[0]);
+    expect(examples.length).toBeGreaterThan(0);
+    for (const text of examples) {
+      const res = resolveChartRequest(text, wb.sheets[0]);
+      expect(res.status).toBe("resolved");
+    }
+    expect(examples.join(" | ")).toMatch(/Ward|Duration_days/);
+  });
+});
+
+describe("buildStatsExamples — verified grouping/outcome pairs for Step 7", () => {
+  it("returns [] with no rows", () => {
+    expect(buildStatsExamples(deriveSheet("Empty", []))).toEqual([]);
+  });
+
+  it("every returned pair actually analyzes successfully", () => {
+    const sheet = deriveSheet("D", [
+      { Group: "A", Outcome: "yes" }, { Group: "A", Outcome: "no" },
+      { Group: "B", Outcome: "yes" }, { Group: "B", Outcome: "yes" },
+      { Group: "A", Outcome: "yes" }, { Group: "B", Outcome: "no" },
+    ]);
+    const examples = buildStatsExamples(sheet);
+    expect(examples.length).toBeGreaterThan(0);
+    for (const ex of examples) {
+      const result = analyze(sheet, ex.colA, ex.colB);
+      expect(result.ok).toBe(true);
+    }
+  });
+});
+
+describe("buildShelfExamples — verified single-sheet reshape for Step 10", () => {
+  it("returns [] with no id-like column", () => {
+    const sheet = deriveSheet("D", [{ Ward: "ICU" }, { Ward: "General" }]);
+    expect(buildShelfExamples(sheet)).toEqual([]);
+  });
+
+  it("returns a reshape example that actually produces rows", () => {
+    const sheet = deriveSheet("Patients", [
+      { PatientID: "P1", Age: "70", Weight: "80" },
+      { PatientID: "P2", Age: "60", Weight: "65" },
+      { PatientID: "P3", Age: "55", Weight: "90" },
+      { PatientID: "P4", Age: "40", Weight: "70" },
+    ]);
+    const examples = buildShelfExamples(sheet);
+    expect(examples.length).toBe(1);
+    expect(examples[0].key).toBe("PatientID");
+    expect(examples[0].bring.length).toBeGreaterThan(0);
   });
 });
 

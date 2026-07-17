@@ -10,6 +10,10 @@
 // are dropped rather than shown.
 
 import { matchRequest } from "./matcher.js";
+import { resolveChartRequest } from "../charts/textToChart.js";
+import { analyze } from "../stats/runStats.js";
+import { reshapeWideToLong } from "./shelf.js";
+import { columnPickerOptions } from "../columnPickerOptions.js";
 
 const MAX_ROWS_SCANNED = 300;
 const MAX_VALUE_LEN = 40;
@@ -127,6 +131,102 @@ export function buildExamplePrompts(workbook, max = 6) {
   }
 
   return out.slice(0, max);
+}
+
+// P2-4: up to `max` verified chart requests for Step 9's "Try these", built
+// from the sheet's own column names in the same "by X" / bare-column phrasing
+// the free-text box already understands (resolveChartRequest is the SAME
+// pipeline "Make this chart" runs, so a shown example is never a promise the
+// chart box can't keep).
+export function buildChartExamplePrompts(sheet, max = 3) {
+  if (!sheet?.rows?.length || !sheet.headers?.length) return [];
+  const cols = profileColumns(sheet);
+  const groupCandidates = cols
+    .filter((c) => !c.isNumeric && !c.idLike && c.distinct >= 2 && c.distinct <= 12)
+    .sort((a, b) => a.distinct - b.distinct);
+  const numericCol = cols.find((c) => c.isNumeric && !c.idLike);
+
+  const out = [];
+  const push = (text) => {
+    if (!text || out.includes(text)) return;
+    const res = resolveChartRequest(text, sheet);
+    if (res.status !== "resolved") return;
+    out.push(text);
+  };
+
+  for (const g of groupCandidates.slice(0, 2)) push(g.name);
+  if (numericCol && groupCandidates[0]) push(`average ${numericCol.name} by ${groupCandidates[0].name}`);
+
+  return out.slice(0, max);
+}
+
+// P2-4: up to `max` verified grouping/outcome column pairs for Step 7's
+// "Try these", each actually run through analyze() so a shown example always
+// produces a real comparison rather than the "needs exactly two groups"
+// decline.
+export function buildStatsExamples(sheet, max = 2) {
+  if (!sheet?.rows?.length || !sheet.headers?.length) return [];
+  const grouping = columnPickerOptions(sheet, "grouping").filter((o) => o.likely);
+  const outcome = columnPickerOptions(sheet, "outcome").filter((o) => o.likely);
+
+  const out = [];
+  for (const g of grouping) {
+    for (const o of outcome) {
+      if (g.name === o.name) continue;
+      if (out.some((e) => e.colA === g.name && e.colB === o.name)) continue;
+      let result;
+      try {
+        result = analyze(sheet, g.name, o.name);
+      } catch {
+        continue;
+      }
+      if (!result?.ok) continue;
+      out.push({ colA: g.name, colB: o.name, label: `${o.name} by ${g.name}` });
+      if (out.length >= max) return out;
+    }
+  }
+  // Two categorical columns (a contingency table) is also a valid comparison —
+  // try a pair of grouping-typed columns if the numeric pairing above found
+  // nothing.
+  if (out.length < max) {
+    for (let i = 0; i < grouping.length && out.length < max; i++) {
+      for (let j = i + 1; j < grouping.length && out.length < max; j++) {
+        const a = grouping[i], b = grouping[j];
+        if (out.some((e) => e.colA === a.name && e.colB === b.name)) continue;
+        let result;
+        try {
+          result = analyze(sheet, a.name, b.name);
+        } catch {
+          continue;
+        }
+        if (!result?.ok) continue;
+        out.push({ colA: a.name, colB: b.name, label: `${a.name} vs ${b.name}` });
+      }
+    }
+  }
+  return out;
+}
+
+// P2-4: up to `max` verified reshape examples for Step 10's "Try these",
+// limited to the ONE operation that needs only the first sheet — wide→long —
+// since the other five shelf operations need a second sheet uploaded before
+// a chip could honestly run them. Each candidate is actually reshaped and
+// only kept if it produces real rows.
+export function buildShelfExamples(sheet, max = 1) {
+  if (!sheet?.rows?.length || !sheet.headers?.length) return [];
+  const cols = profileColumns(sheet);
+  const idCol = cols.find((c) => c.idLike);
+  if (!idCol) return [];
+  const bring = cols.filter((c) => c.name !== idCol.name && c.topValue).slice(0, 2).map((c) => c.name);
+  if (!bring.length) return [];
+  let rows;
+  try {
+    rows = reshapeWideToLong(sheet.rows, idCol.name, bring);
+  } catch {
+    return [];
+  }
+  if (!rows.length) return [];
+  return [{ key: idCol.name, bring, label: `Turn ${bring.join(" & ")} into one row each per ${idCol.name}` }].slice(0, max);
 }
 
 // The plain-words cheat-sheet of the five intents the offline engine supports,

@@ -37,6 +37,14 @@ describe("StatsPanel shows the work", () => {
     expect(screen.getByText("Fisher's exact test")).toBeInTheDocument();
     expect(screen.getByText(/below 5/i)).toBeInTheDocument();
   });
+
+  it("P2-4: shows a 'How to use this step' panel with a verified example that fills both pickers and runs", () => {
+    render(<StatsPanel sheet={tableSheet([[12, 8], [5, 15]])} />);
+    expect(screen.getByText("How to use this step")).toBeInTheDocument();
+    const chip = screen.getByRole("button", { name: /Group vs Outcome|Outcome by Group/i });
+    fireEvent.click(chip);
+    expect(screen.getByText("Chi-square test")).toBeInTheDocument();
+  });
 });
 
 describe("RegressionWizard gates on events per variable", () => {

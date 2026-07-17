@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { checkupSheet } from "../logic/checkup/scan.js";
 import ClarifyBox from "./ClarifyBox.jsx";
+import StepHelpPanel from "./StepHelpPanel.jsx";
 
 const CENSORED_OPTIONS = [
   { value: "boundary", label: "Use the limit number", detail: "treat \"<0.5\" as 0.5" },
@@ -101,14 +102,27 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
     onApply(fixes);
   }
 
+  // P2-4: no clickable "Try these" here — this step has no free-text box to
+  // fill, and P2-3 (the plain-English cleaning box that WOULD give the chips
+  // something to run) hasn't shipped yet. A fake action would be dishonest.
+  const helpPanel = (
+    <StepHelpPanel
+      whatItDoes="Automatically scans your first sheet for common problems — duplicates, missing values, numbers stored as text, mixed date formats, spelling variants, impossible values, limit results, and packed cells — so you can tick the ones you want fixed."
+      cantDoYet={["Only checks the first sheet.", "Nothing changes until you tick a fix and press Apply."]}
+    />
+  );
+
   if (visible.length === 0) {
     return (
-      <p className="empty-state">
-        No common data problems were found in this sheet. You can move on to describing what
-        you want. (This check looks for duplicates, missing values, numbers stored as text,
-        mixed date formats, spelling variants, impossible values, limit results, and packed
-        cells.)
-      </p>
+      <div>
+        {helpPanel}
+        <p className="empty-state">
+          No common data problems were found in this sheet. You can move on to describing what
+          you want. (This check looks for duplicates, missing values, numbers stored as text,
+          mixed date formats, spelling variants, impossible values, limit results, and packed
+          cells.)
+        </p>
+      </div>
     );
   }
 
@@ -183,6 +197,7 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
 
   return (
     <div>
+      {helpPanel}
       {safeFixable.length > 0 && (
         <section className="finding-group">
           <div className="finding-group-head">

@@ -49,6 +49,15 @@ describe("ChartsPanel recommends and previews a chart", () => {
     expect(labelsOf()).toEqual(["East", "North", "South"]);
   });
 
+  it("P2-4: the 'How to use this step' panel's example fills the text box and draws the chart", () => {
+    render(<ChartsPanel sheet={wardSheet()} />);
+    expect(screen.getByText("How to use this step")).toBeInTheDocument();
+    const chip = screen.getByRole("button", { name: /Ward/i });
+    fireEvent.click(chip);
+    expect(screen.getByPlaceholderText(/organisms in urine/i).value).toBe("Ward");
+    expect(document.querySelector("svg.chart-svg")).not.toBeNull();
+  });
+
   it("Phase 8.5: 'only top 2' caps the number of bars", () => {
     render(<ChartsPanel sheet={wardSheet()} seed={{ request: "patients by ward", nonce: 1 }} />);
     fireEvent.change(screen.getByPlaceholderText(/only top 5/i), { target: { value: "only top 2" } });

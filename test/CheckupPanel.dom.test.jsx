@@ -95,4 +95,12 @@ describe("CheckupPanel", () => {
     const fixes = onApply.mock.calls[0][0];
     expect(fixes.map((f) => f.normalizer).sort()).toEqual(["dedupeRows", "trimCase"]);
   });
+
+  it("P2-4: shows the 'How to use this step' panel with no clickable examples (no text box to fill yet)", () => {
+    render(<CheckupPanel sheet={messySheet()} busy={false} onApply={() => {}} />);
+    expect(screen.getByText("How to use this step")).toBeInTheDocument();
+    expect(screen.getByText(/Automatically scans your first sheet/i)).toBeInTheDocument();
+    expect(screen.getByText(/Only checks the first sheet/i)).toBeInTheDocument();
+    expect(screen.queryByText("Try these:")).toBeNull();
+  });
 });

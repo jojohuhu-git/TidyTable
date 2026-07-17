@@ -7,8 +7,10 @@ import { buildChartTitle } from "../logic/charts/chartTitle.js";
 import { downloadChartPng } from "../logic/charts/downloadChartPng.js";
 import { resolveChartRequest } from "../logic/charts/textToChart.js";
 import { isQualitative } from "../logic/charts/palette.js";
+import { buildChartExamplePrompts } from "../logic/offline/examplePrompts.js";
 import ChartPreview from "./ChartPreview.jsx";
 import ClarifyBox from "./ClarifyBox.jsx";
+import StepHelpPanel from "./StepHelpPanel.jsx";
 
 // Step 9 (build prompt §11; W4 free-text): describe the chart in plain words and
 // the app designs it — picking the column(s), aggregation, layout, and colors —
@@ -23,6 +25,7 @@ export default function ChartsPanel({ sheet, seed }) {
   // text ones — picking a text column then quietly fell back to a count.
   // Filter to numeric columns so the label is never a lie.
   const numericColumns = sheet.headers.filter((h) => h.type === "number").map((h) => h.name);
+  const examples = useMemo(() => buildChartExamplePrompts(sheet), [sheet]);
   const [labelCol, setLabelCol] = useState("");
   const [valueCol, setValueCol] = useState("");
   const [aggMode, setAggMode] = useState("count"); // "count" | "sum" | "average"
@@ -139,6 +142,14 @@ export default function ChartsPanel({ sheet, seed }) {
 
   return (
     <div className="charts-panel">
+      <StepHelpPanel
+        whatItDoes="Describe the chart in plain words (or pick columns by hand) and the app recommends one chart type, draws a preview, and gives numbered steps to build the same chart in Excel."
+        cantDoYet={["One comparison per chart for now — two-variable requests are declined rather than drawn wrong."]}
+        examples={examples.map((text) => ({
+          label: text,
+          onClick: () => { setText(text); runText(text); },
+        }))}
+      />
       {/* W4: describe the chart in words; the app designs it. */}
       <div className="chart-text-row">
         <label className="chart-text-label">
