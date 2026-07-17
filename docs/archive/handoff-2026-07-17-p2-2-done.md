@@ -1,5 +1,8 @@
 # TidyTable — Handoff after P2-2 (safe/needs-your-call split) done (2026-07-17)
 
+**SUPERSEDED** by [handoff-2026-07-17-p2-4-done.md](handoff-2026-07-17-p2-4-done.md) —
+P2-4 (the next item in this file's queue) is now done too. Read the newer file instead.
+
 Branch: `main`, off `main`. **NOT pushed** — TidyTable rule: never push to
 `main` without the owner's explicit go-ahead (pushing publishes the live site
 at https://jojohuhu-git.github.io/TidyTable/). `git status -sb` shows
