@@ -31,6 +31,34 @@ function helperTableStep(dataset) {
   };
 }
 
+// P3-3: name whatever emphasis is on screen (a highlighted category, an
+// average/threshold line, the automatic largest-category callout) so the
+// hand-built Excel chart isn't a step behind the in-app preview. Returns
+// null when nothing is set, so a chart with no emphasis gets no extra step.
+function emphasisStep(emphasis) {
+  const parts = [];
+  if (emphasis.highlightLabel) {
+    parts.push(
+      `Make the "${emphasis.highlightLabel}" bar stand out: click it once to select just that bar, then ` +
+      `Format Data Point > Fill and pick the accent color (or bold its data label).`,
+    );
+  }
+  if (emphasis.referenceLine) {
+    const rl = emphasis.referenceLine;
+    const desc = rl.label === "average" ? `the average (${rl.value})` : `${rl.value}`;
+    parts.push(
+      `Add a reference line at ${desc}: put that value in a new column repeated for every row, add it as a ` +
+      `second series, then change just that series' chart type to a line (Chart Design > Change Chart Type) so ` +
+      `it draws as a dashed marker across the bars.`,
+    );
+  }
+  if (emphasis.extremeCallout) {
+    parts.push(`Caption to include: "${emphasis.extremeCallout}".`);
+  }
+  if (!parts.length) return null;
+  return { title: "Match the emphasis", instruction: parts.join(" ") };
+}
+
 function colorNoteStep() {
   return {
     title: "Match the colors (optional)",
@@ -44,9 +72,12 @@ function colorNoteStep() {
 // dataset: from aggregate.js. `rec` is the advisor's recommendation object
 // (recommendChart's return value) — only `rec.layout` and `rec.offerGroupOther`
 // are read, so passing {} is fine for a caller that already knows the type.
+// `emphasis` (P3-3, optional): { highlightLabel, referenceLine, extremeCallout }
+// — whatever emphasis is currently on the in-app preview, named in words here
+// too so the two never drift apart.
 // Returns [{ title, instruction }] (no formulas — a chart is clicks, not a
 // formula).
-export function excelChartSteps(chartType, dataset, rec = {}) {
+export function excelChartSteps(chartType, dataset, rec = {}, emphasis = {}) {
   const steps = [];
   const horizontal = chartType === "bar" && rec.layout === "horizontal";
   const label = CHART_LABEL[horizontal ? "bar-horizontal" : chartType] || "chart";
@@ -107,6 +138,9 @@ export function excelChartSteps(chartType, dataset, rec = {}) {
       instruction: `This chart only counts rows where "${dataset.filter.column}" is "${dataset.filter.value}" — filter your data to that first (Data > Filter), or the helper table above already reflects it.`,
     });
   }
+
+  const emphasisStepObj = emphasisStep(emphasis);
+  if (emphasisStepObj) steps.push(emphasisStepObj);
 
   steps.push(colorNoteStep());
 

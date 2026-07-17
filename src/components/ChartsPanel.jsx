@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { buildDataset, groupSmallIntoOther, applyRankCap } from "../logic/charts/aggregate.js";
+import { buildDataset, groupSmallIntoOther, applyRankCap, describeExtreme } from "../logic/charts/aggregate.js";
 import { parseChartTweak, sortDataset } from "../logic/charts/chartTweaks.js";
 import { recommendChart } from "../logic/charts/advisor.js";
 import { excelChartSteps } from "../logic/charts/excelChart.js";
@@ -39,6 +39,8 @@ export default function ChartsPanel({ sheet, seed }) {
   const [sortMode, setSortMode] = useState(null); // Phase 8.5: "alpha" | "value" | null (chart default)
   const [tweakText, setTweakText] = useState(""); // Phase 8.5: the "adjust the chart" box
   const [tweakLog, setTweakLog] = useState([]); // applied tweaks, in words, for replay/recipe
+  const [highlightLabel, setHighlightLabel] = useState(null); // P3-3: "highlight X" — one category named
+  const [referenceLine, setReferenceLine] = useState(null); // P3-3: { value, label } — average/threshold dashed line
   const svgRef = useRef(null);
 
   // Apply a resolved (or confirmed) plan to the pickers below, so the dropdowns
@@ -53,6 +55,8 @@ export default function ChartsPanel({ sheet, seed }) {
     setChartRank(plan.rank || null);
     setSortMode(null);
     setTweakLog([]);
+    setHighlightLabel(null);
+    setReferenceLine(null);
   }
 
   // Phase 8.5: apply a plain-word tweak to the chart already on screen. Each
@@ -60,7 +64,7 @@ export default function ChartsPanel({ sheet, seed }) {
   // honest note when the request is already true or not yet supported — never a
   // silent no-op. Applied tweaks are logged so a replay can keep them.
   function runTweak(text = tweakText) {
-    const tweak = parseChartTweak(text);
+    const tweak = parseChartTweak(text, dataset);
     let note = "";
     if (tweak.kind === "topn") {
       setChartRank({ n: tweak.n, direction: chartRank?.direction === "least" ? "least" : "most" });
@@ -76,11 +80,27 @@ export default function ChartsPanel({ sheet, seed }) {
         : "A percentage only makes sense for a count — switch the Value to \"count\" first.";
     } else if (tweak.kind === "flip") {
       note = "Flipping between vertical and horizontal isn't a word tweak yet — the app already lays many categories out horizontally for you.";
+    } else if (tweak.kind === "highlight") {
+      setHighlightLabel(tweak.label);
+      note = `Highlighting "${tweak.label}".`;
+    } else if (tweak.kind === "highlight-ambiguous") {
+      setTextNote(`"${text}" matches more than one category (${tweak.options.join(", ")}) — type the exact one.`);
+      return;
+    } else if (tweak.kind === "highlight-unmatched") {
+      setTextNote(`I couldn't find that category in this chart. Check the spelling of the exact label.`);
+      return;
+    } else if (tweak.kind === "reference") {
+      if (chartType !== "bar") {
+        setTextNote("A reference line is only available on bar charts right now.");
+        return;
+      }
+      setReferenceLine({ value: tweak.value, label: tweak.label });
+      note = tweak.label === "average" ? `Added a dashed line at the average (${tweak.value}).` : `Added a dashed line at ${tweak.value}.`;
     } else {
-      setTextNote(`I didn't understand "${text}". Try "only top 5", "sort alphabetically", or "sort largest first".`);
+      setTextNote(`I didn't understand "${text}". Try "only top 5", "sort alphabetically", "highlight <name>", or "average".`);
       return;
     }
-    if (tweak.kind === "topn" || tweak.kind === "sort") setTweakLog((l) => [...l, note]);
+    if (tweak.kind === "topn" || tweak.kind === "sort" || tweak.kind === "highlight" || tweak.kind === "reference") setTweakLog((l) => [...l, note]);
     setTextNote(note);
     setTweakText("");
   }
@@ -133,9 +153,16 @@ export default function ChartsPanel({ sheet, seed }) {
 
   const rec = useMemo(() => (dataset ? recommendChart(dataset) : null), [dataset]);
   const chartType = chosen || rec?.type;
+  // P3-3: only a bar chart draws the reference line, so it isn't carried into
+  // the Excel recipe for a chart type it can't apply to.
+  const emphasis = useMemo(() => ({
+    highlightLabel,
+    referenceLine: chartType === "bar" ? referenceLine : null,
+    extremeCallout: dataset ? describeExtreme(dataset) : null,
+  }), [highlightLabel, referenceLine, chartType, dataset]);
   const steps = useMemo(
-    () => (dataset && chartType && chartType !== "none" ? excelChartSteps(chartType, dataset, rec || {}) : []),
-    [dataset, chartType, rec],
+    () => (dataset && chartType && chartType !== "none" ? excelChartSteps(chartType, dataset, rec || {}, emphasis) : []),
+    [dataset, chartType, rec, emphasis],
   );
   const chartTitle = useMemo(() => buildChartTitle(dataset), [dataset]);
   const qualitative = dataset && dataset.kind === "categorical" && isQualitative(dataset.points.length);
@@ -250,7 +277,15 @@ export default function ChartsPanel({ sheet, seed }) {
             </details>
           )}
 
-          <ChartPreview chartType={chartType} dataset={dataset} title={chartTitle} svgRef={svgRef} layout={rec.layout} />
+          <ChartPreview
+            chartType={chartType}
+            dataset={dataset}
+            title={chartTitle}
+            highlightLabel={highlightLabel}
+            referenceLine={chartType === "bar" ? referenceLine : null}
+            svgRef={svgRef}
+            layout={rec.layout}
+          />
 
           {/* Phase 8.5: adjust the chart in plain words. */}
           <div className="chart-tweak-row">

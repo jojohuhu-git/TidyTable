@@ -209,6 +209,27 @@ export function buildDataset(sheet, labelCol, valueCol, options = {}) {
   };
 }
 
+// P3-3: the automatic "Most common: X (n%)" / "Highest average: X (v)"
+// subtitle. Points are already sorted largest-first (above), so this is
+// display only, never a second aggregation. Declines (returns null) rather
+// than guessing whenever the claim wouldn't be honest: fewer than two
+// categories to compare, a tie for first place, a time-series axis (a "most
+// common month" isn't the comparison being asked for), or a dataset shape
+// too thin to know what kind of value it's describing.
+export function describeExtreme(dataset) {
+  if (!dataset || dataset.kind !== "categorical" || dataset.labelIsTime) return null;
+  const [top, second] = dataset.points || [];
+  if (!top || !second || top.value === second.value) return null;
+  if (dataset.valueName === "count") {
+    if (dataset.countTotal == null) return null;
+    const pct = Math.round((top.value / dataset.countTotal) * 100);
+    return `Most common: ${top.label} (${pct}%)`;
+  }
+  if (typeof dataset.valueName !== "string") return null;
+  const verb = dataset.valueName.startsWith("average") ? "Highest average" : "Highest total";
+  return `${verb}: ${top.label} (${top.value})`;
+}
+
 // W4: fold every category below `thresholdPct` of the dataset's total into a
 // single "Other" bucket — offered, never forced, and always reversible (the
 // caller just re-builds the dataset without this applied). Time-series

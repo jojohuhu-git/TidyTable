@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import ChartsPanel from "./ChartsPanel.jsx";
 import { deriveSheet } from "../logic/workbook.js";
 
@@ -60,7 +60,11 @@ describe("W4 — free-text chart box", () => {
     // Every category drawn (one rect each) and the canvas grew tall to fit.
     expect(container.querySelectorAll("rect").length).toBe(40);
     expect(Number(img.getAttribute("height"))).toBeGreaterThan(300);
-    // Labels are real text, not hidden — the biggest (Organism 39) is present.
-    expect(within(img).getByText(/Organism 39/)).toBeTruthy();
+    // Labels are real text, not hidden — the biggest (Organism 39) is present
+    // as an axis label. Scoped to .chart-label (not a plain getByText) because
+    // P3-3's automatic "Highest total: Organism 39 (40)" subtitle now also
+    // names it, which would otherwise match twice.
+    const axisLabels = [...container.querySelectorAll(".chart-label")].map((el) => el.textContent);
+    expect(axisLabels).toContain("Organism 39");
   });
 });
