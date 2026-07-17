@@ -1,5 +1,8 @@
 # TidyTable — Handoff after P6-4 done (2026-07-17)
 
+> **SUPERSEDED** by [handoff-2026-07-17-p6-3-done.md](handoff-2026-07-17-p6-3-done.md)
+> — P6-3 (Pareto cumulative % line) is now done too. Read the newer file.
+
 > **SUPERSEDES** [handoff-2026-07-17-p6-2-done.md](handoff-2026-07-17-p6-2-done.md)
 > — that handoff asked the owner to prioritize between P6-4 and five flagged
 > items before defaulting. The owner's instruction this session was explicit:
