@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { checkupSheet } from "../logic/checkup/scan.js";
+import { matchCleanRequest, cleanRequestMessage } from "../logic/checkup/cleanRequestMatcher.js";
 import ClarifyBox from "./ClarifyBox.jsx";
 import StepHelpPanel from "./StepHelpPanel.jsx";
 
@@ -20,6 +21,9 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
   // A6: findingId -> { groupIndex: chosenCanonicalValue }. Defaults to each
   // group's most-common spelling (f.groups[i].canonical) until overridden.
   const [canonicalChoices, setCanonicalChoices] = useState({});
+  // P2-3: "Or tell me what to clean…" — request text and the last match result.
+  const [cleanRequest, setCleanRequest] = useState("");
+  const [cleanResult, setCleanResult] = useState(null);
 
   function chooseCanonical(findingId, groupIndex, value) {
     setCanonicalChoices((c) => ({
@@ -82,6 +86,32 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
     setAskingPolicy(null);
   }
 
+  // P2-3: select a finding the plain-English box resolved to. Unlike toggle(),
+  // this only ever turns a fix ON — a typed "yes, do this" should never
+  // un-tick an already-selected fix. Also un-dismisses it: the user just
+  // asked for it by name, so a prior "Skip" shouldn't silently block it.
+  function selectFinding(f) {
+    setDismissed((d) => {
+      if (!d.has(f.id)) return d;
+      const next = new Set(d);
+      next.delete(f.id);
+      return next;
+    });
+    if (f.fix?.needsPolicy && !policies[f.id]) {
+      setAskingPolicy(f.id);
+      return;
+    }
+    setSelected((s) => new Set(s).add(f.id));
+  }
+
+  function submitCleanRequest(e) {
+    e.preventDefault();
+    const result = matchCleanRequest(cleanRequest, findings);
+    if (result.kind === "matched") selectFinding(result.finding);
+    setCleanResult(result);
+    if (result.kind !== "unrecognized") setCleanRequest("");
+  }
+
   function dismiss(f) {
     setDismissed(new Set(dismissed).add(f.id));
     if (selected.has(f.id)) {
@@ -102,9 +132,8 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
     onApply(fixes);
   }
 
-  // P2-4: no clickable "Try these" here — this step has no free-text box to
-  // fill, and P2-3 (the plain-English cleaning box that WOULD give the chips
-  // something to run) hasn't shipped yet. A fake action would be dishonest.
+  // No clickable "Try these" here yet — P2-3 shipped the free-text box below,
+  // but example chips for it are a separate follow-on, not yet built.
   const helpPanel = (
     <StepHelpPanel
       whatItDoes="Automatically scans your first sheet for common problems — duplicates, missing values, numbers stored as text, mixed date formats, spelling variants, impossible values, limit results, and packed cells — so you can tick the ones you want fixed."
@@ -198,6 +227,48 @@ export default function CheckupPanel({ sheet, busy, onApply }) {
   return (
     <div>
       {helpPanel}
+      <form className="clean-request-form" onSubmit={submitCleanRequest}>
+        <label htmlFor="clean-request-input">Or tell me what to clean…</label>
+        <div className="clean-request-row">
+          <input
+            id="clean-request-input"
+            type="text"
+            value={cleanRequest}
+            onChange={(e) => setCleanRequest(e.target.value)}
+            placeholder='e.g. "remove the duplicates", "fix the dates"'
+            disabled={busy}
+          />
+          <button type="submit" className="btn btn-ghost" disabled={busy || !cleanRequest.trim()}>
+            Check
+          </button>
+        </div>
+        {cleanResult?.kind === "ambiguous" && (
+          <div className="clean-request-feedback" role="status" aria-live="polite">
+            <p>That could match more than one thing — which did you mean?</p>
+            <div className="clean-request-options">
+              {cleanResult.candidates.map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => {
+                    selectFinding(f);
+                    setCleanResult(null);
+                  }}
+                  disabled={busy}
+                >
+                  {f.title}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {cleanResult && cleanResult.kind !== "ambiguous" && cleanResult.kind !== "empty" && (
+          <p className="clean-request-feedback dim" role="status" aria-live="polite">
+            {cleanRequestMessage(cleanResult)}
+          </p>
+        )}
+      </form>
       {safeFixable.length > 0 && (
         <section className="finding-group">
           <div className="finding-group-head">

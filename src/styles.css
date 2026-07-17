@@ -260,6 +260,19 @@ body {
 .step-help-examples { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
 .step-help-examples-label { font-size: 0.78rem; color: var(--ink-soft); margin-right: 0.2rem; }
 
+/* P2-3: the "Or tell me what to clean…" plain-English box on Step 2. */
+.clean-request-form { margin: 0 0 1.1rem; }
+.clean-request-form label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.3rem; }
+.clean-request-row { display: flex; gap: 0.5rem; }
+.clean-request-row input[type="text"] {
+  flex: 1; font: inherit; padding: 0.5rem 0.6rem;
+  border: 1px solid var(--line); border-radius: var(--rad);
+  background: var(--card); color: var(--ink);
+}
+.clean-request-row input[type="text"]:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.clean-request-feedback { margin: 0.5rem 0 0; font-size: 0.88rem; }
+.clean-request-options { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.4rem; }
+
 .summary-box {
   background: var(--accent-soft); border-radius: var(--rad);
   padding: 0.8rem 1rem; margin-bottom: 0.9rem;

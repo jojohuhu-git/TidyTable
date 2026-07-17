@@ -103,4 +103,38 @@ describe("CheckupPanel", () => {
     expect(screen.getByText(/Only checks the first sheet/i)).toBeInTheDocument();
     expect(screen.queryByText("Try these:")).toBeNull();
   });
+
+  it("P2-3: typing 'remove the duplicates' ticks the matching finding and confirms it", () => {
+    const onApply = vi.fn();
+    render(<CheckupPanel sheet={messySheet()} busy={false} onApply={onApply} />);
+
+    const input = screen.getByLabelText("Or tell me what to clean…");
+    fireEvent.change(input, { target: { value: "remove the duplicates" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check" }));
+
+    expect(screen.getByText("Ticked: Duplicate rows.")).toBeInTheDocument();
+    const dupCheckbox = screen.getByText("Duplicate rows").closest("label").querySelector("input");
+    expect(dupCheckbox.checked).toBe(true);
+    // The box clears once resolved, and Apply now runs the ticked fix.
+    expect(input.value).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: /apply 1 selected fix/i }));
+    expect(onApply.mock.calls[0][0]).toEqual([{ normalizer: "dedupeRows", column: null, params: {} }]);
+  });
+
+  it("P2-3: recognized but absent intent says so honestly instead of guessing", () => {
+    render(<CheckupPanel sheet={messySheet()} busy={false} onApply={() => {}} />);
+    const input = screen.getByLabelText("Or tell me what to clean…");
+    fireEvent.change(input, { target: { value: "fix the dates" } }); // messySheet has no date column
+    fireEvent.click(screen.getByRole("button", { name: "Check" }));
+    expect(screen.getByText("No date-formatting issues were found in this sheet.")).toBeInTheDocument();
+  });
+
+  it("P2-3: an unrecognized request shows the honest fallback and keeps the text so it can be edited", () => {
+    render(<CheckupPanel sheet={messySheet()} busy={false} onApply={() => {}} />);
+    const input = screen.getByLabelText("Or tell me what to clean…");
+    fireEvent.change(input, { target: { value: "make it sparkle" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check" }));
+    expect(screen.getByText(/Add an AI key/)).toBeInTheDocument();
+    expect(input.value).toBe("make it sparkle");
+  });
 });
