@@ -143,9 +143,10 @@ here — it's the last item in the P6 execution order.
    direct commits to main but **never push** without the owner's go-ahead).
 2. Run `npx vitest run` — expect **980 passing (151 files), all green**
    before any new work. If the counts differ, stop and diagnose.
-3. Per execution order, the next item is **P6-5** (small multiples) — but
-   six other items are flagged above. Ask the owner which to prioritize
-   before defaulting to P6-5, same as every prior handoff has asked.
+3. **Owner decision (2026-07-17, this session): do P6-5 next.** The six
+   flagged items below stay parked, untouched, pending owner review — do NOT
+   pick one up instead of P6-5, and do not default to one once P6-5 is done
+   either; come back and ask.
 4. Load the `dataviz` skill before any P6-5 chart-styling work (same as
    P6-1/P6-2/P6-3) — and note the P6-3 precedent above: when a spec's
    suggested chart layout conflicts with the skill's non-negotiables, resolve
