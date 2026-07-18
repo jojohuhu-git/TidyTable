@@ -4,7 +4,7 @@
 // given, that bar/point is the accent colour and every peer is grey.
 
 import { foldKey } from "../logic/checkup/normalizers.js";
-import { maxOf, countLabel, describeExtreme, describeParetoSummary, PARETO_THRESHOLD } from "../logic/charts/aggregate.js";
+import { maxOf, countLabel, describeExtreme, describeParetoSummary, PARETO_THRESHOLD, buildSmallMultiplesData } from "../logic/charts/aggregate.js";
 import { chartPalette } from "../logic/charts/palette.js";
 import { buildChartAriaSummary, buildCrosstabAriaSummary, buildHistogramAriaSummary, buildBoxDotAriaSummary } from "../logic/charts/chartAriaSummary.js";
 
@@ -49,6 +49,12 @@ export default function ChartPreview({ chartType, dataset, highlightLabel, refer
   // bar and a reference line are P6-4 (cohort-scoped) territory, not this one.
   if (dataset.kind === "crosstab") {
     if (!dataset.categories?.length) return null;
+    // P6-5: a crowded crosstab draws as a grid of mini panels (one per
+    // category, one shared scale) when the advisor — or the user, via "Other
+    // options" — picks small multiples over grouped/stacked bars.
+    if (chartType === "smallMultiples") {
+      return <SmallMultiplesChart dataset={dataset} title={title} svgRef={svgRef} />;
+    }
     return <CrosstabBarChart dataset={dataset} title={title} layout={layout} svgRef={svgRef} />;
   }
   // P6-2: a histogram (one numeric column, no grouping) and a box+dot plot
@@ -421,6 +427,71 @@ function CrosstabBarChart({ dataset, title, layout, svgRef }) {
       {layout === "stacked100" && [0, 25, 50, 75, 100].map((p) => (
         <text key={p} x={padL + innerW * (p / 100)} y={chartH - 6} textAnchor="middle" className="chart-label">{p}%</text>
       ))}
+    </svg>
+  );
+}
+
+// P6-5: small multiples for a crowded crosstab — a grid of mini bar panels,
+// one per category, each panel's own horizontal bars for its subgroup
+// breakdown. Same house orientation as every other categorical chart here
+// (bars grow rightward). One shared value scale across ALL panels
+// (buildSmallMultiplesData's maxValue), so a bar of the same length means
+// the same count in every panel — each panel is honestly comparable to its
+// neighbors, never independently rescaled. The shared subgroup color key
+// reuses the same Legend the crosstab bars use. Panels cap at
+// SMALL_MULTIPLES_PANEL_CAP; the "…and N more" note inside the SVG (and the
+// full table the panel renders below) keeps the cap honest.
+const SM_COLS = 3;
+const SM_PANEL_PAD_X = 8;
+const SM_PANEL_TITLE_H = 14;
+const SM_BAR_H = 8;
+const SM_BAR_GAP = 2;
+const SM_PANEL_GAP_Y = 14;
+
+function SmallMultiplesChart({ dataset, title, svgRef }) {
+  const { panels, subgroups, maxValue, hiddenCount } = buildSmallMultiplesData(dataset);
+  const palette = chartPalette(subgroups.length);
+  const legendH = legendHeight(subgroups.length);
+  const padTop = 16 + (title ? TITLE_PAD : 0);
+  const padY = padTop + legendH;
+  const padSide = 12;
+  const colW = (W - padSide * 2) / SM_COLS;
+  const barAreaW = colW - SM_PANEL_PAD_X * 2;
+  const panelH = SM_PANEL_TITLE_H + subgroups.length * (SM_BAR_H + SM_BAR_GAP);
+  const gridRows = Math.ceil(panels.length / SM_COLS);
+  const moreNoteH = hiddenCount > 0 ? 18 : 0;
+  const chartH = padY + gridRows * (panelH + SM_PANEL_GAP_Y) + moreNoteH + 8;
+  const ariaLabel = title
+    ? `Small multiples of ${title}: ${buildCrosstabAriaSummary(dataset)}`
+    : `Small multiples: ${buildCrosstabAriaSummary(dataset)}`;
+  return (
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${chartH}`} width={W} height={chartH} className="chart-svg" role="img" aria-label={ariaLabel}>
+      <ChartTitle title={title} />
+      <Legend subgroups={subgroups} palette={palette} x={padSide + SM_PANEL_PAD_X} y={padTop + 4} width={W - padSide * 2} />
+      {panels.map((p, pi) => {
+        const col = pi % SM_COLS;
+        const row = Math.floor(pi / SM_COLS);
+        const x0 = padSide + col * colW + SM_PANEL_PAD_X;
+        const y0 = padY + row * (panelH + SM_PANEL_GAP_Y);
+        return (
+          <g key={pi}>
+            <text x={x0} y={y0 + SM_PANEL_TITLE_H - 4} className="chart-label">
+              {p.label.length > 18 ? p.label.slice(0, 17) + "…" : p.label}
+            </text>
+            {p.values.map((v, si) => {
+              if (!v) return null;
+              const y = y0 + SM_PANEL_TITLE_H + si * (SM_BAR_H + SM_BAR_GAP);
+              const w = Math.max(1, (v / (maxValue || 1)) * barAreaW);
+              return <rect key={si} x={x0} y={y} width={w} height={SM_BAR_H} fill={palette[si]} rx="2" />;
+            })}
+          </g>
+        );
+      })}
+      {hiddenCount > 0 && (
+        <text x={padSide + SM_PANEL_PAD_X} y={chartH - 10} className="chart-label">
+          …and {hiddenCount} more {dataset.labelName} — see the full table below.
+        </text>
+      )}
     </svg>
   );
 }

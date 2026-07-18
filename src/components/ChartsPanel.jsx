@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { buildDataset, buildCrosstabDataset, buildHistogramDataset, buildBoxDotDataset, groupSmallIntoOther, applyRankCap, describeExtreme, buildParetoData, describeParetoSummary } from "../logic/charts/aggregate.js";
+import { buildDataset, buildCrosstabDataset, buildHistogramDataset, buildBoxDotDataset, groupSmallIntoOther, applyRankCap, describeExtreme, buildParetoData, describeParetoSummary, buildSmallMultiplesData } from "../logic/charts/aggregate.js";
 import { parseChartTweak, sortDataset } from "../logic/charts/chartTweaks.js";
 import { recommendChart } from "../logic/charts/advisor.js";
 import { excelChartSteps } from "../logic/charts/excelChart.js";
@@ -9,6 +9,7 @@ import { resolveChartRequest } from "../logic/charts/textToChart.js";
 import { isQualitative } from "../logic/charts/palette.js";
 import { buildChartExamplePrompts } from "../logic/offline/examplePrompts.js";
 import ChartPreview from "./ChartPreview.jsx";
+import DataTable from "./DataTable.jsx";
 import ClarifyBox from "./ClarifyBox.jsx";
 import StepHelpPanel from "./StepHelpPanel.jsx";
 
@@ -361,6 +362,28 @@ export default function ChartsPanel({ sheet, seed }) {
             layout={rec.layout}
           />
 
+          {/* P6-5: the panels cap at 12, so the FULL crosstab renders as a
+              table right below — every category, nothing hidden for good. */}
+          {dataset.kind === "crosstab" && chartType === "smallMultiples" && (() => {
+            const sm = buildSmallMultiplesData(dataset);
+            return (
+              <>
+                {sm.hiddenCount > 0 && (
+                  <p className="hint">
+                    Showing the first {sm.panels.length} of {dataset.categories.length} {dataset.labelName} categories as panels — the table below lists all of them.
+                  </p>
+                )}
+                <DataTable
+                  columns={[dataset.labelName, ...dataset.subgroups]}
+                  rows={dataset.categories.map((c) => ({
+                    [dataset.labelName]: c.label,
+                    ...Object.fromEntries(dataset.subgroups.map((s, i) => [s, c.values[i]])),
+                  }))}
+                />
+              </>
+            );
+          })()}
+
           {paretoEligible && (
             <label className="chart-other-toggle">
               <input type="checkbox" checked={paretoOn} onChange={(e) => setParetoOn(e.target.checked)} />
@@ -457,5 +480,5 @@ const CROSSTAB_LAYOUT_CHART_NAME = {
 function chartTypeName(type, layout) {
   if (type === "bar" && layout === "horizontal") return "horizontal bar chart";
   if (type === "bar" && CROSSTAB_LAYOUT_CHART_NAME[layout]) return CROSSTAB_LAYOUT_CHART_NAME[layout];
-  return { bar: "bar chart", line: "line chart", pie: "pie chart", scatter: "scatter plot", histogram: "histogram", boxdot: "box and dot plot" }[type] || type;
+  return { bar: "bar chart", line: "line chart", pie: "pie chart", scatter: "scatter plot", histogram: "histogram", boxdot: "box and dot plot", smallMultiples: "small multiples" }[type] || type;
 }

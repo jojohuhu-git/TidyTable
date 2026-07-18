@@ -387,6 +387,28 @@ export function buildCrosstabDataset(sheet, labelCol, subgroupCol, options = {})
   };
 }
 
+// P6-5: the small-multiples panel data for a crowded crosstab — one mini
+// chart per category instead of cramming >12 categories x >8 subgroups into
+// a single grouped/stacked chart. Categories are already sorted
+// largest-total-first (buildCrosstabDataset), so slicing to the cap keeps
+// the biggest ones. One maxValue is computed across ONLY the shown panels'
+// values, so every panel shares one honest scale (a bar of the same length
+// means the same count in every panel) — and a hidden panel's values never
+// stretch the scale of the ones on screen. hiddenCount says how many
+// categories are past the cap; the panel UI states it and shows the full
+// table, so nothing is silently dropped.
+export const SMALL_MULTIPLES_PANEL_CAP = 12;
+
+export function buildSmallMultiplesData(dataset) {
+  const panels = dataset.categories.slice(0, SMALL_MULTIPLES_PANEL_CAP);
+  return {
+    panels,
+    subgroups: dataset.subgroups,
+    maxValue: maxOf(panels.flatMap((p) => p.values), 0),
+    hiddenCount: dataset.categories.length - panels.length,
+  };
+}
+
 // Phase 4 (2026-07-10): the Step 9 mirror of the Q&A "most common"/"top N"
 // ranking family (see offline/matcher.js's detectTopN) — "top 5 drugs" caps
 // the bar chart at 5, sorted by count, largest first; "least common" reorders

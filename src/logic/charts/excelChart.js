@@ -141,22 +141,58 @@ function crosstabSteps(dataset, rec) {
       `by ${dataset.labelName}"). Clear labels are the difference between a chart people trust and one they don't.`,
   });
 
-  if (dataset.otherGrouped) {
-    steps.push({
-      title: "Remember the folded groups",
-      instruction: `The smallest ${dataset.otherGrouped} ${dataset.subgroupName} values are combined into "Other" ` +
-        `in the helper table above, so the legend stays readable — they are not missing, just grouped together.`,
-    });
-  }
+  const folded = crosstabFoldedGroupsStep(dataset);
+  if (folded) steps.push(folded);
 
-  if (dataset.filter) {
-    steps.push({
-      title: "Remember the filter",
-      instruction: `This chart only counts rows where "${dataset.filter.column}" is "${dataset.filter.value}" — ` +
-        `filter your data to that first (Data > Filter), or the helper table above already reflects it.`,
-    });
-  }
+  const filterStep = crosstabFilterStep(dataset);
+  if (filterStep) steps.push(filterStep);
 
+  steps.push(colorNoteStep());
+  return steps;
+}
+
+// P6-1/P6-5: the folded-"Other" and filter reminder steps, shared by the
+// crosstab bar recipes and the small-multiples recipe so the wording never
+// drifts between them. Each returns null when it doesn't apply.
+function crosstabFoldedGroupsStep(dataset) {
+  if (!dataset.otherGrouped) return null;
+  return {
+    title: "Remember the folded groups",
+    instruction: `The smallest ${dataset.otherGrouped} ${dataset.subgroupName} values are combined into "Other" ` +
+      `in the helper table above, so the legend stays readable — they are not missing, just grouped together.`,
+  };
+}
+
+function crosstabFilterStep(dataset) {
+  if (!dataset.filter) return null;
+  return {
+    title: "Remember the filter",
+    instruction: `This chart only counts rows where "${dataset.filter.column}" is "${dataset.filter.value}" — ` +
+      `filter your data to that first (Data > Filter), or the helper table above already reflects it.`,
+  };
+}
+
+// P6-5: small multiples. Unlike the histogram/box-and-whisker cases above,
+// Excel has NO universally-available native small-multiples chart type — so
+// the honest recipe names the two real routes (one small chart per category
+// built by hand, or a PivotChart with a slicer to flip through categories)
+// instead of pretending a button exists.
+function smallMultiplesSteps(dataset) {
+  const steps = [crosstabHelperTableStep(dataset)];
+  steps.push({
+    title: "Build the panels",
+    instruction: `Excel has no built-in "small multiples" chart type, so there are two honest routes. Route 1, a ` +
+      `real grid like the preview: from the helper table above, select one ${dataset.labelName} row's numbers ` +
+      `together with the header row (hold Ctrl on Windows or Cmd on Mac to select both), Insert tab > "Bar ` +
+      `(Clustered Bar)", then size the little charts alike and line them up in a grid — one per ${dataset.labelName}. ` +
+      `Route 2, one chart you flip through: select your raw data, Insert tab > PivotChart, put ${dataset.subgroupName} ` +
+      `on the axis and count of rows as the value, then add a slicer on ${dataset.labelName} (PivotChart Analyze > ` +
+      `Insert Slicer) and click through the categories one at a time.`,
+  });
+  const folded = crosstabFoldedGroupsStep(dataset);
+  if (folded) steps.push(folded);
+  const filterStep = crosstabFilterStep(dataset);
+  if (filterStep) steps.push(filterStep);
   steps.push(colorNoteStep());
   return steps;
 }
@@ -307,6 +343,7 @@ function colorNoteStep() {
 // Returns [{ title, instruction }] (no formulas — a chart is clicks, not a
 // formula).
 export function excelChartSteps(chartType, dataset, rec = {}, emphasis = {}, pareto = null) {
+  if (dataset.kind === "crosstab" && chartType === "smallMultiples") return smallMultiplesSteps(dataset);
   if (dataset.kind === "crosstab") return crosstabSteps(dataset, rec);
   if (dataset.kind === "distribution" && dataset.shape === "histogram") return histogramSteps(dataset);
   if (dataset.kind === "distribution" && dataset.shape === "boxdot") return boxDotSteps(dataset);

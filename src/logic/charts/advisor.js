@@ -32,9 +32,28 @@ function recommendCrosstabLayout(dataset, opts) {
   if (!dataset.categories || dataset.categories.length === 0) {
     return { type: "none", reason: "There is nothing to chart yet." };
   }
-  const layout = CROSSTAB_LAYOUTS.includes(opts.requestedLayout) ? opts.requestedLayout : "grouped";
+  const explicitLayout = CROSSTAB_LAYOUTS.includes(opts.requestedLayout);
+  const layout = explicitLayout ? opts.requestedLayout : "grouped";
   const label = `"${dataset.labelName}"`;
   const sub = `"${dataset.subgroupName}"`;
+  // P6-5: past MANY_CATEGORIES categories AND enough subgroups that the
+  // 8-color cap folded some into "Other", one combined chart is an
+  // unreadable wall of bars — recommend a grid of mini charts (one panel per
+  // category, one shared scale) instead of refusing or cramming. An explicit
+  // layout ask (a layout word in the request, or a clicked alternative) is
+  // still honored below, with small multiples offered as the escape hatch.
+  const crowded = dataset.categories.length > MANY_CATEGORIES && (dataset.otherGrouped || 0) > 0;
+  if (crowded && !explicitLayout) {
+    return {
+      type: "smallMultiples",
+      reason: `Small multiples — a grid of mini charts, one per ${label} — because ${dataset.categories.length} ` +
+        `${dataset.labelName} values, each split by ${dataset.subgroupName}, is too much for one readable chart. ` +
+        `Every panel shares one scale, so bar lengths compare honestly across panels.`,
+      alternatives: CROSSTAB_LAYOUTS.map((l) => ({ type: "bar", layout: l, reason: `${CROSSTAB_LAYOUT_NAME[l]} instead.` })),
+      legend: true,
+      ...(dataset.otherGrouped ? { otherGroupedNote: `The smallest ${dataset.otherGrouped} ${dataset.subgroupName} values are folded into "Other" so the legend stays readable.` } : {}),
+    };
+  }
   const reason = {
     grouped: `Grouped bar chart because you're comparing how ${sub} sizes differ across ${label} — each category gets its own cluster of bars, one per ${dataset.subgroupName}.`,
     stacked: `Stacked bar chart because this asks what makes up each ${label} — the ${sub} counts stack into one bar per category.`,
@@ -43,6 +62,9 @@ function recommendCrosstabLayout(dataset, opts) {
   const alternatives = CROSSTAB_LAYOUTS
     .filter((l) => l !== layout)
     .map((l) => ({ type: "bar", layout: l, reason: `${CROSSTAB_LAYOUT_NAME[l]} instead.` }));
+  if (crowded) {
+    alternatives.push({ type: "smallMultiples", reason: "Small multiples instead — a grid of mini charts, one per category, easier to read at this size." });
+  }
   return {
     type: "bar",
     layout,
