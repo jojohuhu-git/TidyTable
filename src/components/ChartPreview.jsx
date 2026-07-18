@@ -4,7 +4,7 @@
 // given, that bar/point is the accent colour and every peer is grey.
 
 import { foldKey } from "../logic/checkup/normalizers.js";
-import { maxOf, countLabel, describeExtreme, describeParetoSummary, PARETO_THRESHOLD, buildSmallMultiplesData } from "../logic/charts/aggregate.js";
+import { maxOf, countLabel, fmtChartNumber, describeExtreme, describeParetoSummary, PARETO_THRESHOLD, buildSmallMultiplesData } from "../logic/charts/aggregate.js";
 import { chartPalette } from "../logic/charts/palette.js";
 import { buildChartAriaSummary, buildCrosstabAriaSummary, buildHistogramAriaSummary, buildBoxDotAriaSummary } from "../logic/charts/chartAriaSummary.js";
 
@@ -156,7 +156,7 @@ function BarChart({ dataset, fill, title, subtitle, referenceLine, pareto, highl
   // Phase 8.3 clinical default: a count bar is labeled n (%) of the cohort;
   // a sum/average total is not a share of a whole, so it stays a bare number.
   const isCount = dataset.valueName === "count";
-  const barLabel = (v) => (isCount ? countLabel(v, dataset.countTotal) : String(v));
+  const barLabel = (v) => (isCount ? countLabel(v, dataset.countTotal) : fmtChartNumber(v));
   // P3-3: past VALUE_LABEL_CAP categories, per-bar labels turn into clutter —
   // hide them (the numbers stay reachable via the aria summary and Excel's
   // helper table).
@@ -555,7 +555,7 @@ function HistogramChart({ dataset, title, svgRef, footnote }) {
         return (
           <g key={i}>
             <line x1={padL - 4} y1={y} x2={padL} y2={y} stroke="var(--line)" />
-            <text x={padL - 8} y={y} textAnchor="end" dominantBaseline="middle" className="chart-label">{t}</text>
+            <text x={padL - 8} y={y} textAnchor="end" dominantBaseline="middle" className="chart-label">{fmtChartNumber(t)}</text>
           </g>
         );
       })}
@@ -655,7 +655,7 @@ function BoxDotChart({ dataset, title, svgRef, footnote, grayscale }) {
               stroke={color}
             />
             <line x1={xAt(g.stats.median)} y1={boxTop} x2={xAt(g.stats.median)} y2={boxTop + BOXDOT_BOX_H} stroke={color} strokeWidth="2" />
-            <text x={xAt(g.stats.median)} y={boxTop - 4} textAnchor="middle" className="chart-value">{g.stats.median}</text>
+            <text x={xAt(g.stats.median)} y={boxTop - 4} textAnchor="middle" className="chart-value">{fmtChartNumber(g.stats.median)}</text>
             {g.values
               ? g.values.map((v, vi) => (
                 <circle key={vi} cx={xAt(v)} cy={cy + jitterOffset(vi, g.values.length, dotSpread)} r="2.5" fill={color} opacity="0.7" />
@@ -672,7 +672,7 @@ function BoxDotChart({ dataset, title, svgRef, footnote, grayscale }) {
         const v = -negMax + f * (posMax + negMax);
         return (
           <text key={f} x={xAt(v)} y={chartH - padB + 14} textAnchor="middle" className="chart-label">
-            {Math.round(v * 100) / 100}
+            {fmtChartNumber(Math.round(v * 100) / 100)}
           </text>
         );
       })}

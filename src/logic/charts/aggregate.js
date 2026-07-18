@@ -43,8 +43,16 @@ function timeSortKey(label) {
 // bare number when there is no denominator (a sum/average total, or an empty
 // cohort), so a non-share value is never dressed up as a percentage.
 export function countLabel(value, countTotal) {
-  if (countTotal == null || countTotal <= 0) return String(value);
-  return `${value} (${Math.round((value / countTotal) * 100)}%)`;
+  if (countTotal == null || countTotal <= 0) return fmtChartNumber(value);
+  return `${fmtChartNumber(value)} (${Math.round((value / countTotal) * 100)}%)`;
+}
+
+// P5-6: every number a chart DISPLAYS gets thousands separators ("1,240",
+// not "1240" — the convention manuscripts and slides expect). Fixed to
+// en-US so the same dataset always draws the same label. Decimals keep up
+// to 2 places, matching computeNumericStats' rounding elsewhere.
+export function fmtChartNumber(v) {
+  return v.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
 // P1-6: a spread of a 200k+-element array (Math.max(...arr)) blows the call
