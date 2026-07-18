@@ -921,7 +921,7 @@ export default function App() {
         const sheet = nextSheets[idx];
         const { plan: fixPlan, log } = buildFixPlan(sheet, sheetFixes);
         const rows = await runTransform(fixPlan.transform_code, { [sheet.name]: sheet.rows });
-        const cleaned = deriveSheet(sheet.name, rows);
+        const cleaned = deriveSheet(sheet.name, rows, sheet);
         nextSheets = nextSheets.map((s, i) => (i === idx ? cleaned : s));
         newLogEvents.push(makeLogEvent({ fileName: workbook.fileName, sheet: sheet.name, entries: log }));
         nextRecipe = sheetFixes.reduce((acc, fix) => addStep(acc, checkupStep(fix)), nextRecipe);

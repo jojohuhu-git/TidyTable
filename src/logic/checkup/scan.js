@@ -535,12 +535,48 @@ function findMixedUnits(sheet) {
   return out;
 }
 
+// P4-3: cells that are NOT on their column's Excel dropdown list. The picklist
+// terms arrive on sheet.vocab (read from the file's data-validation entries at
+// upload). Excel only enforces the dropdown on typed entries — pasted or
+// imported values bypass it — so an off-list value is usually a typo or a
+// hand-typed variant no other detector can catch (only the list knows the
+// legal spellings). Warn-only: the app can't know which legal term was meant,
+// so it never picks one.
+function findNotInPicklist(sheet) {
+  const out = [];
+  const vocab = sheet.vocab || {};
+  for (const h of sheet.headers) {
+    const terms = vocab[h.name];
+    if (!terms || !terms.length) continue;
+    // Compare folded (trimmed, lowercased) so pure case/spacing variants —
+    // already covered by their own fixable findings — aren't double-flagged.
+    const allowed = new Set(terms.map(foldKey));
+    const offenders = nonNull(sheet.rows, h.name).filter((v) => !allowed.has(foldKey(v)));
+    if (!offenders.length) continue;
+    out.push({
+      id: nextId(),
+      type: "notInPicklist",
+      sheet: sheet.name,
+      column: h.name,
+      letter: h.letter,
+      title: `Values not on the "${h.name}" dropdown list`,
+      detail: `In Excel, "${h.name}" is filled from a dropdown list of ${terms.length} allowed entr${terms.length === 1 ? "y" : "ies"}, but ${offenders.length} cell${s(offenders.length)} hold${offenders.length === 1 ? "s" : ""} a value that isn't on that list — usually a typo, or something pasted or typed by hand. Fix them in Excel (or leave them if they're intentional); the app won't guess which list entry was meant.`,
+      count: offenders.length,
+      samples: sample(offenders),
+      fixable: false,
+      fix: null,
+    });
+  }
+  return out;
+}
+
 // Run every detector against one sheet.
 export function checkupSheet(sheet) {
   counter = 0;
   return [
     ...findDuplicateRows(sheet),
     ...findDuplicateIds(sheet),
+    ...findNotInPicklist(sheet),
     ...findMissing(sheet),
     ...findTextNumbers(sheet),
     ...findTextDates(sheet),

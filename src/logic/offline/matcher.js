@@ -226,6 +226,10 @@ function resolveColumnRef(phrase, headers, { aliasMap, index, numericOnly = fals
 }
 
 // Precompute, per column, the set of folded cell values so a value scan is quick.
+// P4-3: the column's Excel picklist terms (sheet.vocab, read from the file's
+// data-validation dropdowns at upload) join the index too, so a legal term no
+// row happens to contain yet — "cUTI" on a fresh sheet — is still recognized
+// and answers an honest 0 instead of "I don't know that word".
 function valueIndex(sheet) {
   const index = new Map(); // header name -> Map(foldedValue -> original value)
   for (const h of sheet.headers) {
@@ -235,6 +239,10 @@ function valueIndex(sheet) {
       if (v == null || String(v).trim() === "") continue;
       const k = foldKey(v);
       if (!m.has(k)) m.set(k, v);
+    }
+    for (const term of sheet.vocab?.[h.name] || []) {
+      const k = foldKey(term);
+      if (k && !m.has(k)) m.set(k, term);
     }
     index.set(h.name, m);
   }

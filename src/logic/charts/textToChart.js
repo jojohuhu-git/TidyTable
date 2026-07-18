@@ -49,6 +49,13 @@ function valueIndex(sheet) {
       const k = foldKey(v);
       if (!m.has(k)) m.set(k, v);
     }
+    // P4-3: Excel picklist terms count as known values here too, mirroring
+    // matcher.js's valueIndex — a chart filter on a legal-but-unused term
+    // resolves and draws an honest empty result instead of failing to parse.
+    for (const term of sheet.vocab?.[h.name] || []) {
+      const k = foldKey(term);
+      if (k && !m.has(k)) m.set(k, term);
+    }
     index.set(h.name, m);
   }
   return index;

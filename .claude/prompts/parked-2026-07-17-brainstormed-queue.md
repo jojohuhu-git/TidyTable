@@ -138,9 +138,10 @@ for approval BEFORE building):**
 
 ## Also still queued from the spec (unchanged, not "parked")
 
-P6-5 (next), P5-1→P5-6 publication exports, P5-4 (.docx/.pptx), P5-5 (ggplot2
-figure code — must cover crosstab, distribution, Pareto, and small-multiples
-types when it lands), P4-3 (validation-list vocabularies, last per spec).
+P5-4 (.docx/.pptx Office exports), P5-5 (ggplot2 figure code — must cover
+crosstab, distribution, Pareto, and small-multiples types when it lands).
+Shipped since this file was written: P6-5, P5-1/P5-2/P5-3/P5-6 (2026-07-17),
+P4-3 validation-list vocabularies (2026-07-18, owner pulled it forward).
 
 ---
 

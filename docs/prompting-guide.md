@@ -49,6 +49,14 @@ column ("trim spaces in Diagnosis"). Repeated values in ID-like columns (CSN,
 MRN) are currently **warn-only** — the app tells you but can't fix them yet;
 handle duplicates in Excel or with Step 10's one-row-per-patient operation.
 
+**Dropdown-list check (automatic).** If a column in your .xlsx is filled from
+an Excel dropdown (a data-validation list), the app reads that list straight
+out of the file and flags any cell holding a value that is NOT on the list —
+the typo scan only the list itself makes possible (pasted or imported values
+bypass Excel's own dropdown check). Warn-only: the app never guesses which
+legal entry you meant. Works for lists typed into the validation box, lists
+pointing at a range of cells (even on another sheet), and named ranges.
+
 ## Step 3 — Describe what you want
 
 Words the app reliably understands:
@@ -63,6 +71,11 @@ diagnoses" · "count of patients by Prescriber".
 
 If parts of your request come back as chips ("did you mean the Duration_days
 column?"), click to confirm — that's the app refusing to guess.
+
+**Dropdown terms are known words.** Every entry on a column's Excel dropdown
+list counts as a word the app knows, even if no row currently contains it —
+"How many rows have cUTI?" answers an honest 0 instead of "I don't know that
+word". The same terms feed the "closest things" suggestion chips.
 
 ## Step 7 — Compare two groups (statistics)
 

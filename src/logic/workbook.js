@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
 import { colLetter } from "./letters.js";
 import { coerceNumbers } from "./checkup/normalizers.js";
+import { extractColumnVocabularies, colToIndex } from "./vocab/validationLists.js";
 
 // CSV/TSV field-type guessing (SheetJS's own date/number inference on raw text)
 // happens before the checkup layer ever sees a cell, and disagrees with it: it
@@ -67,10 +68,15 @@ function inferType(values) {
 // { fileName, sheets: [{ name, headers: [{letter, name, type, samples}], rows, rowCount }] }
 export async function parseWorkbookFile(file) {
   const delimited = isDelimitedText(file);
+  const buffer = delimited ? null : await file.arrayBuffer();
   const wb = delimited
     ? XLSX.read(await file.text(), { type: "string", raw: true })
-    : XLSX.read(await file.arrayBuffer(), { cellDates: true });
+    : XLSX.read(buffer, { cellDates: true });
   const sheets = [];
+  // P4-3: remember where each sheet's used range starts so a picklist found on
+  // sheet column "C" can be mapped to the right parsed header even when the
+  // data doesn't begin at column A.
+  const sheetStartCol = new Map();
 
   for (const name of wb.SheetNames) {
     const ws = wb.Sheets[name];
@@ -83,6 +89,7 @@ export async function parseWorkbookFile(file) {
     // can reference the sheet's actual extent instead of always assuming
     // "row 2 to rows.length+1".
     const range = ws["!ref"] ? XLSX.utils.decode_range(ws["!ref"]) : { s: { r: 0 }, e: { r: matrix.length - 1 } };
+    sheetStartCol.set(name, range.s.c ?? 0);
     const excelHeaderRow = range.s.r + 1; // 1-indexed, matches Excel's own row numbers
     const excelFirstDataRow = excelHeaderRow + 1;
     const excelLastRow = range.e.r + 1;
@@ -143,6 +150,29 @@ export async function parseWorkbookFile(file) {
   if (sheets.length === 0) {
     throw new Error("No data found in this file. Make sure the first row of each sheet contains column headers.");
   }
+
+  // P4-3: if this is a zip-based Excel file (.xlsx/.xlsm start with "PK"),
+  // read its data-validation picklists and attach them per sheet as
+  // sheet.vocab = { headerName: [legal terms] }. Purely additive metadata —
+  // if the workbook has no picklists (or the XML can't be parsed) the upload
+  // proceeds exactly as before, same as a CSV.
+  if (buffer && new Uint8Array(buffer, 0, 2)[0] === 0x50 && new Uint8Array(buffer, 0, 2)[1] === 0x4b) {
+    try {
+      const vocabs = await extractColumnVocabularies(buffer);
+      for (const { sheetName, colLetter: col, terms } of vocabs) {
+        const sheet = sheets.find((s) => s.name === sheetName);
+        if (!sheet) continue;
+        const idx = colToIndex(col) - (sheetStartCol.get(sheetName) || 0);
+        const header = sheet.headers[idx];
+        if (!header) continue;
+        if (!sheet.vocab) sheet.vocab = {};
+        sheet.vocab[header.name] = terms;
+      }
+    } catch {
+      // A picklist we can't read is the same as no picklist — never block the upload.
+    }
+  }
+
   return { fileName: file.name, sheets };
 }
 
@@ -176,8 +206,10 @@ export function excelRowExtentNote(extent) {
 
 // Rebuild a sheet object (headers, types, samples, rowCount) from a list of row
 // objects — used after checkup fixes replace a sheet's data with cleaned rows,
-// so later steps see the cleaned version.
-export function deriveSheet(name, rows) {
+// so later steps see the cleaned version. Pass the sheet being replaced as
+// `prev` to carry its picklist vocabularies (P4-3) over to the columns that
+// still exist — cleaning rows doesn't change what terms Excel allows.
+export function deriveSheet(name, rows, prev = null) {
   const headerNames = rows.length ? Object.keys(rows[0]) : [];
   const headers = headerNames.map((h, i) => {
     const colValues = rows.slice(0, 500).map((row) => row[h]);
@@ -190,7 +222,13 @@ export function deriveSheet(name, rows) {
     }
     return { letter: colLetter(i), name: h, type: inferType(colValues), samples };
   });
-  return { name, headers, rows, rowCount: rows.length };
+  const sheet = { name, headers, rows, rowCount: rows.length };
+  if (prev?.vocab) {
+    const kept = {};
+    for (const h of headerNames) if (prev.vocab[h]) kept[h] = prev.vocab[h];
+    if (Object.keys(kept).length) sheet.vocab = kept;
+  }
+  return sheet;
 }
 
 export function downloadRowsAsXlsx(rows, fileName = "TidyTable_result.xlsx") {
