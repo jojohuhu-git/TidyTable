@@ -3,7 +3,7 @@ import { buildDataset, buildCrosstabDataset, buildHistogramDataset, buildBoxDotD
 import { parseChartTweak, sortDataset } from "../logic/charts/chartTweaks.js";
 import { recommendChart } from "../logic/charts/advisor.js";
 import { excelChartSteps } from "../logic/charts/excelChart.js";
-import { buildChartTitle, buildCohortCaption } from "../logic/charts/chartTitle.js";
+import { buildChartTitle, buildCohortCaption, buildFigureCaption } from "../logic/charts/chartTitle.js";
 import { downloadChartPng } from "../logic/charts/downloadChartPng.js";
 import { copyChartPng, downloadChartSvg } from "../logic/charts/exportChart.js";
 import { EXPORT_PRESETS, computePresetExport } from "../logic/charts/exportPresets.js";
@@ -12,6 +12,7 @@ import { isQualitative } from "../logic/charts/palette.js";
 import { buildChartExamplePrompts } from "../logic/offline/examplePrompts.js";
 import ChartPreview from "./ChartPreview.jsx";
 import DataTable from "./DataTable.jsx";
+import { CopyButton } from "./ResultsPanel.jsx";
 import ClarifyBox from "./ClarifyBox.jsx";
 import StepHelpPanel from "./StepHelpPanel.jsx";
 
@@ -52,6 +53,9 @@ export default function ChartsPanel({ sheet, seed }) {
   const [exportNote, setExportNote] = useState(""); // P5-1: honest result of the last copy/download action
   const [exportPreset, setExportPreset] = useState("slide"); // P5-2: what the PNG download is sized for
   const [posterInches, setPosterInches] = useState(8); // P5-2: poster width, in inches
+  const [figTitle, setFigTitle] = useState(""); // P5-3: editable figure title (empty = the automatic one)
+  const [figFootnote, setFigFootnote] = useState(""); // P5-3: footnote drawn on the chart itself
+  const [grayscale, setGrayscale] = useState(false); // P5-3: print-safe single-hue palette
   const svgRef = useRef(null);
 
   // Apply a resolved (or confirmed) plan to the pickers below, so the dropdowns
@@ -79,6 +83,10 @@ export default function ChartsPanel({ sheet, seed }) {
     setReferenceLine(null);
     setBucket(plan.kind === "crosstab" ? null : (plan.bucket || null));
     setParetoOn(false);
+    // P5-3: a fresh chart request must not inherit the previous figure's
+    // hand-written title/footnote — a stale caption on a new chart lies.
+    setFigTitle("");
+    setFigFootnote("");
   }
 
   // Phase 8.5: apply a plain-word tweak to the chart already on screen. Each
@@ -205,7 +213,14 @@ export default function ChartsPanel({ sheet, seed }) {
     [dataset, chartType, rec, emphasis, pareto],
   );
   const chartTitle = useMemo(() => buildChartTitle(dataset), [dataset]);
-  const qualitative = dataset && dataset.kind === "categorical" && isQualitative(dataset.points.length);
+  // P5-3: the title on the figure — the user's own if typed, else automatic.
+  const effectiveTitle = figTitle.trim() || chartTitle;
+  const figureCaption = dataset ? buildFigureCaption({
+    title: effectiveTitle,
+    footnote: figFootnote.trim(),
+    cohortCaption: filter ? buildCohortCaption(dataset, filter) : "",
+  }) : "";
+  const qualitative = dataset && dataset.kind === "categorical" && isQualitative(dataset.points.length) && !grayscale;
 
   return (
     <div className="charts-panel">
@@ -359,13 +374,50 @@ export default function ChartsPanel({ sheet, seed }) {
           <ChartPreview
             chartType={chartType}
             dataset={dataset}
-            title={chartTitle}
+            title={effectiveTitle}
             highlightLabel={highlightLabel}
             referenceLine={chartType === "bar" ? referenceLine : null}
             pareto={pareto}
             svgRef={svgRef}
             layout={rec.layout}
+            footnote={figFootnote.trim() || null}
+            grayscale={grayscale}
           />
+
+          {/* P5-3: figure furniture — an editable title and an on-chart
+              footnote (both drawn inside the SVG so every export carries
+              them), the print-safe palette toggle, and a caption whose text
+              is ready to paste as a manuscript figure legend. */}
+          <div className="chart-figure-row">
+            <label className="chart-text-label">
+              Figure title
+              <input
+                className="chart-text-input"
+                value={figTitle}
+                placeholder={chartTitle}
+                onChange={(e) => setFigTitle(e.target.value)}
+              />
+            </label>
+            <label className="chart-text-label">
+              Footnote (shows on the chart)
+              <input
+                className="chart-text-input"
+                value={figFootnote}
+                placeholder="e.g. n = 267 encounters, Jan–Jun 2026"
+                onChange={(e) => setFigFootnote(e.target.value)}
+              />
+            </label>
+          </div>
+          <label className="chart-other-toggle">
+            <input type="checkbox" checked={grayscale} onChange={(e) => setGrayscale(e.target.checked)} />
+            Grayscale-safe colors (for black-and-white printing) — one dark-to-light family, so the order survives without color
+          </label>
+          {figureCaption && (
+            <div className="figure-caption-row">
+              <p className="dim">{figureCaption}</p>
+              <CopyButton text={figureCaption} label="Copy caption" />
+            </div>
+          )}
 
           {/* P6-5: the panels cap at 12, so the FULL crosstab renders as a
               table right below — every category, nothing hidden for good. */}
@@ -480,7 +532,7 @@ export default function ChartsPanel({ sheet, seed }) {
                       if (!svgEl) return;
                       const d = { width: Number(svgEl.getAttribute("width")) || 480, height: Number(svgEl.getAttribute("height")) || 300 };
                       const { scale } = computePresetExport(d, exportPreset, { posterInches });
-                      downloadChartPng(svgEl, `${chartFileBase(chartTitle)}-${exportPreset}.png`, scale);
+                      downloadChartPng(svgEl, `${chartFileBase(effectiveTitle)}-${exportPreset}.png`, scale);
                     }}
                   >
                     Download chart as image (PNG)
@@ -488,7 +540,7 @@ export default function ChartsPanel({ sheet, seed }) {
                   <button
                     type="button"
                     className="btn btn-ghost"
-                    onClick={() => downloadChartSvg(svgRef.current, `${chartFileBase(chartTitle)}.svg`)}
+                    onClick={() => downloadChartSvg(svgRef.current, `${chartFileBase(effectiveTitle)}.svg`)}
                   >
                     Download SVG (scales to any size)
                   </button>
@@ -549,8 +601,8 @@ export default function ChartsPanel({ sheet, seed }) {
 }
 
 // P5-1: one sanitized filename base shared by the PNG and SVG downloads.
-function chartFileBase(chartTitle) {
-  return chartTitle.replace(/[^\w -]/g, "").trim() || "chart";
+function chartFileBase(title) {
+  return title.replace(/[^\w -]/g, "").trim() || "chart";
 }
 
 const CROSSTAB_LAYOUT_CHART_NAME = {

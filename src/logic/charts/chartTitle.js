@@ -39,6 +39,16 @@ function datasetN(dataset) {
   return null;
 }
 
+// P5-3: the copyable figure caption — composed ONLY from what is actually
+// on the chart (its title, the user's footnote, the cohort sentence), never
+// invented. Each piece gets a closing period so the result pastes into a
+// manuscript figure legend as finished sentences.
+export function buildFigureCaption({ title, footnote, cohortCaption } = {}) {
+  if (!title) return "";
+  const sentence = (s) => (/[.!?]$/.test(s.trim()) ? s.trim() : `${s.trim()}.`);
+  return [title, footnote, cohortCaption].filter(Boolean).map(sentence).join(" ");
+}
+
 // P6-4: "caption says n and the filter" — the sentence shown alongside a
 // cohort-scoped chart, honest about exactly which rows it counted. Reuses the
 // same "Only counting rows where X is Y" wording the filter picker's own hint

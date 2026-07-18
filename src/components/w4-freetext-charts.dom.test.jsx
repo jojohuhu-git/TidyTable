@@ -39,7 +39,7 @@ describe("W4 — free-text chart box", () => {
     // Confirming draws the chart, scoped to the E. coli filter.
     fireEvent.click(screen.getByRole("button", { name: /Yes, chart that/i }));
     expect(screen.getByRole("img", { name: /bar chart/i })).toBeTruthy();
-    expect(screen.getByText(/Only counting rows where "Urine Organisms" is "ESCHERICHIA COLI"/i)).toBeTruthy();
+    expect(screen.getAllByText(/Only counting rows where "Urine Organisms" is "ESCHERICHIA COLI"/i).length).toBeGreaterThan(0);
   });
 
   it("says so plainly when it cannot place the request, without guessing", () => {

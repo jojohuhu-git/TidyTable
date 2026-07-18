@@ -40,7 +40,10 @@ function ChartTitle({ title, subtitle }) {
   );
 }
 
-export default function ChartPreview({ chartType, dataset, highlightLabel, referenceLine, pareto, title, svgRef, layout }) {
+// P5-3: `footnote` draws a line of small text INSIDE every chart's SVG (so
+// every export path — PNG, SVG, clipboard — carries it), and `grayscale`
+// switches every palette call to the print-safe dark-to-light ramp.
+export default function ChartPreview({ chartType, dataset, highlightLabel, referenceLine, pareto, title, svgRef, layout, footnote, grayscale }) {
   if (!dataset) return null;
   // P6-1: a crosstab (two categorical columns) draws grouped/stacked/100%
   // stacked bars — a different enough shape (a category x subgroup grid, no
@@ -53,9 +56,9 @@ export default function ChartPreview({ chartType, dataset, highlightLabel, refer
     // category, one shared scale) when the advisor — or the user, via "Other
     // options" — picks small multiples over grouped/stacked bars.
     if (chartType === "smallMultiples") {
-      return <SmallMultiplesChart dataset={dataset} title={title} svgRef={svgRef} />;
+      return <SmallMultiplesChart dataset={dataset} title={title} svgRef={svgRef} footnote={footnote} grayscale={grayscale} />;
     }
-    return <CrosstabBarChart dataset={dataset} title={title} layout={layout} svgRef={svgRef} />;
+    return <CrosstabBarChart dataset={dataset} title={title} layout={layout} svgRef={svgRef} footnote={footnote} grayscale={grayscale} />;
   }
   // P6-2: a histogram (one numeric column, no grouping) and a box+dot plot
   // (a numeric column's spread within each group) are both `kind:
@@ -64,10 +67,10 @@ export default function ChartPreview({ chartType, dataset, highlightLabel, refer
   if (dataset.kind === "distribution") {
     if (dataset.shape === "histogram") {
       if (!dataset.bins?.length) return null;
-      return <HistogramChart dataset={dataset} title={title} svgRef={svgRef} />;
+      return <HistogramChart dataset={dataset} title={title} svgRef={svgRef} footnote={footnote} />;
     }
     if (!dataset.groups?.length) return null;
-    return <BoxDotChart dataset={dataset} title={title} svgRef={svgRef} />;
+    return <BoxDotChart dataset={dataset} title={title} svgRef={svgRef} footnote={footnote} grayscale={grayscale} />;
   }
   if (!dataset.points?.length) return null;
   const isSubject = (label) =>
@@ -75,7 +78,7 @@ export default function ChartPreview({ chartType, dataset, highlightLabel, refer
   // W4: with no highlight, color the bars/slices from the chart palette
   // (Okabe-Ito for a short list, a single-hue teal ramp for a long one) — a
   // report-card highlight still overrides everything to the accent/grey pair.
-  const palette = chartPalette(dataset.points.length);
+  const palette = chartPalette(dataset.points.length, { grayscale });
   const fill = (label, i) => {
     if (highlightLabel != null) return isSubject(label) ? "var(--accent)" : "var(--line)";
     return palette[i] || "var(--accent)";
@@ -85,11 +88,23 @@ export default function ChartPreview({ chartType, dataset, highlightLabel, refer
   // for first place, or too few categories to compare.
   const subtitle = describeExtreme(dataset);
 
-  if (chartType === "bar") return <BarChart dataset={dataset} fill={fill} title={title} subtitle={subtitle} referenceLine={referenceLine} pareto={pareto} highlightLabel={highlightLabel} svgRef={svgRef} layout={layout} highlighting={highlightLabel != null} />;
-  if (chartType === "line") return <LineChart dataset={dataset} title={title} svgRef={svgRef} />;
-  if (chartType === "pie") return <PieChart dataset={dataset} fill={fill} title={title} subtitle={subtitle} highlightLabel={highlightLabel} svgRef={svgRef} highlighting={highlightLabel != null} />;
-  if (chartType === "scatter") return <ScatterChart dataset={dataset} title={title} svgRef={svgRef} />;
+  if (chartType === "bar") return <BarChart dataset={dataset} fill={fill} title={title} subtitle={subtitle} referenceLine={referenceLine} pareto={pareto} highlightLabel={highlightLabel} svgRef={svgRef} layout={layout} highlighting={highlightLabel != null} footnote={footnote} />;
+  if (chartType === "line") return <LineChart dataset={dataset} title={title} svgRef={svgRef} footnote={footnote} />;
+  if (chartType === "pie") return <PieChart dataset={dataset} fill={fill} title={title} subtitle={subtitle} highlightLabel={highlightLabel} svgRef={svgRef} highlighting={highlightLabel != null} footnote={footnote} />;
+  if (chartType === "scatter") return <ScatterChart dataset={dataset} title={title} svgRef={svgRef} footnote={footnote} />;
   return null;
+}
+
+// P5-3: the figure footnote ("n = 267 encounters, Jan–Jun 2026") drawn as
+// small text INSIDE the SVG, at the bottom-left — so the PNG/SVG/clipboard
+// exports all carry it, not just the page around the chart. Each chart adds
+// FOOTNOTE_H to its own height when a footnote is set, so the note never
+// overlaps the plot.
+const FOOTNOTE_H = 16;
+
+function Footnote({ footnote, totalH }) {
+  if (!footnote) return null;
+  return <text x={8} y={totalH - 5} className="chart-footnote">{footnote}</text>;
 }
 
 function niceMax(v) {
@@ -114,7 +129,7 @@ function niceMax(v) {
 const PARETO_STRIP_W = 150;
 const PARETO_STRIP_PAD = 14;
 
-function BarChart({ dataset, fill, title, subtitle, referenceLine, pareto, highlightLabel, svgRef, layout }) {
+function BarChart({ dataset, fill, title, subtitle, referenceLine, pareto, highlightLabel, svgRef, layout, footnote }) {
   const padL = 130;
   // Phase 8.3: an n (%) value label ("2 (33%)") is wider than a bare number, so
   // the right margin has to leave room or the trailing ")" clips off the SVG.
@@ -157,8 +172,9 @@ function BarChart({ dataset, fill, title, subtitle, referenceLine, pareto, highl
   const stripX0 = W + PARETO_STRIP_PAD;
   const stripInnerW = PARETO_STRIP_W - PARETO_STRIP_PAD * 2;
   const paretoX = (pct) => stripX0 + (pct / 100) * stripInnerW;
+  const totalH = chartH + (footnote ? FOOTNOTE_H : 0);
   return (
-    <svg ref={svgRef} viewBox={`0 0 ${chartW} ${chartH}`} width={chartW} height={chartH} className="chart-svg" role="img" aria-label={ariaLabel}>
+    <svg ref={svgRef} viewBox={`0 0 ${chartW} ${totalH}`} width={chartW} height={totalH} className="chart-svg" role="img" aria-label={ariaLabel}>
       <ChartTitle title={title} subtitle={subtitle} />
       {negMax > 0 && <line x1={zeroX} y1={padY} x2={zeroX} y2={chartH - 16} stroke="var(--line)" />}
       {points.map((p, i) => {
@@ -229,11 +245,12 @@ function BarChart({ dataset, fill, title, subtitle, referenceLine, pareto, highl
           ))}
         </g>
       )}
+      <Footnote footnote={footnote} totalH={totalH} />
     </svg>
   );
 }
 
-function LineChart({ dataset, title, svgRef }) {
+function LineChart({ dataset, title, svgRef, footnote }) {
   const padL = 44;
   const padR = 20;
   const padB = 34;
@@ -244,8 +261,9 @@ function LineChart({ dataset, title, svgRef }) {
   const scaleY = (H - padT - padB) / max;
   const xy = points.map((p, i) => [padL + i * stepX, H - padB - p.value * scaleY]);
   const d = xy.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+  const totalH = H + (footnote ? FOOTNOTE_H : 0);
   return (
-    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="chart-svg" role="img" aria-label={title ? `Line chart of ${title}` : "Line chart"}>
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${totalH}`} width={W} height={totalH} className="chart-svg" role="img" aria-label={title ? `Line chart of ${title}` : "Line chart"}>
       <ChartTitle title={title} />
       <line x1={padL} y1={H - padB} x2={W - padR} y2={H - padB} stroke="var(--line)" />
       <line x1={padL} y1={padT} x2={padL} y2={H - padB} stroke="var(--line)" />
@@ -258,11 +276,12 @@ function LineChart({ dataset, title, svgRef }) {
           </text>
         </g>
       ))}
+      <Footnote footnote={footnote} totalH={totalH} />
     </svg>
   );
 }
 
-function PieChart({ dataset, fill, title, subtitle, highlightLabel, svgRef }) {
+function PieChart({ dataset, fill, title, subtitle, highlightLabel, svgRef, footnote }) {
   const cx = 150;
   const cy = H / 2 + (title ? TITLE_PAD / 2 : 0);
   const r = 110;
@@ -273,8 +292,9 @@ function PieChart({ dataset, fill, title, subtitle, highlightLabel, svgRef }) {
   const ariaLabel = title
     ? `Pie chart of ${title}: ${buildChartAriaSummary(dataset, undefined, ariaOpts)}`
     : `Pie chart: ${buildChartAriaSummary(dataset, undefined, ariaOpts)}`;
+  const totalH = H + (footnote ? FOOTNOTE_H : 0);
   return (
-    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="chart-svg" role="img" aria-label={ariaLabel}>
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${totalH}`} width={W} height={totalH} className="chart-svg" role="img" aria-label={ariaLabel}>
       <ChartTitle title={title} subtitle={subtitle} />
       {dataset.points.map((p, i) => {
         const frac = p.value / total;
@@ -311,6 +331,7 @@ function PieChart({ dataset, fill, title, subtitle, highlightLabel, svgRef }) {
           </g>
         );
       })}
+      <Footnote footnote={footnote} totalH={totalH} />
     </svg>
   );
 }
@@ -362,12 +383,12 @@ const GROUP_SUB_GAP = 2;
 const STACK_BAR_H = 26;
 const CROSSTAB_BLOCK_GAP = 10;
 
-function CrosstabBarChart({ dataset, title, layout, svgRef }) {
+function CrosstabBarChart({ dataset, title, layout, svgRef, footnote, grayscale }) {
   const padL = 130;
   const padR = 44;
   const categories = dataset.categories;
   const subgroups = dataset.subgroups;
-  const palette = chartPalette(subgroups.length);
+  const palette = chartPalette(subgroups.length, { grayscale });
   const legendH = legendHeight(subgroups.length);
   const padTop = 16 + (title ? TITLE_PAD : 0);
   const padY = padTop + legendH;
@@ -377,6 +398,7 @@ function CrosstabBarChart({ dataset, title, layout, svgRef }) {
     ? subgroups.length * GROUP_SUB_BAR_H + (subgroups.length - 1) * GROUP_SUB_GAP
     : STACK_BAR_H;
   const chartH = padY + categories.length * (blockH + CROSSTAB_BLOCK_GAP) + padB;
+  const totalH = chartH + (footnote ? FOOTNOTE_H : 0);
 
   const innerW = W - padL - padR;
   const maxCell = layout === "grouped" ? niceMax(maxOf(categories.flatMap((c) => c.values), 0)) : null;
@@ -394,7 +416,7 @@ function CrosstabBarChart({ dataset, title, layout, svgRef }) {
   });
 
   return (
-    <svg ref={svgRef} viewBox={`0 0 ${W} ${chartH}`} width={W} height={chartH} className="chart-svg" role="img" aria-label={ariaLabel}>
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${totalH}`} width={W} height={totalH} className="chart-svg" role="img" aria-label={ariaLabel}>
       <ChartTitle title={title} />
       <Legend subgroups={subgroups} palette={palette} x={padL} y={padTop + 4} width={innerW} />
       {blocks.map(({ c, top }, ci) => {
@@ -427,6 +449,7 @@ function CrosstabBarChart({ dataset, title, layout, svgRef }) {
       {layout === "stacked100" && [0, 25, 50, 75, 100].map((p) => (
         <text key={p} x={padL + innerW * (p / 100)} y={chartH - 6} textAnchor="middle" className="chart-label">{p}%</text>
       ))}
+      <Footnote footnote={footnote} totalH={totalH} />
     </svg>
   );
 }
@@ -448,9 +471,9 @@ const SM_BAR_H = 8;
 const SM_BAR_GAP = 2;
 const SM_PANEL_GAP_Y = 14;
 
-function SmallMultiplesChart({ dataset, title, svgRef }) {
+function SmallMultiplesChart({ dataset, title, svgRef, footnote, grayscale }) {
   const { panels, subgroups, maxValue, hiddenCount } = buildSmallMultiplesData(dataset);
-  const palette = chartPalette(subgroups.length);
+  const palette = chartPalette(subgroups.length, { grayscale });
   const legendH = legendHeight(subgroups.length);
   const padTop = 16 + (title ? TITLE_PAD : 0);
   const padY = padTop + legendH;
@@ -461,11 +484,12 @@ function SmallMultiplesChart({ dataset, title, svgRef }) {
   const gridRows = Math.ceil(panels.length / SM_COLS);
   const moreNoteH = hiddenCount > 0 ? 18 : 0;
   const chartH = padY + gridRows * (panelH + SM_PANEL_GAP_Y) + moreNoteH + 8;
+  const totalH = chartH + (footnote ? FOOTNOTE_H : 0);
   const ariaLabel = title
     ? `Small multiples of ${title}: ${buildCrosstabAriaSummary(dataset)}`
     : `Small multiples: ${buildCrosstabAriaSummary(dataset)}`;
   return (
-    <svg ref={svgRef} viewBox={`0 0 ${W} ${chartH}`} width={W} height={chartH} className="chart-svg" role="img" aria-label={ariaLabel}>
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${totalH}`} width={W} height={totalH} className="chart-svg" role="img" aria-label={ariaLabel}>
       <ChartTitle title={title} />
       <Legend subgroups={subgroups} palette={palette} x={padSide + SM_PANEL_PAD_X} y={padTop + 4} width={W - padSide * 2} />
       {panels.map((p, pi) => {
@@ -492,6 +516,7 @@ function SmallMultiplesChart({ dataset, title, svgRef }) {
           …and {hiddenCount} more {dataset.labelName} — see the full table below.
         </text>
       )}
+      <Footnote footnote={footnote} totalH={totalH} />
     </svg>
   );
 }
@@ -504,7 +529,7 @@ function SmallMultiplesChart({ dataset, title, svgRef }) {
 // style the categorical bars use. Both axes carry a title AND numeric ticks
 // (bin ranges along the bottom, evenly spaced counts up the side): the
 // app's LineChart has neither yet, and a histogram should not repeat that gap.
-function HistogramChart({ dataset, title, svgRef }) {
+function HistogramChart({ dataset, title, svgRef, footnote }) {
   const bins = dataset.bins;
   const padL = 46;
   const padR = 16;
@@ -519,8 +544,9 @@ function HistogramChart({ dataset, title, svgRef }) {
   const ariaLabel = title
     ? `Histogram of ${title}: ${buildHistogramAriaSummary(dataset)}`
     : `Histogram: ${buildHistogramAriaSummary(dataset)}`;
+  const totalH = H + (footnote ? FOOTNOTE_H : 0);
   return (
-    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="chart-svg" role="img" aria-label={ariaLabel}>
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${totalH}`} width={W} height={totalH} className="chart-svg" role="img" aria-label={ariaLabel}>
       <ChartTitle title={title} subtitle={dataset.binRule} />
       <line x1={padL} y1={padT} x2={padL} y2={padT + innerH} stroke="var(--line)" />
       <line x1={padL} y1={padT + innerH} x2={W - padR} y2={padT + innerH} stroke="var(--line)" />
@@ -552,6 +578,7 @@ function HistogramChart({ dataset, title, svgRef }) {
       })}
       <text x={padL + innerW / 2} y={H - 6} textAnchor="middle" className="chart-label">{dataset.valueName}</text>
       <text x={12} y={padT + innerH / 2} textAnchor="middle" className="chart-label" transform={`rotate(-90 12 ${padT + innerH / 2})`}>Number of rows</text>
+      <Footnote footnote={footnote} totalH={totalH} />
     </svg>
   );
 }
@@ -574,13 +601,14 @@ function jitterOffset(i, n, maxSpread) {
   return (frac - 0.5) * 2 * maxSpread;
 }
 
-function BoxDotChart({ dataset, title, svgRef }) {
+function BoxDotChart({ dataset, title, svgRef, footnote, grayscale }) {
   const padL = 130;
   const padR = 30;
   const padB = 40;
   const groups = dataset.groups;
   const padT = 16 + (title ? TITLE_PAD : 0);
   const chartH = padT + groups.length * BOXDOT_ROW_H + padB;
+  const totalH = chartH + (footnote ? FOOTNOTE_H : 0);
   const allValues = groups.flatMap((g) => [g.stats.min, g.stats.max]);
   // niceMax(0) returns 1 (a bare-zero axis ceiling would be a degenerate
   // chart) — harmless for BarChart above, which only conditionally draws a
@@ -595,13 +623,13 @@ function BoxDotChart({ dataset, title, svgRef }) {
   const scale = innerW / ((posMax + negMax) || 1);
   const zeroX = padL + negMax * scale;
   const xAt = (v) => zeroX + v * scale;
-  const palette = chartPalette(groups.length);
+  const palette = chartPalette(groups.length, { grayscale });
   const ariaLabel = title
     ? `Box and dot plot of ${title}: ${buildBoxDotAriaSummary(dataset)}`
     : `Box and dot plot: ${buildBoxDotAriaSummary(dataset)}`;
 
   return (
-    <svg ref={svgRef} viewBox={`0 0 ${W} ${chartH}`} width={W} height={chartH} className="chart-svg" role="img" aria-label={ariaLabel}>
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${totalH}`} width={W} height={totalH} className="chart-svg" role="img" aria-label={ariaLabel}>
       <ChartTitle title={title} />
       {negMax > 0 && <line x1={zeroX} y1={padT} x2={zeroX} y2={chartH - padB} stroke="var(--line)" />}
       {groups.map((g, gi) => {
@@ -649,11 +677,12 @@ function BoxDotChart({ dataset, title, svgRef }) {
         );
       })}
       <text x={padL + innerW / 2} y={chartH - 6} textAnchor="middle" className="chart-label">{dataset.valueName}</text>
+      <Footnote footnote={footnote} totalH={totalH} />
     </svg>
   );
 }
 
-function ScatterChart({ dataset, title, svgRef }) {
+function ScatterChart({ dataset, title, svgRef, footnote }) {
   const padL = 44;
   const padR = 20;
   const padB = 34;
@@ -664,8 +693,9 @@ function ScatterChart({ dataset, title, svgRef }) {
   const maxY = niceMax(maxOf(ys));
   const sx = (W - padL - padR) / maxX;
   const sy = (H - padT - padB) / maxY;
+  const totalH = H + (footnote ? FOOTNOTE_H : 0);
   return (
-    <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="chart-svg" role="img" aria-label={title ? `Scatter plot of ${title}` : "Scatter plot"}>
+    <svg ref={svgRef} viewBox={`0 0 ${W} ${totalH}`} width={W} height={totalH} className="chart-svg" role="img" aria-label={title ? `Scatter plot of ${title}` : "Scatter plot"}>
       <ChartTitle title={title} />
       <line x1={padL} y1={H - padB} x2={W - padR} y2={H - padB} stroke="var(--line)" />
       <line x1={padL} y1={padT} x2={padL} y2={H - padB} stroke="var(--line)" />
@@ -674,6 +704,7 @@ function ScatterChart({ dataset, title, svgRef }) {
       ))}
       <text x={(W) / 2} y={H - 6} textAnchor="middle" className="chart-label">{dataset.xName}</text>
       <text x={12} y={H / 2} textAnchor="middle" className="chart-label" transform={`rotate(-90 12 ${H / 2})`}>{dataset.yName}</text>
+      <Footnote footnote={footnote} totalH={totalH} />
     </svg>
   );
 }

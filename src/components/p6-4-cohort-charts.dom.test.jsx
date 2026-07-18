@@ -38,7 +38,7 @@ describe("P6-4 — owner's cystitis example (a): filtered ranked bar, top bar em
     expect(img.getAttribute("aria-label")).toMatch(/cephalexin 3, nitrofurantoin 1/i);
     expect(within(img).getByText(/most common: cephalexin/i)).toBeTruthy();
 
-    expect(screen.getByText(/only counting rows where "diagnosis" is "cystitis", n=4/i)).toBeTruthy();
+    expect(screen.getAllByText(/only counting rows where "diagnosis" is "cystitis", n=4/i).length).toBeGreaterThan(0);
   });
 });
 
@@ -57,6 +57,6 @@ describe("P6-4 — owner's cystitis example (b): 'durations chosen for cystitis'
     expect(img.getAttribute("aria-label")).toMatch(/cystitis only/i);
     expect(img.getAttribute("aria-label")).toMatch(/4 values/i);
 
-    expect(screen.getByText(/only counting rows where "diagnosis" is "cystitis", n=4/i)).toBeTruthy();
+    expect(screen.getAllByText(/only counting rows where "diagnosis" is "cystitis", n=4/i).length).toBeGreaterThan(0);
   });
 });

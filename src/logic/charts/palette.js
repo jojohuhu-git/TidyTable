@@ -57,9 +57,13 @@ function mix(a, b, t) {
 //     so the top-3 bars are emphasized, per the owner's "matching but
 //     distinct" ask. Assumes the caller feeds points already sorted
 //     largest-first (aggregate.js does).
-export function chartPalette(count) {
+// P5-3: `opts.grayscale` forces the single-hue ramp for ANY count. Okabe-Ito
+// hues are chosen for color vision, not for print — several collapse to the
+// same gray on a black-and-white printer. The ramp's dark-to-light ORDER is
+// what survives grayscale, so it is the honest palette for a B&W journal.
+export function chartPalette(count, opts = {}) {
   if (count <= 0) return [];
-  if (count <= OKABE_ITO.length) return OKABE_ITO.slice(0, count);
+  if (!opts.grayscale && count <= OKABE_ITO.length) return OKABE_ITO.slice(0, count);
 
   const colors = [];
   // Top 3 emphasized: fixed dark shades before the ramp begins.

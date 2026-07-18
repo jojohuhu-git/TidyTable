@@ -163,6 +163,10 @@ body {
 /* Charts (Step 9) and the reshape shelf (Step 10). */
 .chart-svg { width: 100%; max-width: 480px; height: auto; margin: 0.6rem 0; }
 .chart-label { font-size: 11px; fill: var(--ink-soft); }
+.chart-footnote { font-size: 10px; fill: var(--ink-soft); font-style: italic; }
+.chart-export-row, .chart-figure-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end; margin: 0.5rem 0; }
+.figure-caption-row { display: flex; gap: 0.5rem; align-items: baseline; margin: 0.3rem 0; }
+.figure-caption-row p { margin: 0; }
 .chart-value { font-size: 11px; fill: var(--ink); font-weight: 600; }
 .chart-title { font-size: 13px; fill: var(--ink); font-weight: 600; }
 .charts-alts summary { cursor: pointer; color: var(--accent); font-weight: 600; margin: 0.4rem 0; }
