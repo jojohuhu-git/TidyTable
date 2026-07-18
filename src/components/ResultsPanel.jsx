@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import DataTable from "./DataTable.jsx";
 import RstudioGuide from "./RstudioGuide.jsx";
 import { downloadRowsAsXlsx, downloadRowsAsCsv, downloadText } from "../logic/workbook.js";
+import { copyTableForWord } from "../logic/offline/tableHtml.js";
 import { nextTabIndex } from "../logic/a11y/tabsKeyboard.js";
 
 export function CopyButton({ text, label = "Copy" }) {
@@ -17,6 +18,31 @@ export function CopyButton({ text, label = "Copy" }) {
     >
       {copied ? "Copied" : label}
     </button>
+  );
+}
+
+// P5-1: copy the result table (including Table 1 — its rows flow through
+// this same panel) to the clipboard as REAL table structure (text/html), so
+// pasting into Word/PowerPoint keeps rows and columns. Copies every row,
+// not just the 200 shown on screen, and reports its honest outcome — a
+// browser that can't do it is told to use the downloads instead.
+function CopyTableButton({ rows }) {
+  const [note, setNote] = useState("");
+  return (
+    <>
+      <button
+        className="btn btn-ghost"
+        disabled={rows.length === 0}
+        onClick={async () => {
+          const res = await copyTableForWord(rows);
+          setNote(res.message);
+          if (res.ok) setTimeout(() => setNote(""), 2500);
+        }}
+      >
+        Copy table for Word
+      </button>
+      {note && <span className="dim" role="status">{note}</span>}
+    </>
   );
 }
 
@@ -133,6 +159,7 @@ export default function ResultsPanel({ plan, rows }) {
             <button className="btn btn-ghost" onClick={() => downloadRowsAsCsv(rows)} disabled={rows.length === 0}>
               Download CSV
             </button>
+            <CopyTableButton rows={rows} />
           </div>
           {rows.length === 0 ? (
             <p className="hint">No rows matched. Read "What the AI did" above — it may explain why.</p>

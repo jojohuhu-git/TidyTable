@@ -5,6 +5,7 @@ import { recommendChart } from "../logic/charts/advisor.js";
 import { excelChartSteps } from "../logic/charts/excelChart.js";
 import { buildChartTitle, buildCohortCaption } from "../logic/charts/chartTitle.js";
 import { downloadChartPng } from "../logic/charts/downloadChartPng.js";
+import { copyChartPng, downloadChartSvg } from "../logic/charts/exportChart.js";
 import { resolveChartRequest } from "../logic/charts/textToChart.js";
 import { isQualitative } from "../logic/charts/palette.js";
 import { buildChartExamplePrompts } from "../logic/offline/examplePrompts.js";
@@ -47,6 +48,7 @@ export default function ChartsPanel({ sheet, seed }) {
   const [referenceLine, setReferenceLine] = useState(null); // P3-3: { value, label } — average/threshold dashed line
   const [bucket, setBucket] = useState(null); // P4-2: "month" | "quarter" | null — trend-request grouping
   const [paretoOn, setParetoOn] = useState(false); // P6-3: "add cumulative % line" — off by default
+  const [exportNote, setExportNote] = useState(""); // P5-1: honest result of the last copy/download action
   const svgRef = useRef(null);
 
   // Apply a resolved (or confirmed) plan to the pickers below, so the dropdowns
@@ -423,13 +425,36 @@ export default function ChartsPanel({ sheet, seed }) {
                 : "Colors run from dark (largest) to light (smallest) in one teal family, with the top few emphasized — matching but distinct."}
             </p>
           )}
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={() => downloadChartPng(svgRef.current, `${chartTitle.replace(/[^\w -]/g, "").trim() || "chart"}.png`)}
-          >
-            Download chart as image
-          </button>
+          {/* P5-1: zero-dependency exports — copy for slides, PNG for quick
+              use, SVG as the vector that scales to any poster size. Every
+              copy reports its honest outcome in the note below. */}
+          <div className="chart-export-row">
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={async () => {
+                const res = await copyChartPng(svgRef.current);
+                setExportNote(res.message);
+              }}
+            >
+              Copy chart (paste into slides)
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => downloadChartPng(svgRef.current, `${chartFileBase(chartTitle)}.png`)}
+            >
+              Download chart as image (PNG)
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => downloadChartSvg(svgRef.current, `${chartFileBase(chartTitle)}.svg`)}
+            >
+              Download SVG (scales to any size)
+            </button>
+          </div>
+          {exportNote && <p className="hint" role="status">{exportNote}</p>}
           {dataset.sampled && (
             <p className="hint">
               Showing a sample of {dataset.points.length.toLocaleString()} of {dataset.totalPoints.toLocaleString()} points, spread evenly through the data, so the preview stays readable and fast.
@@ -469,6 +494,11 @@ export default function ChartsPanel({ sheet, seed }) {
       )}
     </div>
   );
+}
+
+// P5-1: one sanitized filename base shared by the PNG and SVG downloads.
+function chartFileBase(chartTitle) {
+  return chartTitle.replace(/[^\w -]/g, "").trim() || "chart";
 }
 
 const CROSSTAB_LAYOUT_CHART_NAME = {
