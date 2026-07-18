@@ -82,6 +82,12 @@ Phrasings that work in the free-text box:
 - "**distribution of <numeric column>**" → histogram; box-and-dot appears under
   Other options for grouped numeric summaries.
 - "**top 5 <things>**" / "least common <thing>" → capped ranked bars.
+- **Small multiples (automatic):** when a hand-picked two-column chart has more
+  than 12 categories *and* more subgroups than the 8-color legend holds, the
+  app recommends a grid of mini charts (one panel per category, one shared
+  scale) instead of one unreadable wall of bars. The full numbers table shows
+  below the panels. If you typed a layout word ("stacked"), your choice wins
+  and small multiples waits under Other options.
 - **Tweak box** (after a chart is up): "only top 5", "sort alphabetically",
   "show percentages". Single-column charts only — it hides for two-column
   charts rather than pretending.
