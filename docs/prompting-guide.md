@@ -97,6 +97,21 @@ resolved to — glance at them to verify the app read you correctly. "Other
 options" lists the sensible alternative layouts; the recommendation states its
 reason.
 
+**Getting a chart out of the app** (below every chart):
+- **Copy chart** puts it on the clipboard — paste straight into PowerPoint or
+  Word. If your browser can't, the app says so and the downloads still work.
+- **Download size** picks what the PNG is for: a slide, a poster (width you
+  choose), or a journal figure (single/double column). The app warns if the
+  chosen size would print the small text under ~8pt. The SVG download has no
+  fixed size and stays sharp at any width.
+- **Figure title / Footnote** boxes draw your own title and an "n = …" line on
+  the chart itself, so every export carries them; the caption underneath is
+  ready to copy into a manuscript figure legend.
+- **Grayscale-safe colors** switches to one dark-to-light family for journals
+  that print black-and-white.
+- On result cards, **Copy table for Word** pastes as a real table (rows and
+  columns), not a blob of text.
+
 ## Step 10 — Combine and reshape
 
 Pick operations from the list (rows missing from another sheet, look up a value,

@@ -1,5 +1,10 @@
 # TidyTable — Handoff after P6-5 shipped: the whole P6 chart family is complete (2026-07-17)
 
+> **STATUS: SUPERSEDED (2026-07-17, same day, later session-half).** The
+> P5 zero-dependency export block (P5-1/P5-2/P5-3/P5-6) shipped right
+> after this was written. Current handoff:
+> [handoff-2026-07-17-p5-zero-dep-exports-done.md](handoff-2026-07-17-p5-zero-dep-exports-done.md)
+
 > **SUPERSEDES** [handoff-2026-07-17-p6-5-design-only.md](handoff-2026-07-17-p6-5-design-only.md)
 > — that file's design was executed this session, exactly as written. The
 > canonical parked-items list is still
