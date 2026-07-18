@@ -81,14 +81,21 @@ offered never automatic.
   patient" reshape op (`ShelfPanel.jsx`) — reuse that machinery rather than
   re-implementing the collapse.
 
-## 4. matcher.js silent-drop gap (small fix — do NOT grow it)
+## 4. matcher.js silent-drop gap — SHIPPED 2026-07-18 (do not redo)
 
-**Today:** "average duration_days by ward and diagnosis" routes through the
-shared Step-3 pipeline (`src/logic/offline/matcher.js`), silently drops "ward",
-and labels the answer "exact". Same bug class as R7 (fixed in
-`textToChart.js`'s parser) in a different, untouched code path. This is the
-only parked item that currently produces a wrong answer labeled exact —
-suggested first among the parked work.
+**Done, both scope parts:** (1) "by A and B" requests decline honestly with
+two clickable one-column alternatives (each re-verified to answer before
+being offered); (2) generic guardrail `findDroppedColumns` in matcher.js —
+any confidently resolved request that names a real column the plan doesn't
+use declines instead of answering (this also caught "most common drug by
+ward and diagnosis", which used to rank Ward). 16 new tests in
+`src/logic/offline/parked4-two-column-silent-drop.test.js` +
+`src/parked4-two-column-decline.dom.test.jsx`. Averaged crosstabs stayed
+out of scope (see item 7).
+
+**Original problem (historical):** "average duration_days by ward and
+diagnosis" silently dropped a column and labeled the answer "exact" — same
+bug class as R7 in an untouched code path.
 
 **Brainstormed scope (owner-approved direction):**
 - (1) Two-column average/sum requests decline honestly with clickable

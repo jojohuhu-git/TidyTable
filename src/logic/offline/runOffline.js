@@ -6,7 +6,7 @@
 
 import { parseDefinitions } from "./definitions.js";
 import { mergeDefinitions } from "./definitionsStore.js";
-import { matchRequest, conditionPhrase } from "./matcher.js";
+import { matchRequest, conditionPhrase, findDroppedColumns } from "./matcher.js";
 import { fillPlan } from "./fillPlan.js";
 import { logMiss } from "./missLog.js";
 import { applyGraduation } from "./graduationStore.js";
@@ -22,7 +22,45 @@ export function runOffline(request, workbook, options = {}) {
   const defs = options.definitionsStore ? mergeDefinitions(sheetDefs, options.definitionsStore) : sheetDefs;
   const match = matchRequest(request, workbook, defs, options);
 
+  // Parked item 4: a "by A and B" two-column breakdown declines honestly with
+  // runnable one-column alternatives (each re-verified to actually answer)
+  // instead of quietly grouping by just one of them.
+  if (match.status === "two-column-group") {
+    const alternatives = (match.alternatives || []).filter(
+      (alt) => matchRequest(alt, workbook, defs, options).status === "confident",
+    );
+    const [a, b] = match.columns;
+    const message =
+      `Your question asks to break the answer down by two columns at once ("${a}" and "${b}"). ` +
+      `I can only break down by one column at a time on this computer — and I won't quietly use just one of them. ` +
+      `Try a one-column version below, or add an AI key (top right) for a two-way table.`;
+    logMiss({ request, reason: "two-column-group", message });
+    return {
+      kind: "decline", reason: "two-column-group", message, alternatives,
+      claudeHint: "A local pre-check understood a request to group by two columns at once, which the offline engine cannot compute.",
+    };
+  }
+
   if (match.status === "confident") {
+    // Parked item 4 guardrail (the R7 bug class, generically): if the sentence
+    // names a real column the resolved plan never uses, the answer would
+    // silently drop part of the question — decline instead of presenting it
+    // as exact.
+    const sheet = workbook.sheets.find((s) => s.name === match.sheetName) || workbook.sheets[0];
+    const dropped = findDroppedColumns(request, match, sheet.headers);
+    if (dropped.length) {
+      const list = dropped.map((c) => `"${c}"`).join(" and ");
+      const itThem = dropped.length === 1 ? "it" : "them";
+      const message =
+        `Your question mentions the column${dropped.length === 1 ? "" : "s"} ${list}, but the answer I could ` +
+        `work out doesn't use ${itThem} — I won't answer as if ${itThem === "it" ? "it" : "they"} weren't there. ` +
+        `Rephrase without ${itThem}, or split this into separate questions (one per column).`;
+      logMiss({ request, reason: "unused-column", message });
+      return {
+        kind: "decline", reason: "unused-column", message,
+        claudeHint: "A local pre-check resolved an answer but found the request names a column the resolved plan does not use, so it refused rather than drop part of the question.",
+      };
+    }
     const { plan, resultRows, exec } = fillPlan(match, workbook);
     // W3: `match` is handed back too, so a successful offline answer can be
     // recorded as a replayable "question" step (see recipe.js questionStep) —

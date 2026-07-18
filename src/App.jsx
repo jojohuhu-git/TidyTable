@@ -149,6 +149,10 @@ export default function App() {
   const chartsRef = useRef(null);
   const [keyStore, setKeyStore] = useState(() => loadKeyStore());
   const [notice, setNotice] = useState(""); // plain, non-error message (e.g. "add a definition")
+  // Parked item 4: runnable rephrasings offered with a decline (e.g. the two
+  // one-column versions of a "by A and B" request). Rendered as chips under
+  // the notice; clicking one fills the box and runs it.
+  const [noticeAlts, setNoticeAlts] = useState([]);
   const [pendingGrain, setPendingGrain] = useState(null); // { grain, request } awaiting a combine-rows answer
   // Phase 7.1: the last question answered this session, so a short follow-up
   // ("of those, how many got cephalexin?" / "what about ceftriaxone?") can be
@@ -397,6 +401,7 @@ export default function App() {
         setPendingDefinitions({ missingTerms: res.missingTerms, message: res.message, request, nearest: res.nearest || [] });
       } else {
         setNotice(res.message);
+        setNoticeAlts([]);
       }
       return;
     }
@@ -429,6 +434,7 @@ export default function App() {
     bumpMissVersion();
     if (!apiKey) {
       setNotice(res.message);
+      setNoticeAlts(res.alternatives || []);
       // P0-3: if this run is itself a post-teach re-run and it STILL declined,
       // do not silently re-show the same form (the old infinite loop, which is
       // why "Remember this" looked dead). The learnedNote above already confirms
@@ -742,6 +748,7 @@ export default function App() {
     const raw = promptOverride !== undefined ? promptOverride : prompt;
     setError("");
     setNotice("");
+    setNoticeAlts([]);
     setPendingGrain(null);
     setPendingPooledPolicy(null);
     setPendingDefinitions(null);
@@ -1186,7 +1193,25 @@ export default function App() {
             {learnedNote && (
               <div className="notice-box learned-note" role="status" aria-live="polite">{learnedNote}</div>
             )}
-            {notice && <div className="notice-box" role="status" aria-live="polite">{notice}</div>}
+            {notice && (
+              <div className="notice-box" role="status" aria-live="polite">
+                {notice}
+                {noticeAlts.length > 0 && (
+                  <div className="notice-alternatives">
+                    {noticeAlts.map((alt) => (
+                      <button
+                        key={alt}
+                        type="button"
+                        className="example-chip"
+                        onClick={() => { setPrompt(alt); handleRun(alt); }}
+                      >
+                        {alt}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             {pendingTeach && (
               <TeachItForm
                 request={pendingTeach.request}

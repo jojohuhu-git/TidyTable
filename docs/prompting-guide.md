@@ -155,10 +155,12 @@ up instead of guessing — read that report.
 
 *(Agents: keep this list in sync with the parked queue.)*
 
-1. **"by A and B" (two grouping columns) in Step 3 silently drops one column
-   and still claims "exact."** Known bug (parked item 4), the one place the app
-   currently breaks its own honesty promise. Until fixed: ask two single-column
-   questions, or use Step 9's Split by for a two-way breakdown.
+1. **"by A and B" (two grouping columns) in Step 3 can't be computed offline
+   — but it no longer lies.** (Fixed 2026-07-18, parked item 4.) The app now
+   declines plainly and offers the two one-column versions as clickable
+   buttons; a general safety net also refuses any answer whose question names
+   a column the answer didn't use. For a real two-way breakdown, use Step 9's
+   Split by (counts) or the AI.
 2. **Cohort + two-column chart in one sentence loses the cohort.** "Of cystitis
    patients, drug mix by ward" drops the filter (parked item 1). Workaround:
    type the *single-column* filtered request first ("of cystitis patients, most

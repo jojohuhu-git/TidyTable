@@ -274,6 +274,26 @@ function resolveGroupBy(text, headers, { aliasMap, index } = {}) {
     const phraseText = stop === -1 ? rest : rest.slice(0, stop);
     const phrase = termWords(phraseText).join(" ");
     if (!phrase) continue;
+    const phraseEnd = end + (stop === -1 ? rest.length : stop);
+    // Parked item 4: "by ward AND diagnosis" names TWO grouping columns. The
+    // old path fed the joined phrase to fuzzyColumn, whose containment match
+    // swallowed the extra words and grouped by just the first column — a
+    // silent drop labeled exact. Detect the conjunction here and hand the
+    // caller both columns so it can decline honestly with one-column
+    // alternatives instead. Only fires when 2+ DIFFERENT real headers resolve
+    // directly — "ward and icu beds" (one column + noise) keeps old behavior.
+    const conjParts = phraseText.split(/\band\b|&|\+/i).map((p) => termWords(p).join(" ")).filter(Boolean);
+    if (conjParts.length >= 2) {
+      const cols = [];
+      for (const part of conjParts) {
+        const c = fuzzyColumn(part, headers)
+          || fuzzyColumn(words(part).map(singularize).join(" "), headers);
+        if (c && !cols.includes(c)) cols.push(c);
+      }
+      if (cols.length >= 2 && cols.length === conjParts.length) {
+        return { multi: true, columns: cols, marker, phrase, start, end: phraseEnd };
+      }
+    }
     // Phase 3: exact header OR a concept match ("per condition" -> Diagnosis).
     // A concept match is a stretch the caller confirms before grouping.
     const ref = resolveColumnRef(phrase, headers, { aliasMap, index });
@@ -281,7 +301,7 @@ function resolveGroupBy(text, headers, { aliasMap, index } = {}) {
       return {
         column: ref.column, phrase,
         stretched: ref.stretched, candidates: ref.candidates, allCandidates: ref.allCandidates, via: ref.via,
-        start, end: end + (stop === -1 ? rest.length : stop),
+        start, end: phraseEnd,
       };
     }
   }
@@ -1231,6 +1251,19 @@ export function matchRequest(request, workbook, defs, options = {}) {
   // phrase as if it were part of the filter term (e.g. "of patients with UTI
   // per drug" would otherwise read "UTI per drug" as one filter phrase).
   const groupBy = resolveGroupBy(request, headers, { aliasMap, index });
+  // Parked item 4: a "by A and B" two-column breakdown. The offline engine
+  // can only group by one column — return the fact instead of quietly using
+  // just one, with runnable one-column rephrasings built from the user's own
+  // words (the original request with the group phrase swapped for each single
+  // column).
+  if (groupBy && groupBy.multi) {
+    const head = request.slice(0, groupBy.start);
+    const tail = request.slice(groupBy.end);
+    const alternatives = groupBy.columns.map(
+      (c) => `${head}${groupBy.marker} ${c}${tail}`.replace(/\s+/g, " ").trim(),
+    );
+    return { status: "two-column-group", columns: groupBy.columns, alternatives, request };
+  }
   // Phase 3: a group-by column reached by concept ("per condition" -> Diagnosis)
   // is a stretch — confirm the column before breaking the answer down by it.
   if (groupBy && groupBy.stretched) {
@@ -1656,6 +1689,56 @@ function matchPooledRank(request, topInfo, columns, sheet, headers, index, defs,
     lookedFor: describeLookedForPooled(pooled, cleanedStages),
     sheetName: sheet.name,
   };
+}
+
+// Parked item 4 guardrail: after a request resolves confidently, check whether
+// the user's sentence names a real column the resolved plan never uses. R7 and
+// the two-column group-by were both this bug class — a named column silently
+// dropped and the answer presented as exact. This is the generic safety net:
+// runOffline calls it on every confident match and declines instead of
+// answering when it fires. Conservative on purpose — only an exact
+// (fold/singular) match of a 1–3 word span against a header name counts, so a
+// cell value or a loose paraphrase can never trip it.
+
+// Words that describe WHAT is being counted ("how many patients"), not a
+// column reference — never treated as naming a column, even when a header
+// happens to carry the same name (the grain machinery owns that ambiguity).
+const COUNT_NOUNS = new Set([
+  "patient", "patients", "row", "rows", "case", "cases", "visit", "visits",
+  "person", "people", "record", "records", "encounter", "encounters",
+]);
+
+export function findDroppedColumns(request, match, headers) {
+  // Every string anywhere in the resolved match (condition columns, group
+  // columns, aggregation targets, table-1 lists, pooled columns…) counts as
+  // "used". Exact equality only, so a sentence field like lookedFor can never
+  // mark a column used by merely quoting it inside a longer string.
+  const usedKeys = new Set();
+  (function walk(v) {
+    if (typeof v === "string") { const k = columnKey(v); if (k) usedKeys.add(k); }
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") for (const x of Object.values(v)) walk(x);
+  })(match);
+
+  const reqWords = words(request);
+  const out = [];
+  for (const h of headers) {
+    const hKey = columnKey(h.name);
+    if (!hKey || usedKeys.has(hKey)) continue;
+    let named = false;
+    for (let n = 1; n <= 3 && !named; n++) {
+      for (let i = 0; i + n <= reqWords.length; i++) {
+        const span = reqWords.slice(i, i + n);
+        if (n === 1 && COUNT_NOUNS.has(span[0])) continue;
+        if (columnKey(span.join(" ")) === hKey || columnKey(span.map(singularize).join(" ")) === hKey) {
+          named = true;
+          break;
+        }
+      }
+    }
+    if (named) out.push(h.name);
+  }
+  return out;
 }
 
 export function conditionPhrase(c) {
