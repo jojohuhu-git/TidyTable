@@ -1,5 +1,9 @@
 # TidyTable — Handoff after the zero-dependency P5 export block (2026-07-17, evening)
 
+> **STATUS: SUPERSEDED (2026-07-18).** The owner pulled P4-3 forward ahead
+> of P5-4; P4-3 and parked item 4 shipped that session. Current handoff:
+> [handoff-2026-07-18-p4-3-and-parked4-done.md](handoff-2026-07-18-p4-3-and-parked4-done.md)
+
 > **SUPERSEDES** [handoff-2026-07-17-p6-5-done-p6-complete.md](handoff-2026-07-17-p6-5-done-p6-complete.md)
 > — same day, later session-half. Everything that handoff called done is
 > still done; this one adds P5-1/P5-2/P5-3/P5-6 on top. The canonical
