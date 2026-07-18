@@ -6,6 +6,7 @@ import { excelChartSteps } from "../logic/charts/excelChart.js";
 import { buildChartTitle, buildCohortCaption } from "../logic/charts/chartTitle.js";
 import { downloadChartPng } from "../logic/charts/downloadChartPng.js";
 import { copyChartPng, downloadChartSvg } from "../logic/charts/exportChart.js";
+import { EXPORT_PRESETS, computePresetExport } from "../logic/charts/exportPresets.js";
 import { resolveChartRequest } from "../logic/charts/textToChart.js";
 import { isQualitative } from "../logic/charts/palette.js";
 import { buildChartExamplePrompts } from "../logic/offline/examplePrompts.js";
@@ -49,6 +50,8 @@ export default function ChartsPanel({ sheet, seed }) {
   const [bucket, setBucket] = useState(null); // P4-2: "month" | "quarter" | null — trend-request grouping
   const [paretoOn, setParetoOn] = useState(false); // P6-3: "add cumulative % line" — off by default
   const [exportNote, setExportNote] = useState(""); // P5-1: honest result of the last copy/download action
+  const [exportPreset, setExportPreset] = useState("slide"); // P5-2: what the PNG download is sized for
+  const [posterInches, setPosterInches] = useState(8); // P5-2: poster width, in inches
   const svgRef = useRef(null);
 
   // Apply a resolved (or confirmed) plan to the pickers below, so the dropdowns
@@ -425,35 +428,84 @@ export default function ChartsPanel({ sheet, seed }) {
                 : "Colors run from dark (largest) to light (smallest) in one teal family, with the top few emphasized — matching but distinct."}
             </p>
           )}
-          {/* P5-1: zero-dependency exports — copy for slides, PNG for quick
-              use, SVG as the vector that scales to any poster size. Every
-              copy reports its honest outcome in the note below. */}
-          <div className="chart-export-row">
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={async () => {
-                const res = await copyChartPng(svgRef.current);
-                setExportNote(res.message);
-              }}
-            >
-              Copy chart (paste into slides)
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={() => downloadChartPng(svgRef.current, `${chartFileBase(chartTitle)}.png`)}
-            >
-              Download chart as image (PNG)
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={() => downloadChartSvg(svgRef.current, `${chartFileBase(chartTitle)}.svg`)}
-            >
-              Download SVG (scales to any size)
-            </button>
-          </div>
+          {/* P5-1: zero-dependency exports — copy for slides, PNG sized for
+              a purpose (P5-2), SVG as the vector that scales to any size.
+              Every copy reports its honest outcome in the note below. */}
+          {(() => {
+            // P5-2: the live legibility read for the chosen size. The svg
+            // ref is set after the first paint; until then (or if it's
+            // gone) there is nothing to warn about yet.
+            const el = svgRef.current;
+            const dims = el
+              ? { width: Number(el.getAttribute("width")) || 480, height: Number(el.getAttribute("height")) || 300 }
+              : null;
+            const preset = dims ? computePresetExport(dims, exportPreset, { posterInches }) : null;
+            return (
+              <>
+                <div className="chart-export-row">
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={async () => {
+                      const res = await copyChartPng(svgRef.current);
+                      setExportNote(res.message);
+                    }}
+                  >
+                    Copy chart (paste into slides)
+                  </button>
+                  <label className="chart-text-label">
+                    Download size
+                    <select value={exportPreset} onChange={(e) => setExportPreset(e.target.value)}>
+                      {EXPORT_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+                    </select>
+                  </label>
+                  {exportPreset === "poster" && (
+                    <label className="chart-text-label">
+                      inches wide
+                      <input
+                        type="number"
+                        min="4"
+                        max="48"
+                        value={posterInches}
+                        onChange={(e) => setPosterInches(Number(e.target.value) || 8)}
+                        style={{ width: "4.5rem" }}
+                      />
+                    </label>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => {
+                      const svgEl = svgRef.current;
+                      if (!svgEl) return;
+                      const d = { width: Number(svgEl.getAttribute("width")) || 480, height: Number(svgEl.getAttribute("height")) || 300 };
+                      const { scale } = computePresetExport(d, exportPreset, { posterInches });
+                      downloadChartPng(svgEl, `${chartFileBase(chartTitle)}-${exportPreset}.png`, scale);
+                    }}
+                  >
+                    Download chart as image (PNG)
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    onClick={() => downloadChartSvg(svgRef.current, `${chartFileBase(chartTitle)}.svg`)}
+                  >
+                    Download SVG (scales to any size)
+                  </button>
+                </div>
+                {preset?.warning && <p className="hint" role="status">{preset.warning}</p>}
+                <details className="dim">
+                  <summary>What do these sizes mean?</summary>
+                  <p className="dim">
+                    Slide fills a widescreen PowerPoint slide. Poster and the journal figures export at print
+                    quality (300 dots per inch): a poster at the width you choose, a single-column journal figure
+                    at 3.5 inches wide, double column at 7 inches. The SVG download is a vector file — it has no
+                    fixed size and stays sharp at any width.
+                  </p>
+                </details>
+              </>
+            );
+          })()}
           {exportNote && <p className="hint" role="status">{exportNote}</p>}
           {dataset.sampled && (
             <p className="hint">
