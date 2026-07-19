@@ -6,28 +6,10 @@
 // so a beginner can tell success from garbage. A plain comment sits above every
 // step.
 
-const HEADER = `# ----------------------------------------------------------------------
-# How to use this: open RStudio, click once in the Console (the pane with a
-# ">" prompt), paste this whole script, and press Enter. If a step needs you
-# to run one line, press Ctrl+Enter (Windows) or Cmd+Enter (Mac).
-# If anything on your screen looks different from these notes, the Console
-# method above always works.
-# ----------------------------------------------------------------------
-
-# Install what we need only if it is missing (safe on a brand-new computer).
-if (!require("readxl")) install.packages("readxl")
-library(readxl)
-
-# Pick your spreadsheet from the normal file window (no file paths to type).
-data <- read_excel(file.choose())
-`;
-
-// Escape a column name for use as a data[["..."]] key and print label.
-const key = (name) => `data[["${String(name).replace(/"/g, '\\"')}"]]`;
-
-function wrap(body, notes) {
-  return { script: HEADER + "\n" + body + "\n", r_run_notes: notes };
-}
+// Item 7: HEADER/key/wrap moved to shared.js so this file and chartPlan.js
+// (the new chart-plan generator) never let the beginner-facing conventions
+// drift apart.
+import { key, wrap } from "./shared.js";
 
 export function rTTest(numCol, grpCol) {
   const body =

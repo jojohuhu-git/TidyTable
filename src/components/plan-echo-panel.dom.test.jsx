@@ -42,6 +42,13 @@ describe("item 7: plan-echo builder panel", () => {
     // cephalexin durations: 3, 5, 7 -> median 5
     expect(document.querySelector("svg.chart-svg")).not.toBeNull();
     expect(document.body.textContent).toMatch(/median Duration_days/i);
+
+    // Item 7 step 9: the R-script surface only appears once a plan is confirmed.
+    fireEvent.click(screen.getByText(/Check it in R/i));
+    expect(screen.getByRole("button", { name: /download script/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /copy script/i })).toBeInTheDocument();
+    expect(document.body.textContent).toMatch(/median/i);
+    expect(document.body.textContent).toMatch(/"result"/);
   });
 
   it("OR-group: a second group widens the match count instead of narrowing it", () => {

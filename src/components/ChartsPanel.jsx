@@ -10,6 +10,8 @@ import { EXPORT_PRESETS, computePresetExport } from "../logic/charts/exportPrese
 import { resolveChartRequest, stagesToFilterGroup } from "../logic/charts/textToChart.js";
 import { previewFilterCount, previewGroupCounts } from "../logic/charts/filterGroups.js";
 import { summarizePlan } from "../logic/charts/planSummary.js";
+import { rChartPlan } from "../logic/rscripts/chartPlan.js";
+import { downloadText } from "../logic/workbook.js";
 import { isQualitative } from "../logic/charts/palette.js";
 import { buildChartExamplePrompts, buildCrosstabExamplePrompts } from "../logic/offline/examplePrompts.js";
 import ChartPreview from "./ChartPreview.jsx";
@@ -376,6 +378,11 @@ export default function ChartsPanel({ sheet, seed }) {
     () => (dataset && chartType && chartType !== "none" ? excelChartSteps(chartType, dataset, rec || {}, emphasis, pareto) : []),
     [dataset, chartType, rec, emphasis, pareto],
   );
+  // Item 7: the third output surface -- an R script reproducing the
+  // CONFIRMED plan (not the quick-chart picker state), since a confirmed
+  // plan's OR-group filter and saved sort are lossy once flattened into the
+  // legacy single-filter/sortMode shape baseDataset reads.
+  const rScript = useMemo(() => (confirmedPlan ? rChartPlan(confirmedPlan) : null), [confirmedPlan]);
   const chartTitle = useMemo(() => buildChartTitle(dataset), [dataset]);
   // P5-3: the title on the figure — the user's own if typed, else automatic.
   const effectiveTitle = figTitle.trim() || chartTitle;
@@ -907,6 +914,26 @@ export default function ChartsPanel({ sheet, seed }) {
               </li>
             ))}
           </ol>
+
+          {/* Item 7: the R script only appears once a plan-echo plan has
+              been confirmed with Run — it reproduces exactly that plan,
+              not whatever the quick-chart pickers happen to show. */}
+          {rScript && (
+            <details className="stats-r">
+              <summary>Check it in R</summary>
+              <div className="summary-box"><p style={{ whiteSpace: "pre-wrap" }}>{rScript.r_run_notes}</p></div>
+              <div className="row-end" style={{ margin: "0.4rem 0" }}>
+                <CopyButton text={rScript.script} label="Copy script" />
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => downloadText(rScript.script, "tidytable_chart_check.R")}
+                >
+                  Download script (.R)
+                </button>
+              </div>
+            </details>
+          )}
         </div>
       )}
     </div>
