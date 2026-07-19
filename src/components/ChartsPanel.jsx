@@ -891,7 +891,7 @@ export default function ChartsPanel({ sheet, seed }) {
           )}
           {dataset.noDataGroups?.length > 0 && (
             <p className="hint">
-              Not shown: {dataset.noDataGroups.join(", ")} — every value in {dataset.noDataGroups.length === 1 ? "that group" : "those groups"} was unreadable as a number, so there was nothing to {dataset.kind === "distribution" ? "plot" : "average"}. Not the same as zero.
+              Not shown: {dataset.noDataGroups.join(", ")} — every value in {dataset.noDataGroups.length === 1 ? "that group" : "those groups"} was unreadable as a number, so there was nothing to {dataset.kind === "distribution" ? "plot" : aggMode === "median" ? "find a median of" : "average"}. Not the same as zero.
             </p>
           )}
           {dataset.kind === "distribution" && dataset.shape === "histogram" && dataset.unreadableCount > 0 && (

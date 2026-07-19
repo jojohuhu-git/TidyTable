@@ -101,4 +101,23 @@ describe("item 7: plan-echo builder panel", () => {
     expect(screen.getByText(/2 rows match/i)).toBeInTheDocument();
     expect(screen.getByText(/for rows where Diagnosis = cystitis and Drug = cephalexin/i)).toBeInTheDocument();
   });
+
+  it("live-verification catch: the 'not shown' honesty note says 'median', not 'average', when the measure is median", () => {
+    // A blank cell (not text like "N/A") keeps the column typed "number" --
+    // matching the real scenario: a value only shows up in the Measure
+    // dropdown's median option once the column reads as pure "number", and
+    // an empty cell inside that column still has nothing to compute from.
+    const sheet = deriveSheet("Encounters", [
+      { Diagnosis: "UTI", Duration_days: 10 },
+      { Diagnosis: "UTI", Duration_days: 6 },
+      { Diagnosis: "cystitis", Duration_days: null },
+    ]);
+    render(<ChartsPanel sheet={sheet} />);
+    openPanel();
+    fireEvent.change(screen.getByLabelText("Measure"), { target: { value: "median::Duration_days" } });
+    fireEvent.change(screen.getByLabelText("Grouped by"), { target: { value: "Diagnosis" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Run$/i }));
+
+    expect(document.body.textContent).toMatch(/nothing to find a median of/i);
+  });
 });
