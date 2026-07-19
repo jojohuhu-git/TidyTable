@@ -954,6 +954,33 @@ export function detectTrailingValueCohort(text, headers, index) {
   return null;
 }
 
+// Parked item 1: the mirror of detectTrailingValueCohort, but at SENTENCE START
+// and with the entity noun AFTER the value ("of cystitis patients, drug mix by
+// ward" — vs. the trailing form's "durations chosen for cystitis patients").
+// This is the owner's own phrasing for a two-column (crosstab) chart request,
+// which has no stages/resolveConditions machinery to lean on the way Step 3's
+// Q&A cohort clauses do — so, like detectTrailingValueCohort, this only fires
+// when the phrase is an EXACT existing cell value (never guessed). Reused by
+// textToChart.js for BOTH single- and two-column chart requests — one brain.
+export function detectLeadingValueCohort(text, headers, index) {
+  const markers = [...String(text).matchAll(/\b(?:of|for|in|with|among)\s+/gi)];
+  for (const mk of markers) {
+    const after = text.slice(mk.index + mk[0].length);
+    const m = /^([a-z0-9][a-z0-9 _'-]*?)\s+(?:patients?|cases?|rows?|encounters?|records?|people)\b/i.exec(after);
+    if (!m) continue;
+    const termText = m[1];
+    const phrase = termWords(termText).join(" ");
+    if (!phrase) continue;
+    const cands = findValueCandidates(phrase, headers, index);
+    const exact = cands.find((c) => c.exact);
+    if (exact) {
+      const end = mk.index + mk[0].length + m[0].length;
+      return { termText, start: mk.index, end, filter: { column: exact.column, value: exact.value } };
+    }
+  }
+  return null;
+}
+
 // Detect a per-entity question over repeating rows (grain). If the user asks
 // "how many patients…" and the patient column really does repeat, a row-mode
 // count would double-count — so we flag it for a clarifying question.

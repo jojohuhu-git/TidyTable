@@ -9,7 +9,7 @@ import { copyChartPng, downloadChartSvg } from "../logic/charts/exportChart.js";
 import { EXPORT_PRESETS, computePresetExport } from "../logic/charts/exportPresets.js";
 import { resolveChartRequest } from "../logic/charts/textToChart.js";
 import { isQualitative } from "../logic/charts/palette.js";
-import { buildChartExamplePrompts } from "../logic/offline/examplePrompts.js";
+import { buildChartExamplePrompts, buildCrosstabExamplePrompts } from "../logic/offline/examplePrompts.js";
 import ChartPreview from "./ChartPreview.jsx";
 import DataTable from "./DataTable.jsx";
 import { CopyButton } from "./ResultsPanel.jsx";
@@ -30,6 +30,10 @@ export default function ChartsPanel({ sheet, seed }) {
   // Filter to numeric columns so the label is never a lie.
   const numericColumns = sheet.headers.filter((h) => h.type === "number").map((h) => h.name);
   const examples = useMemo(() => buildChartExamplePrompts(sheet), [sheet]);
+  // Parked item 1(c): crosstab + cohort-filtered chips. Each carries an
+  // already-resolved plan (verified once at build time) — clicking applies it
+  // directly and never re-parses text.
+  const crosstabExamples = useMemo(() => buildCrosstabExamplePrompts(sheet), [sheet]);
   const [labelCol, setLabelCol] = useState("");
   const [valueCol, setValueCol] = useState("");
   const [aggMode, setAggMode] = useState("count"); // "count" | "sum" | "average"
@@ -40,6 +44,7 @@ export default function ChartsPanel({ sheet, seed }) {
   const [chosen, setChosen] = useState(null); // user override of the recommended type
   const [text, setText] = useState(""); // W4: the free-text request box
   const [textNote, setTextNote] = useState(""); // plain message when text couldn't resolve
+  const [declineAlternatives, setDeclineAlternatives] = useState([]); // parked item 1(b): clickable resolved plans offered on a partial parse
   const [pendingConfirm, setPendingConfirm] = useState(null); // W4 middle path: { plan, summary }
   const [groupOther, setGroupOther] = useState(false); // W4: fold small values into "Other"
   const [chartRank, setChartRank] = useState(null); // Phase 4: { n, direction } from a "top N"/"most common" free-text request
@@ -74,6 +79,7 @@ export default function ChartsPanel({ sheet, seed }) {
     setAggMode(plan.kind === "crosstab" ? "count" : (plan.aggMode || "count"));
     setDistMode(null); // a fresh plan always starts as its own default chart, never a leftover "see the spread" override
     setFilter(plan.filter || null);
+    setDeclineAlternatives([]);
     setChosen(null);
     setGroupOther(false);
     setChartRank(plan.kind === "crosstab" ? null : (plan.rank || null));
@@ -142,9 +148,14 @@ export default function ChartsPanel({ sheet, seed }) {
   function runText(requestText = text) {
     setTextNote("");
     setPendingConfirm(null);
+    setDeclineAlternatives([]);
     const res = resolveChartRequest(requestText, sheet);
     if (res.status !== "resolved") {
       setTextNote(res.message);
+      // Parked item 1(b): a partial two-column parse comes back with 2-3
+      // already-resolved alternatives — offer them as clickable chips rather
+      // than leaving the owner to guess the real column name.
+      if (res.alternatives?.length) setDeclineAlternatives(res.alternatives);
       return;
     }
     if (res.confidence === "stretched") {
@@ -227,10 +238,18 @@ export default function ChartsPanel({ sheet, seed }) {
       <StepHelpPanel
         whatItDoes="Describe the chart in plain words (or pick columns by hand) and the app recommends one chart type, draws a preview, and gives numbered steps to build the same chart in Excel."
         cantDoYet={["Two-column comparisons (grouped/stacked bars) always count rows — no averages or totals across two columns yet."]}
-        examples={examples.map((text) => ({
-          label: text,
-          onClick: () => { setText(text); runText(text); },
-        }))}
+        examples={[
+          ...examples.map((text) => ({
+            label: text,
+            onClick: () => { setText(text); runText(text); },
+          })),
+          // Parked item 1(c): the plan is already resolved — apply it
+          // directly, never re-run it through the free-text parser.
+          ...crosstabExamples.map((ex) => ({
+            label: ex.caption,
+            onClick: () => { setText(ex.caption); setTextNote(""); setPendingConfirm(null); applyPlan(ex.plan); },
+          })),
+        ]}
       />
       {/* W4: describe the chart in words; the app designs it. */}
       <div className="chart-text-row">
@@ -249,6 +268,20 @@ export default function ChartsPanel({ sheet, seed }) {
         </button>
       </div>
       {textNote && <p className="hint" role="status">{textNote}</p>}
+      {declineAlternatives.length > 0 && (
+        <div className="step-help-examples">
+          {declineAlternatives.map((alt) => (
+            <button
+              key={alt.label}
+              type="button"
+              className="example-chip"
+              onClick={() => { setText(alt.label); setTextNote(""); applyPlan(alt.plan); }}
+            >
+              {alt.label}
+            </button>
+          ))}
+        </div>
+      )}
       {pendingConfirm && (
         <ClarifyBox
           question={`Did you mean: ${pendingConfirm.summary}`}

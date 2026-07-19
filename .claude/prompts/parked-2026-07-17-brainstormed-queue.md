@@ -17,29 +17,41 @@ guide's "Current limitations" section in the same commit.**
 
 ---
 
-## 1. Crosstab cohort filter + example chips + partial-parse honesty
+## 1. Crosstab cohort filter + example chips + partial-parse honesty — SHIPPED 2026-07-18 (do not redo)
 
-**Today:** `finishCrosstabPlan` in `src/logic/charts/textToChart.js` hardcodes
-`filter: null`, so "of cystitis patients, drug mix by ward" silently loses the
-cohort part. (A filtered crosstab CAN be reached by hand: type the filtered
-single-column request, then hand-pick "Split by" — display side already works.)
-
-**Brainstormed scope (owner-reviewed):**
-- (a) Fix the real gap: free-text crosstab requests resolve "of [cohort] …"
-  filters like single-column charts already do.
-- (b) Partial-parse honesty: when a request only partially resolves, say which
-  part wasn't understood and offer 2–3 clickable alternatives that fully work.
-- (c) Data-aware example chips built from the user's actual column names, and —
-  for cohort examples — sample values from low-cardinality category columns
-  ONLY (never ID-like or free-text columns, which also keeps MRNs/names out of
-  the UI). **Design rule (owner-agreed): a chip carries its already-resolved
-  plan; clicking must never re-parse text.** The visible sentence is a caption.
-- Known residual gap even after this: synonym mismatch when typing free-form
-  (user says "prescriber", header says "ordering_provider") — chips help teach
-  the real names; the alias machinery covers the rest; the plan-echo builder
-  (item 7) is the long-term answer.
-- Overlaps with parked item 5 (Step-2 example chips) — same chip pattern,
-  different step; consider building the shared chip component once.
+**Done, all three scope parts (a)-(c):**
+- (a) A leading "of/for/in/with/among &lt;value&gt; patients/cases/rows/…,"
+  cohort clause is now peeled off BEFORE either resolution path in
+  `resolveChartRequest` (`src/logic/charts/textToChart.js`), via a new
+  `detectLeadingValueCohort` in `src/logic/offline/matcher.js` (the mirror of
+  the existing `detectTrailingValueCohort`, exact-value-only, never guessed).
+  Both the shared Step 3 pipeline (single-column charts) and the local
+  crosstab resolver now inherit the same filter — "of cystitis patients, drug
+  mix by ward" scopes the crosstab; the single-column form ("of cystitis
+  patients, most common drug") benefits too, one brain either way.
+- (b) `resolveCrosstabSignal` now distinguishes a fully-resolved match from a
+  PARTIAL one (a structural "X mix by Y" pattern where a side doesn't name a
+  real column) and returns `{ status: "none", reason: "crosstab-partial",
+  message, alternatives }` — 2-3 already-resolved plans built from real
+  low-cardinality category columns (never an ID-like column). ChartsPanel.jsx
+  renders these as clickable chips; clicking applies the plan directly.
+- (c) `buildCrosstabExamplePrompts` in `src/logic/offline/examplePrompts.js`
+  builds a plain crosstab chip and a cohort-filtered chip (value from a
+  low-cardinality category column only) — each chip's plan is resolved ONCE
+  at build time via the real `resolveChartRequest` and stored as-is; clicking
+  calls `applyPlan(chip.plan)` directly, never re-parsing text (design rule
+  honored).
+- 14 tests: `src/logic/charts/parked1-crosstab-cohort.test.js` (11) +
+  `src/parked1-crosstab-cohort.dom.test.jsx` (3). Live-verified in the running
+  app with the real "Try it with example data" fixture: the leading-cohort
+  phrase scoped both a single-column and a two-column chart, the partial
+  decline named the bad column and offered a working alternative chip, and
+  the cohort example chip ("Drug by Diagnosis, only Duration_days: 5") drew
+  the correctly filtered chart.
+- Residual gap (unchanged, out of scope): synonym mismatch when typing
+  free-form (user says "prescriber", header says "ordering_provider") — chips
+  help teach the real names; the plan-echo builder (item 7) is the long-term
+  answer.
 
 ## 2. LineChart / BarChart axis-labeling flag
 
@@ -168,9 +180,9 @@ P5-4 (.docx/.pptx Office exports), P5-5 (ggplot2 figure code — must cover
 crosstab, distribution, Pareto, and small-multiples types when it lands).
 Shipped since this file was written: P6-5, P5-1/P5-2/P5-3/P5-6 (2026-07-17),
 P4-3 validation-list vocabularies (2026-07-18, owner pulled it forward),
-item 4 (2026-07-18), item 3 CSN/MRN + PHI mode (2026-07-18). Owner's recorded
-order for what remains: **item 1 → item 7 (scoping only)**, then the spec's
-P5-4/P5-5.
+item 4 (2026-07-18), item 3 CSN/MRN + PHI mode (2026-07-18), item 1 crosstab
+cohort + partial-parse + chips (2026-07-18). Owner's recorded order for what
+remains: **item 7 (scoping only)**, then the spec's P5-4/P5-5.
 
 ---
 

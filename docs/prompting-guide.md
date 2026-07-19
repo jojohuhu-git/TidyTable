@@ -163,9 +163,16 @@ tool; use a chart or Step 3 instead.
 Phrasings that work in the free-text box:
 - "**X by Y**" for a two-column breakdown: "drug mix by diagnosis" →
   grouped/stacked bars with a legend.
-- "**of <group> patients, …**" for a cohort filter on a *single-column* chart:
-  "of cystitis patients, top 5 drugs". The title and caption will say the
-  filter and the honest n.
+- "**of <group> patients, …**" for a cohort filter, on a single-column chart
+  ("of cystitis patients, top 5 drugs") or a two-column one ("of cystitis
+  patients, drug mix by ward"). The title and caption will say the filter and
+  the honest n either way.
+- If a two-column request names something that isn't a real column, the app
+  says exactly which part it didn't understand and offers 2-3 clickable
+  alternatives — each already resolved, so clicking one never re-parses text.
+- The **example chips** above the box are built from your own column names —
+  including a cohort-filtered chip when a real value from a small category
+  column makes a good filter demo.
 - "**distribution of <numeric column>**" → histogram; box-and-dot appears under
   Other options for grouped numeric summaries.
 - "**top 5 <things>**" / "least common <thing>" → capped ranked bars.
@@ -242,11 +249,13 @@ up instead of guessing — read that report.
    buttons; a general safety net also refuses any answer whose question names
    a column the answer didn't use. For a real two-way breakdown, use Step 9's
    Split by (counts) or the AI.
-2. **Cohort + two-column chart in one sentence loses the cohort.** "Of cystitis
-   patients, drug mix by ward" drops the filter (parked item 1). Workaround:
-   type the *single-column* filtered request first ("of cystitis patients, most
-   common drugs"), then hand-pick Split by = Ward — the filter carries through
-   correctly on that path.
+2. **Cohort + two-column chart in one sentence now keeps the cohort.** (Fixed
+   2026-07-18, parked item 1.) "Of cystitis patients, drug mix by ward" scopes
+   the crosstab to the cystitis rows — the title, caption, and n all reflect
+   the filter. A two-column request that names a column that doesn't exist
+   ("drug mix by prescriber" with no such column) now declines by name and
+   offers 2-3 clickable, already-resolved alternatives instead of guessing or
+   silently drawing the wrong thing.
 3. **Three-part requests (two filters + a measure + a grouping) aren't
    supported in one sentence** — e.g. "UTI treatment durations for
    levofloxacin ranked by prescriber". Do it in stages: filter in Step 3 or the

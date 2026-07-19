@@ -160,6 +160,44 @@ export function buildChartExamplePrompts(sheet, max = 3) {
   return out.slice(0, max);
 }
 
+// Parked item 1(c): example chips for the two-column ("crosstab") chart shape
+// and its cohort-filtered variant — built from the user's OWN low-cardinality
+// category columns. A cohort chip's VALUE only ever comes from a low-
+// cardinality category column (never an ID-like or free-text one, via
+// `profileColumns`' `idLike`/`distinct` checks already used above) — that
+// keeps MRNs, names, and free-text notes out of the UI, not just out of the
+// resolved chart. Design rule (owner-agreed): each chip carries the fully
+// RESOLVED plan object from build time (verified once, right here, through
+// the real resolveChartRequest), not its text — clicking it can never
+// re-parse into something different from what was shown.
+export function buildCrosstabExamplePrompts(sheet, max = 2) {
+  if (!sheet?.rows?.length || !sheet.headers?.length) return [];
+  const cols = profileColumns(sheet);
+  const categoryCols = cols
+    .filter((c) => !c.isNumeric && !c.idLike && c.distinct >= 2 && c.distinct <= 12)
+    .sort((a, b) => a.distinct - b.distinct);
+  if (categoryCols.length < 2) return [];
+  const [a, b] = categoryCols;
+
+  const out = [];
+  const baseText = `${b.name} by ${a.name}`;
+  const baseRes = resolveChartRequest(baseText, sheet);
+  if (baseRes.status === "resolved" && baseRes.kind === "crosstab") {
+    out.push({ caption: baseText, plan: baseRes });
+  }
+
+  const cohortCol = categoryCols.find((c) => c.name !== a.name && c.name !== b.name && c.topValue);
+  if (cohortCol) {
+    const cohortText = `of ${cohortCol.topValue} rows, ${b.name} by ${a.name}`;
+    const cohortRes = resolveChartRequest(cohortText, sheet);
+    if (cohortRes.status === "resolved" && cohortRes.kind === "crosstab" && cohortRes.filter) {
+      out.push({ caption: `${b.name} by ${a.name}, only ${cohortCol.name}: ${cohortCol.topValue}`, plan: cohortRes });
+    }
+  }
+
+  return out.slice(0, max);
+}
+
 // P2-4: up to `max` verified grouping/outcome column pairs for Step 7's
 // "Try these", each actually run through analyze() so a shown example always
 // produces a real comparison rather than the "needs exactly two groups"

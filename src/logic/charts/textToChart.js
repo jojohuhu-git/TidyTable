@@ -17,7 +17,7 @@ import { findColumnCandidates, findValueCandidates, scoreTokenMatch, tokens } fr
 import { detectIntent, GROUP_WORDS, detectTopN } from "../offline/synonyms.js";
 import { foldKey } from "../checkup/normalizers.js";
 import { matchColumn } from "../recipes/recipe.js";
-import { matchRequest, detectTrailingValueCohort } from "../offline/matcher.js";
+import { matchRequest, detectTrailingValueCohort, detectLeadingValueCohort } from "../offline/matcher.js";
 
 // Generic filler words that carry no column/value meaning for a chart
 // request — separate from (and smaller than) the offline Q&A matcher's STOP
@@ -37,6 +37,24 @@ function termWords(text) {
 function isNumeric(sheet, name) {
   const h = sheet.headers.find((x) => x.name === name);
   return Boolean(h) && (h.type === "number" || h.type === "mixed (text + numbers)");
+}
+
+// Parked item 1(b)/(c): a low-cardinality, non-ID text column — a genuinely
+// useful crosstab axis or cohort filter. An ID-like column (CSN, MRN, a row
+// number) is technically categorical but useless as an alternative (one row
+// per category) and risks surfacing an identifier in the chip UI.
+function looksCategorical(sheet, name) {
+  if (isNumeric(sheet, name)) return false;
+  const seen = new Set();
+  let nonNull = 0;
+  for (const r of sheet.rows) {
+    const v = r[name];
+    if (v == null || String(v).trim() === "") continue;
+    nonNull++;
+    seen.add(foldKey(v));
+  }
+  if (nonNull < 2) return false;
+  return seen.size <= 12 && seen.size / nonNull < 0.8;
 }
 
 function valueIndex(sheet) {
@@ -181,30 +199,77 @@ function detectCrosstabLayoutWord(text) {
   return null;
 }
 
+// Parked item 1(b): a sentence that structurally matches a two-column pattern
+// (the "X mix by Y" shape) but names something that isn't a real column on
+// one side is a PARTIAL parse, not a silent miss — remembered here (the first
+// one found) so the caller can say exactly which side didn't resolve instead
+// of falling through to an unrelated, less helpful decline further down.
 function resolveCrosstabSignal(raw, sheet, headers) {
+  let partial = null;
   for (const { re, layout } of CROSSTAB_PATTERNS) {
     const m = raw.match(re);
     if (!m) continue;
     const subgroupSpan = bestColumnSpan(m[1], headers);
     const labelSpan = bestColumnSpan(m[2], headers);
-    if (!subgroupSpan || !labelSpan) continue;
+    if (!subgroupSpan || !labelSpan) {
+      if (!partial) {
+        partial = {
+          layout,
+          resolvedSide: subgroupSpan ? "subgroup" : (labelSpan ? "label" : null),
+          resolvedCol: subgroupSpan?.column || labelSpan?.column || null,
+          unresolvedPhrase: (!subgroupSpan ? m[1] : m[2]).trim(),
+        };
+      }
+      continue;
+    }
     if (subgroupSpan.column === labelSpan.column) continue;
     if (isNumeric(sheet, subgroupSpan.column) || isNumeric(sheet, labelSpan.column)) continue;
     return {
-      labelCol: labelSpan.column, subgroupCol: subgroupSpan.column, layout,
-      stretched: subgroupSpan.score < 3 || labelSpan.score < 3,
+      resolved: {
+        labelCol: labelSpan.column, subgroupCol: subgroupSpan.column, layout,
+        stretched: subgroupSpan.score < 3 || labelSpan.score < 3,
+      },
     };
   }
-  return null;
+  return partial ? { partial } : null;
 }
 
-function finishCrosstabPlan({ labelCol, subgroupCol, layout, stretched }) {
+function finishCrosstabPlan({ labelCol, subgroupCol, layout, stretched, filter }) {
   return {
     status: "resolved", kind: "crosstab",
-    labelCol, subgroupCol, layout, filter: null,
+    labelCol, subgroupCol, layout, filter: filter || null,
     confidence: stretched ? "stretched" : "exact",
-    lookedFor: `Comparing "${subgroupCol}" within each "${labelCol}" (${CROSSTAB_LAYOUT_LABEL[layout]}).`,
+    lookedFor: `Comparing "${subgroupCol}" within each "${labelCol}"${filter ? ` where "${filter.column}" is "${filter.value}"` : ""} (${CROSSTAB_LAYOUT_LABEL[layout]}).`,
     ignored: null, ties: [], rank: null,
+  };
+}
+
+// Parked item 1(b): the request looked like a two-column chart but one side
+// named something that isn't a real column — say plainly which part wasn't
+// understood, and offer 2-3 clickable alternatives that swap in a real
+// category column on that side. Each alternative carries its OWN already-
+// resolved plan (not text) so clicking it can never re-parse into something
+// different from what was shown.
+function declineCrosstabPartial(partial, sheet, headers, filter) {
+  const { layout, resolvedCol, unresolvedPhrase } = partial;
+  const candidates = resolvedCol
+    ? headers.filter((h) => h.name !== resolvedCol && looksCategorical(sheet, h.name)).slice(0, 3)
+    : [];
+  const alternatives = candidates.map((h) => {
+    const labelCol = partial.resolvedSide === "subgroup" ? h.name : resolvedCol;
+    const subgroupCol = partial.resolvedSide === "subgroup" ? resolvedCol : h.name;
+    return {
+      label: `${subgroupCol} by ${labelCol}`,
+      plan: finishCrosstabPlan({ labelCol, subgroupCol, layout, stretched: false, filter }),
+    };
+  });
+  return {
+    status: "none",
+    reason: "crosstab-partial",
+    message: resolvedCol
+      ? `I understood you want a ${CROSSTAB_LAYOUT_LABEL[layout]} chart, but couldn't match "${unresolvedPhrase}" to a real column. Pick one of these, or use the columns below.`
+      : `I understood you want a ${CROSSTAB_LAYOUT_LABEL[layout]} chart, but couldn't match either "${unresolvedPhrase}" to a real column. Pick one of these, or use the columns below.`,
+    alternatives,
   };
 }
 
@@ -300,9 +365,24 @@ export function resolveChartRequest(text, sheet, options = {}) {
   if (!raw) return { status: "none", reason: "empty", message: "Type what you want to compare." };
   if (!sheet?.headers?.length) return { status: "none", reason: "no-data", message: "Upload a spreadsheet first." };
 
+  // Parked item 1(a): a leading "of/for/in/with/among <value> patients/cases/
+  // rows/…," cohort clause — the owner's own phrasing ("of cystitis patients,
+  // drug mix by ward"), the mirror of the trailing form P6-4 already strips
+  // for histograms. Stripped up front so every resolver below (the shared
+  // Step 3 pipeline, the crosstab and histogram signals, the plain label/
+  // value search) reads the same clean sentence and can inherit the same
+  // filter — a two-column request gets a cohort filter exactly like a
+  // single-column one already does, one brain either way. Only an EXACT cell
+  // value fires this (never guessed).
+  const leading = detectLeadingValueCohort(raw, sheet.headers, valueIndex(sheet));
+  const searchRaw = leading
+    ? (raw.slice(0, leading.start) + " " + raw.slice(leading.end)).replace(/^\s*,\s*/, " ").replace(/\s+/g, " ").trim()
+    : raw;
+  const leadingFilter = leading?.filter || null;
+
   // One brain: run the request through the shared Step 3 pipeline first.
   const workbook = { sheets: [sheet] };
-  const match = matchRequest(raw, workbook, options.defs || { present: false }, options.matchOptions || {});
+  const match = matchRequest(searchRaw, workbook, options.defs || { present: false }, options.matchOptions || {});
   if (match.status === "confident") {
     const mapped = chartPlanFromMatch(match);
     if (mapped === UNSUPPORTED_FILTER) {
@@ -316,14 +396,14 @@ export function resolveChartRequest(text, sheet, options = {}) {
         message: `I understood your request, but a chart here can only narrow to a single exact value (like "for UTI"). ${match.lookedFor || ""} Ask that in Step 3 and use "Chart this", or pick columns by hand below.`.trim(),
       };
     }
-    if (mapped) return finishMatchedPlan(mapped);
+    if (mapped) return finishMatchedPlan(mapped, leadingFilter);
     // Confident, but not a shape one chart can draw (a plain number, a distinct
     // count, a Table 1, a whole-column describe/median, or a magnitude ranking):
     // fall through to the local parser, which may still find a plain column to
     // chart, or decline honestly.
   }
 
-  return resolveChartLocally(raw, sheet);
+  return resolveChartLocally(searchRaw, sheet, leadingFilter);
 }
 
 // A confident cohort that a single equality filter can't represent — the caller
@@ -389,13 +469,16 @@ function stagesToFilter(stages) {
 // Finish a plan resolved through the shared pipeline. These are always EXACT —
 // any stretch (an abbreviation, a concept column, a typo) comes back from
 // matchRequest as needs_confirm, not confident, so it never reaches here.
-function finishMatchedPlan({ labelCol, valueCol, aggMode, filter, rank }) {
+// `leadingFilter` (parked item 1a) fills in only when the pipeline itself
+// found no cohort — a request that already resolved its own filter wins.
+function finishMatchedPlan({ labelCol, valueCol, aggMode, filter, rank }, leadingFilter = null) {
+  const resolvedFilter = (filter === UNSUPPORTED_FILTER ? null : filter) || leadingFilter;
   return {
     status: "resolved",
     labelCol, valueCol, aggMode,
-    filter: filter === UNSUPPORTED_FILTER ? null : filter,
+    filter: resolvedFilter,
     confidence: "exact",
-    lookedFor: describeLookedFor({ labelCol, valueCol, aggMode, filter: filter === UNSUPPORTED_FILTER ? null : filter, rank }),
+    lookedFor: describeLookedFor({ labelCol, valueCol, aggMode, filter: resolvedFilter, rank }),
     ignored: null,
     ties: [],
     rank: rank || null,
@@ -405,21 +488,28 @@ function finishMatchedPlan({ labelCol, valueCol, aggMode, filter, rank }) {
 
 // Local chart-specific parser (the pre-Phase-8 resolver, now the fallback for
 // requests the shared pipeline doesn't treat as a question). Reads a free-text
-// chart request against the sheet actually being charted.
-function resolveChartLocally(raw, sheet) {
+// chart request against the sheet actually being charted. `leadingFilter`
+// (parked item 1a) is the cohort resolveChartRequest already peeled off the
+// front of the sentence — attached wherever a more specific filter (the
+// histogram's own trailing cohort) wasn't already found.
+function resolveChartLocally(raw, sheet, leadingFilter = null) {
   const headers = sheet.headers;
 
   // P6-1: an explicit two-column sentence pattern ("drug mix by diagnosis",
   // "compare drug use between diagnoses") is checked first, ahead of every
   // single-column reading below.
   const crosstab = resolveCrosstabSignal(raw, sheet, headers);
-  if (crosstab) return finishCrosstabPlan(crosstab);
+  if (crosstab?.resolved) return finishCrosstabPlan({ ...crosstab.resolved, filter: leadingFilter });
+  // Parked item 1(b): it structurally looked like a two-column request but a
+  // side didn't resolve — say which part, offer real alternatives, rather
+  // than falling through to an unrelated (and less helpful) decline below.
+  if (crosstab?.partial) return declineCrosstabPartial(crosstab.partial, sheet, headers, leadingFilter);
 
   // P6-2: "distribution of X" / "durations chosen" — a plain histogram,
   // checked right after the crosstab signal, ahead of everything below that
   // assumes a grouping column.
   const histogram = resolveHistogramSignal(raw, sheet, headers);
-  if (histogram) return finishHistogramPlan(histogram);
+  if (histogram) return finishHistogramPlan({ ...histogram, filter: histogram.filter || leadingFilter });
 
   // Phase 4: "top 5"/"most common"/"least common"/"longest"/"shortest" — the
   // Step 9 mirror of the Q&A ranking family (offline/matcher.js's
@@ -565,6 +655,7 @@ function resolveChartLocally(raw, sheet) {
             labelCol, subgroupCol: secondCol.column,
             layout: detectCrosstabLayoutWord(raw) || "grouped",
             stretched: labelStretched || secondCol.score < 3,
+            filter: leadingFilter,
           });
         }
         return {
@@ -580,13 +671,14 @@ function resolveChartLocally(raw, sheet) {
     }
   }
 
+  const resolvedFilter = filter || leadingFilter;
   const confidence = labelStretched || valueStretched || filter?.stretched ? "stretched" : "exact";
   const rank = topInfo ? { n: topInfo.n ?? null, direction: topInfo.direction } : null;
-  const lookedFor = describeLookedFor({ labelCol, valueCol, aggMode, filter, rank, bucket });
+  const lookedFor = describeLookedFor({ labelCol, valueCol, aggMode, filter: resolvedFilter, rank, bucket });
 
   return {
     status: "resolved",
-    labelCol, valueCol, aggMode, filter, confidence, lookedFor, ignored,
+    labelCol, valueCol, aggMode, filter: resolvedFilter, confidence, lookedFor, ignored,
     ties: labelTies,
     rank,
     bucket,
