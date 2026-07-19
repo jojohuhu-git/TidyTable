@@ -78,18 +78,73 @@ pointing at a range of cells (even on another sheet), and named ranges.
 
 ## Step 3 — Describe what you want
 
-Words the app reliably understands:
-- **Measures:** average, sum, count, most common, least common, top 5 (any
-  number).
-- **Grouping:** "by <column>" — one grouping column.
-- **Two measures at once:** join with "and" — "average duration and most common
-  drug by diagnosis".
+*(Every example in this section was run against the engine on 2026-07-18 —
+these are observed behaviors, not hopes.)*
 
-Good asks: "average Duration_days by Ward" · "most common Drug" · "top 5
-diagnoses" · "count of patients by Prescriber".
+### The sentence shape that works
 
-If parts of your request come back as chips ("did you mean the Duration_days
-column?"), click to confirm — that's the app refusing to guess.
+> **[measure word] [column or value]** — plus, optionally:
+> **"by [column]"** (one grouping) · **"of [group] patients," / "in [group]"**
+> (a cohort filter) · **"over / under / at least [number]"** (a threshold).
+
+The measure word does the heavy lifting. The ones the app knows:
+- **Counting:** how many, number of, count of
+- **Share:** what percent, what share, what proportion, what fraction
+- **Numbers:** average (mean), total (sum), median, range, highest, lowest,
+  standard deviation, interquartile range
+- **Ranking:** most common, least common, top 5 (any number)
+- **Variety:** how many different / unique
+- **Overview:** summarize, describe
+
+### Worked examples (all answer offline, no AI key)
+
+- "How many rows have cefepime?" · "How many patients got cefepime?"
+- "What percent of rows have UTI?"
+- "Average Duration_days by Ward" · "count of rows per ward"
+- "Most common Drug" · "Top 3 diagnoses" · "Least common Drug"
+- "How many different prescribers?"
+- "How many rows have Duration_days over 7?" · "…a duration between 5 and 10?"
+- "Of patients with UTI, how many got cefepime?" (cohort first, then the ask)
+- "Most common drug in ICU" · "average duration for ICU patients"
+- "What percent of UTI patients got cefepime?"
+- "How many patients did **not** get cefepime?" (negation is understood)
+- "How many rows have cefepime **or** ceftriaxone?" (either-value counting)
+- "How many rows are missing Visit_date?" (blanks are countable)
+- "Show me all rows with UTI" · "list the rows with Duration_days over 7" ·
+  "sort the rows by Duration_days" (seeing rows, not a number)
+- "Average duration and most common drug by ward" (two measures, one "and",
+  one grouping — both parts answered)
+- "Summarize diagnosis, drug and duration" (a Table-1-style overview; note
+  this exact "summarize A, B and C" shape is what triggers it)
+
+### Middle-path asks — a chip, not an answer
+
+When your word isn't a real column or cell value, the app shows a "did you
+mean…?" chip instead of guessing. Clicking it is the intended flow, and the
+choice is remembered for this file:
+- "average **treatment length** by ward" → chip: the Duration_days column?
+- "How many rows have **ceftriaxon**?" (typo) → chips with the closest real
+  values.
+
+### Phrasings that do NOT work — and what to say instead
+
+| You typed | What happens | Say instead |
+|---|---|---|
+| "average Duration_days by Ward **and** Diagnosis" | Declines — one grouping column only (limitation 1) | Two separate asks, or Step 9's Split by |
+| "list the rows **where** Duration_days **is** over 7" | Declines — "where … is" isn't parsed | "list the rows **with** Duration_days over 7" |
+| "sorted by Duration_days, **longest first**" | Declines — the direction word reads as a ranking ask | "sort the rows by Duration_days" (or sort the result table yourself) |
+| "how many rows **in January**?" / "average duration **by month**" / "**after 2026-01-06**" | Declines/asks — Step 3 can't filter or group by dates yet | Filter by date in Excel first, or ask the AI |
+| "make a **table 1** by ward" | Declines — that wording isn't the trigger | "summarize diagnosis, drug and duration" |
+| "**cefepime**" (a bare value, no question word) | Declines — no measure word | "How many rows have cefepime?" |
+| "**Why** did durations increase?" / "Which drug is **best**?" | Declines — judgment questions aren't computable | Ask for the numbers behind your judgment |
+| "**compare** ICU and Peds" | Declines — comparison with a p-value is Step 7's job | Step 7: grouping = Ward, outcome = your measure |
+| "UTI durations for levofloxacin **ranked by** prescriber" | Declines — two filters + measure + group in one sentence (limitation 3) | Stage it: cohort ask first, then group |
+| "average **Ward**" | Declines — words, not numbers | Name a numeric column ("average Duration_days") |
+
+The pattern behind the failures: **one measure, at most one grouping, at most
+one cohort** per sentence, and dates aren't understood yet. When the app
+declines it always says why and never fakes an answer — a decline is it
+keeping the "never guess" promise, not breaking.
 
 **Dropdown terms are known words.** Every entry on a column's Excel dropdown
 list counts as a word the app knows, even if no row currently contains it —
@@ -204,3 +259,7 @@ up instead of guessing — read that report.
    MRNs offer an optional keep-one-row-per-patient with your choice of
    surviving row. Repeated encounter IDs whose rows *differ* stay review-only
    by design — the app shows them side by side and you fix the file.
+6. **Step 3 doesn't understand dates.** "In January", "by month", "after
+   2026-01-06" all decline or ask for a definition (verified 2026-07-18).
+   Workaround: filter to the date range in Excel first, or use the AI. (Date
+   support was an explicitly deferred sub-item of the offline-smarts plan.)
