@@ -157,7 +157,7 @@ export function buildDataset(sheet, labelCol, valueCol, options = {}) {
   }
 
   // Otherwise group by the label column.
-  const groups = new Map(); // foldKey -> { label, value, n }
+  const groups = new Map(); // foldKey -> { label, value, n } (or { label, raw } for median)
   const unbucketable = []; // P4-2: raw values a requested bucket couldn't parse as a date
   for (const r of rows) {
     let raw = r[labelCol];
@@ -171,11 +171,19 @@ export function buildDataset(sheet, labelCol, valueCol, options = {}) {
       raw = bucketed;
     }
     const k = foldKey(raw);
-    if (!groups.has(k)) groups.set(k, { label: String(raw), value: 0, n: 0 });
+    if (!groups.has(k)) {
+      groups.set(k, aggMode === "median" ? { label: String(raw), raw: [] } : { label: String(raw), value: 0, n: 0 });
+    }
     const g = groups.get(k);
     if (valueCol && valueNum && aggMode !== "count") {
       const v = num(r[valueCol]);
-      if (Number.isFinite(v)) { g.value += v; g.n += 1; }
+      if (Number.isFinite(v)) {
+        // Item 7: median needs the whole per-group array, not a running sum —
+        // only kept when aggMode is median, to avoid the memory cost on large
+        // sheets when it's not needed.
+        if (aggMode === "median") g.raw.push(v);
+        else { g.value += v; g.n += 1; }
+      }
     } else {
       g.value += 1;
     }
@@ -184,25 +192,33 @@ export function buildDataset(sheet, labelCol, valueCol, options = {}) {
   // unreadable (e.g. every cell "N/A") used to average to 0 — indistinguishable
   // from a real zero. Drop that group from the plotted points instead (never
   // silently draw 0) and name it in `noDataGroups` so the panel can say plainly
-  // it has no readable numbers, not hide the gap.
+  // it has no readable numbers, not hide the gap. Item 7: the same rule applies
+  // to median — a group with no readable numbers has no median to report.
   const noDataGroups = [];
-  // `n` (how many readable numbers went into each group) is internal to the
-  // average calculation below — stripped from every point before it leaves
-  // this function, so a plain count/sum dataset's points stay exactly
+  // `n`/`raw` (how many readable numbers went into each group) are internal to
+  // the average/median calculation below — stripped from every point before it
+  // leaves this function, so a plain count/sum dataset's points stay exactly
   // { label, value } as every existing caller (and test) expects.
   let points = [...groups.values()]
-    .filter(({ label, n }) => {
+    .filter(({ label, n, raw }) => {
       if (aggMode === "average" && n === 0) { noDataGroups.push(label); return false; }
+      if (aggMode === "median" && raw && raw.length === 0) { noDataGroups.push(label); return false; }
       return true;
     })
-    .map(({ label, value, n }) => (
-      aggMode === "average"
+    .map(({ label, value, n, raw }) => {
+      if (aggMode === "median") {
+        // Item 7: reuse the one source of truth for the quantile method
+        // (cohort.js's computeNumericStats — the same math buildBoxDotDataset
+        // already uses) so the app's median always agrees with itself.
+        return { label, value: computeNumericStats(raw).median };
+      }
+      return aggMode === "average"
         // W4: an average is not a running total — divide by how many readable
         // numbers actually went into it, not by every row in the group (a
         // blank/non-numeric cell is skipped, not counted as a zero).
         ? { label, value: n ? Math.round((value / n) * 100) / 100 : 0 }
-        : { label, value }
-    ));
+        : { label, value };
+    });
   const labelIsTime = labelsLookLikeTime(sheet, labelCol);
   if (labelIsTime) {
     const keys = points.map((p) => timeSortKey(p.label));
@@ -218,10 +234,11 @@ export function buildDataset(sheet, labelCol, valueCol, options = {}) {
     // categories in first-appearance order.
     points = [...points].sort((a, b) => b.value - a.value);
   }
-  const isCount = !(aggMode === "average" || (aggMode === "sum" && valueCol && valueNum));
+  const isCount = !(aggMode === "average" || aggMode === "median" || (aggMode === "sum" && valueCol && valueNum));
   const valueName = aggMode === "average" ? `average ${valueCol}`
-    : aggMode === "sum" && valueCol && valueNum ? `total ${valueCol}`
-      : "count";
+    : aggMode === "median" ? `median ${valueCol}`
+      : aggMode === "sum" && valueCol && valueNum ? `total ${valueCol}`
+        : "count";
   // Phase 8.3: the cohort denominator behind a COUNT chart, captured on the
   // FULL grouping (before any top-N cap or "Other" fold) so an n (%) label is a
   // share of the whole cohort, not just the bars still on screen. Only a count
@@ -258,6 +275,10 @@ export function describeExtreme(dataset) {
     return `Most common: ${top.label} (${pct}%)`;
   }
   if (typeof dataset.valueName !== "string") return null;
+  // Item 7: "highest median" reads oddly next to "highest total/average" and
+  // isn't the same kind of claim (a median isn't a running extreme the same
+  // way a sum/average is) — decline rather than mislabel it as a total.
+  if (dataset.valueName.startsWith("median")) return null;
   const verb = dataset.valueName.startsWith("average") ? "Highest average" : "Highest total";
   return `${verb}: ${top.label} (${top.value})`;
 }
@@ -333,12 +354,18 @@ export function groupSmallIntoOther(dataset, thresholdPct = 2) {
 const CROSSTAB_SUBGROUP_CAP = 8;
 
 export function buildCrosstabDataset(sheet, labelCol, subgroupCol, options = {}) {
-  const { filter = null } = options;
+  const { filter = null, valueCol = null, aggMode = "count" } = options;
   const rows = applyFilter(sheet.rows, filter);
+  // Item 7: crosstab + a real measure (sum/average/median), not count-only.
+  // Row totals (labelTotals/subgroupTotals, used for sort order and the cap)
+  // stay row COUNTS regardless of aggMode — "which category has the most
+  // rows" is still the right way to decide sort order and which subgroups
+  // get folded into "Other", even when the displayed cell value is a mean.
+  const hasMeasure = valueCol && aggMode !== "count";
 
   const labelTotals = new Map(); // foldKey -> { label, total }
   const subgroupTotals = new Map(); // foldKey -> { label, total }
-  const cells = new Map(); // labelKey -> Map(subgroupKey -> count)
+  const cells = new Map(); // labelKey -> Map(subgroupKey -> count | {value,n,raw})
 
   for (const r of rows) {
     const lRaw = r[labelCol];
@@ -353,7 +380,17 @@ export function buildCrosstabDataset(sheet, labelCol, subgroupCol, options = {})
     subgroupTotals.get(sKey).total += 1;
     if (!cells.has(lKey)) cells.set(lKey, new Map());
     const m = cells.get(lKey);
-    m.set(sKey, (m.get(sKey) || 0) + 1);
+    if (!hasMeasure) {
+      m.set(sKey, (m.get(sKey) || 0) + 1);
+    } else {
+      const cell = m.get(sKey) || { value: 0, n: 0, raw: aggMode === "median" ? [] : undefined };
+      const v = num(r[valueCol]);
+      if (Number.isFinite(v)) {
+        if (aggMode === "median") cell.raw.push(v);
+        else { cell.value += v; cell.n += 1; }
+      }
+      m.set(sKey, cell);
+    }
   }
 
   const labelOrder = [...labelTotals.entries()].sort((a, b) => b[1].total - a[1].total);
@@ -373,15 +410,42 @@ export function buildCrosstabDataset(sheet, labelCol, subgroupCol, options = {})
   const otherIndex = otherGrouped > 0 ? subgroups.length - 1 : -1;
 
   const categories = labelOrder.map(([lKey, lv]) => {
-    const values = new Array(subgroups.length).fill(0);
     const rowCells = cells.get(lKey);
+    if (!hasMeasure) {
+      const values = new Array(subgroups.length).fill(0);
+      if (rowCells) {
+        for (const [sKey, count] of rowCells) {
+          const idx = otherKeys.has(sKey) ? otherIndex : subgroupIndex.get(sKey);
+          if (idx != null) values[idx] += count;
+        }
+      }
+      return { label: lv.label, total: values.reduce((s, v) => s + v, 0), values };
+    }
+    // Item 7: a measure cell holds { value, n, raw } until every subgroup
+    // folding into the same slot (including "Other") is merged, then gets
+    // resolved to one number the same way buildDataset resolves a group.
+    const merged = new Array(subgroups.length).fill(null).map(() => (
+      { value: 0, n: 0, raw: aggMode === "median" ? [] : undefined }
+    ));
     if (rowCells) {
-      for (const [sKey, count] of rowCells) {
+      for (const [sKey, cell] of rowCells) {
         const idx = otherKeys.has(sKey) ? otherIndex : subgroupIndex.get(sKey);
-        if (idx != null) values[idx] += count;
+        if (idx == null) continue;
+        const m = merged[idx];
+        if (aggMode === "median") m.raw.push(...cell.raw);
+        else { m.value += cell.value; m.n += cell.n; }
       }
     }
-    return { label: lv.label, total: values.reduce((s, v) => s + v, 0), values };
+    const values = merged.map((cell) => {
+      if (aggMode === "median") return cell.raw.length ? computeNumericStats(cell.raw).median : null;
+      if (aggMode === "average") return cell.n ? Math.round((cell.value / cell.n) * 100) / 100 : null;
+      return cell.value; // sum
+    });
+    // A sum-of-per-cell-averages/medians isn't a real total — never invent
+    // one (same honesty rule as buildDataset's noDataGroups). Only "sum"
+    // produces a meaningful row total; count is handled in the branch above.
+    const total = aggMode === "sum" ? values.reduce((s, v) => s + (v ?? 0), 0) : null;
+    return { label: lv.label, total, values };
   });
 
   return {
@@ -391,6 +455,7 @@ export function buildCrosstabDataset(sheet, labelCol, subgroupCol, options = {})
     categories,
     subgroups,
     filter,
+    ...(hasMeasure ? { valueName: `${aggMode} ${valueCol}` } : {}),
     ...(otherGrouped > 0 ? { otherGrouped } : {}),
   };
 }
