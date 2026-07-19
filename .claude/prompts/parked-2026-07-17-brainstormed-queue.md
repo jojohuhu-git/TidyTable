@@ -152,9 +152,21 @@ chip pattern, this becomes a small follow-on using the same component.
 materially different engine change. Deferred; previously recommended (not
 approved) to bundle with P6. Unchanged, no new brainstorm.
 
-## 7. NEW — Plan-echo builder (the "surefire accuracy" path)
+## 7. Plan-echo builder (the "surefire accuracy" path) — DESIGN APPROVED 2026-07-18, ready to build
 
-**Why (owner's example):** "UTI treatment durations for levofloxacin ranked by
+**Design finalized, all open questions resolved.** See
+`.claude/prompts/plan-2026-07-18-item7-plan-echo-builder.md` for the full
+approved design and paste-ready build prompt — read that file, not the
+brainstormed scope below, before starting work. Key resolved decisions:
+equality-only filter conditions organized into AND-groups combined with OR
+(not free nested parens); crosstab Grouped-by now supports a real Measure
+(was count-only); Measure gains median; Sorted becomes part of the saved
+plan (not a post-hoc toggle); the plain-English summary line uses a
+generic, literal column/value template — a clinical-vocabulary
+natural-language version was proposed and explicitly rejected in favor of
+staying honest across arbitrary datasets.
+
+**Why (owner's example, historical):** "UTI treatment durations for levofloxacin ranked by
 prescriber" = two ANDed filters (Diagnosis contains "UTI" AND Drug =
 "levofloxacin") + measure (average Duration) + group (Prescriber) + sort. Free
 text alone will never be surefire for this — parser coverage grows
@@ -202,5 +214,5 @@ file in the shipping commit.
 **Item 4:**
 > In ~/Downloads/TidyTable, fix item 4 of .claude/prompts/parked-2026-07-17-brainstormed-queue.md (matcher.js silent-drop). (1) Two-column average/sum free-text requests decline honestly with clickable single-column alternatives instead of dropping a column. (2) Generic guardrail: if the request names a column the resolved plan doesn't use, the result can never be labeled "exact". Port R7's test cases to this pipeline and audit sum/count/median two-column phrasings. No averaged crosstabs — separate item. Update docs/prompting-guide.md limitations and the parked-queue file in the same commit.
 
-**Item 7:**
-> In ~/Downloads/TidyTable, run a scoping pass for item 7 of .claude/prompts/parked-2026-07-17-brainstormed-queue.md (plan-echo builder). Produce a design proposal for my approval before building: four editable slots (Rows kept with ANDed conditions, Measure, Grouped by, Sorted) as dropdowns of real columns/values, matching-row count and per-group n shown before running, free text pre-filling the form, the confirmed form executing in all output surfaces. Do not write feature code until I approve the design.
+**Item 7 (design approved 2026-07-18 — use this prompt instead, in `.claude/prompts/plan-2026-07-18-item7-plan-echo-builder.md`):**
+> In ~/Downloads/TidyTable, build item 7 per the approved design in `.claude/prompts/plan-2026-07-18-item7-plan-echo-builder.md` (plan-echo builder). Follow that document's design exactly — it is already owner-approved, do not re-derive or re-ask the resolved questions listed under "Explicitly decided." Four slots (Rows kept as AND-groups combined with OR, Measure incl. new median, Grouped by with crosstab+measure support, Sorted saved as part of the plan), live matching-row count and per-group n before running, generic literal plain-English summary line, free text pre-fills what it confidently can and leaves the rest for the owner to fill by hand. Test-first with synthetic fixtures, full suite green, live-verify, update docs/prompting-guide.md and mark item 7 SHIPPED in this file in the same commit.
