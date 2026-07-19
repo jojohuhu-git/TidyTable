@@ -4,6 +4,11 @@
 > The canonical parked-items list is still
 > `.claude/prompts/parked-2026-07-17-brainstormed-queue.md` (item 1 marked
 > SHIPPED in place this session).
+>
+> **SUPERSEDED by [handoff-2026-07-19-p5-4-office-exports-partial.md](handoff-2026-07-19-p5-4-office-exports-partial.md).**
+> Item 7 (plan-echo builder) and P5-4 (Office exports, partial) shipped
+> since this file was written, with no handoff written for item 7's own
+> session — the 2026-07-19 file covers both.
 
 Branch: `main`, off `main`. **NOT pushed** — TidyTable rule: never push to
 `main` without the owner's explicit go-ahead (pushing publishes the live site
