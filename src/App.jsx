@@ -32,6 +32,7 @@ import {
 import { summarizeAnswer } from "./logic/offline/fillPlan.js";
 import { buildExampleWorkbook } from "./logic/exampleWorkbook.js";
 import { saveSession, loadSession } from "./logic/sessionPersistence.js";
+import { exportAllResultsToWord } from "./logic/export/exportDocx.js";
 import ClarifyBox from "./components/ClarifyBox.jsx";
 import StatsPanel from "./components/StatsPanel.jsx";
 import RegressionWizard from "./components/RegressionWizard.jsx";
@@ -152,6 +153,9 @@ export default function App() {
   // available rather than showing stale or missing data.
   const [results, setResults] = useState(() => savedSession?.results || []);
   const [expandedResultId, setExpandedResultId] = useState(null);
+  // P4-5: "Export all results" -> a Word committee report, one table per card.
+  const [reportNote, setReportNote] = useState("");
+  const [reportBusy, setReportBusy] = useState(false);
   // Phase 8.4: a "Chart this" click seeds Step 9 with a request; the nonce lets
   // the same request re-trigger the chart if clicked again.
   const [chartSeed, setChartSeed] = useState(null); // { request, nonce }
@@ -349,6 +353,17 @@ export default function App() {
   function removeResult(id) {
     setResults((r) => r.filter((entry) => entry.id !== id));
     setExpandedResultId((cur) => (cur === id ? null : cur));
+  }
+
+  // P4-5: builds one Word doc from every result card's table — same
+  // journal-style table as a single "Send to Word", one per card, oldest
+  // first, a page break between.
+  async function exportAllResults() {
+    setReportBusy(true);
+    const res = await exportAllResultsToWord(results);
+    setReportBusy(false);
+    setReportNote(res.message);
+    if (res.ok) setTimeout(() => setReportNote(""), 3000);
   }
 
   // Every request tries the offline engine first (build prompt §3.3). A confident
@@ -1287,6 +1302,14 @@ export default function App() {
               Questions answered on this computer (no AI needed) are saved into your routine
               automatically — see step 5 below.
             </p>
+            {results.length > 0 && (
+              <div className="row-end" style={{ marginBottom: "0.5rem" }}>
+                <button type="button" className="btn btn-ghost" onClick={exportAllResults} disabled={reportBusy}>
+                  {reportBusy ? "Building…" : "Export all results to Word"}
+                </button>
+                {reportNote && <span className="dim" role="status">{reportNote}</span>}
+              </div>
+            )}
             {companionOffer && (
               companionOffer.revealed ? (
                 <div className="notice-box companion-offer" role="status" aria-live="polite">
