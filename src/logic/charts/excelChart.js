@@ -144,16 +144,22 @@ function crosstabSteps(dataset, rec) {
   const folded = crosstabFoldedGroupsStep(dataset);
   if (folded) steps.push(folded);
 
-  const filterStep = crosstabFilterStep(dataset);
+  const filterStep = filterReminderStep(dataset);
   if (filterStep) steps.push(filterStep);
+
+  const medianStep = medianByGroupStep(dataset);
+  if (medianStep) steps.push(medianStep);
+
+  const sortStep = sortReminderStep(dataset);
+  if (sortStep) steps.push(sortStep);
 
   steps.push(colorNoteStep());
   return steps;
 }
 
-// P6-1/P6-5: the folded-"Other" and filter reminder steps, shared by the
-// crosstab bar recipes and the small-multiples recipe so the wording never
-// drifts between them. Each returns null when it doesn't apply.
+// P6-1/P6-5: the folded-"Other" step, shared by the crosstab bar recipes and
+// the small-multiples recipe so the wording never drifts between them.
+// Returns null when it doesn't apply.
 function crosstabFoldedGroupsStep(dataset) {
   if (!dataset.otherGrouped) return null;
   return {
@@ -163,12 +169,63 @@ function crosstabFoldedGroupsStep(dataset) {
   };
 }
 
-function crosstabFilterStep(dataset) {
-  if (!dataset.filter) return null;
+// Item 7: the single "Remember the filter" step every chart shape offers,
+// widened to describe a plan-echo filter-group structure (AND-within-group,
+// OR-across-groups) alongside the plain single-condition shape every other
+// caller still uses — one wording, not four independently-drifting copies.
+function filterReminderStep(dataset, { verb = "counts", mentionHelperTable = true } = {}) {
+  const f = dataset.filter;
+  if (!f) return null;
+  let groupText;
+  if (f.groups) {
+    const groups = f.groups.filter((g) => g.length > 0);
+    if (!groups.length) return null;
+    groupText = groups
+      .map((g) => g.map((c) => `"${c.column}" is "${c.value}"`).join(" AND "))
+      .join("  —  OR  —  ");
+  } else {
+    groupText = `"${f.column}" is "${f.value}"`;
+  }
+  const tail = mentionHelperTable
+    ? "filter your data to that first (Data > Filter), or the helper table above already reflects it."
+    : "filter your data to that first (Data > Filter).";
+  return { title: "Remember the filter", instruction: `This chart only ${verb} rows where ${groupText} — ${tail}` };
+}
+
+// Item 7: sort was a post-hoc UI toggle before item 7 — now a confirmed
+// plan-echo plan can carry a sort, so the hand-built Excel chart needs its
+// own reminder to match. `dataset.sort` is set by ChartsPanel's plan-to-
+// legacy-dataset wiring; a plain quick-chart dataset never sets it, so this
+// step is a no-op for every existing caller.
+function sortReminderStep(dataset) {
+  if (!dataset.sort) return null;
+  const { by, direction } = dataset.sort;
+  const desc = direction === "desc" ? "largest to smallest" : "smallest to largest, A to Z";
   return {
-    title: "Remember the filter",
-    instruction: `This chart only counts rows where "${dataset.filter.column}" is "${dataset.filter.value}" — ` +
-      `filter your data to that first (Data > Filter), or the helper table above already reflects it.`,
+    title: "Sort to match",
+    instruction: `Sort the helper table above by "${by}" (${desc}) — Data tab > Sort — so the Excel chart's bar order matches the app's preview.`,
+  };
+}
+
+// Item 7: Excel has no built-in "median per group" function (unlike
+// AVERAGEIF/SUMIF, there is no MEDIANIF), so the honest step is one array
+// formula per group. Fires whenever the chart's value is a median (detected
+// the same way describeExtreme does, via the "median " valueName prefix set
+// by aggregate.js).
+function medianByGroupStep(dataset) {
+  const valueName = dataset.valueName;
+  if (typeof valueName !== "string" || !valueName.startsWith("median ")) return null;
+  const numberCol = valueName.slice("median ".length);
+  const groupCol = dataset.labelName || dataset.subgroupName || "each group";
+  const example = dataset.points?.[0]?.label ?? dataset.categories?.[0]?.label ?? "each group";
+  return {
+    title: "Median by group (array formula)",
+    instruction:
+      `Excel has no built-in "median per group" function, so build it with one formula per group: ` +
+      `=MEDIAN(IF([${groupCol}]="${example}", [${numberCol}])) — on Excel 2019 or older, press Ctrl+Shift+Enter ` +
+      `instead of just Enter (Excel adds the curly braces { } around the formula automatically — don't type them ` +
+      `yourself); on Excel 365 or 2021, plain Enter works. Repeat one such formula for every group in the helper ` +
+      `table above.`,
   };
 }
 
@@ -191,7 +248,7 @@ function smallMultiplesSteps(dataset) {
   });
   const folded = crosstabFoldedGroupsStep(dataset);
   if (folded) steps.push(folded);
-  const filterStep = crosstabFilterStep(dataset);
+  const filterStep = filterReminderStep(dataset);
   if (filterStep) steps.push(filterStep);
   steps.push(colorNoteStep());
   return steps;
@@ -227,13 +284,8 @@ function histogramSteps(dataset) {
     instruction: `Click the chart title and axis titles and type plain names (for example "${dataset.valueName}" ` +
       `for the bottom axis, "Number of rows" for the side one).`,
   });
-  if (dataset.filter) {
-    steps.push({
-      title: "Remember the filter",
-      instruction: `This chart only counts rows where "${dataset.filter.column}" is "${dataset.filter.value}" — ` +
-        `filter your data to that first (Data > Filter).`,
-    });
-  }
+  const histFilterStep = filterReminderStep(dataset, { mentionHelperTable: false });
+  if (histFilterStep) steps.push(histFilterStep);
   if (dataset.unreadableCount) {
     steps.push({
       title: "Note the excluded values",
@@ -283,13 +335,8 @@ function boxDotSteps(dataset) {
       `dot the way this app's preview does. The median line and box position will match exactly; the individual ` +
       `dots are this app's own addition for reviewers who want to see the raw spread.`,
   });
-  if (dataset.filter) {
-    steps.push({
-      title: "Remember the filter",
-      instruction: `This chart only uses rows where "${dataset.filter.column}" is "${dataset.filter.value}" — ` +
-        `filter your data to that first (Data > Filter), or the helper table above already reflects it.`,
-    });
-  }
+  const boxDotFilterStep = filterReminderStep(dataset, { verb: "uses" });
+  if (boxDotFilterStep) steps.push(boxDotFilterStep);
   if (dataset.noDataGroups?.length) {
     steps.push({
       title: "Note the excluded groups",
@@ -404,18 +451,20 @@ export function excelChartSteps(chartType, dataset, rec = {}, emphasis = {}, par
     });
   }
 
-  if (dataset.filter) {
-    steps.push({
-      title: "Remember the filter",
-      instruction: `This chart only counts rows where "${dataset.filter.column}" is "${dataset.filter.value}" — filter your data to that first (Data > Filter), or the helper table above already reflects it.`,
-    });
-  }
+  const mainFilterStep = filterReminderStep(dataset);
+  if (mainFilterStep) steps.push(mainFilterStep);
 
   const emphasisStepObj = emphasisStep(emphasis);
   if (emphasisStepObj) steps.push(emphasisStepObj);
 
   const paretoStepObj = paretoStep(dataset, pareto);
   if (paretoStepObj) steps.push(paretoStepObj);
+
+  const medianStepObj = medianByGroupStep(dataset);
+  if (medianStepObj) steps.push(medianStepObj);
+
+  const sortStepObj = sortReminderStep(dataset);
+  if (sortStepObj) steps.push(sortStepObj);
 
   steps.push(colorNoteStep());
 

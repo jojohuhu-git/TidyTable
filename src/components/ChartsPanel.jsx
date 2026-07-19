@@ -347,8 +347,13 @@ export default function ChartsPanel({ sheet, seed }) {
     const capped = grouped && chartRank ? applyRankCap(grouped, chartRank) : grouped;
     // Phase 8.5: a "sort alphabetically" word tweak reorders the capped set
     // (largest-first stays the default when sortMode is null).
-    return capped && sortMode ? sortDataset(capped, sortMode) : capped;
-  }, [baseDataset, groupOther, chartRank, sortMode]);
+    const sorted = capped && sortMode ? sortDataset(capped, sortMode) : capped;
+    // Item 7: a confirmed plan's sort is carried onto the dataset itself (not
+    // just applied to the categorical chart above via sortMode) so the
+    // Excel/R generators can describe it too, even for a crosstab, where
+    // sortDataset can't reorder the table yet.
+    return sorted && confirmedPlan?.sort ? { ...sorted, sort: confirmedPlan.sort } : sorted;
+  }, [baseDataset, groupOther, chartRank, sortMode, confirmedPlan]);
 
   const rec = useMemo(() => (dataset ? recommendChart(dataset, { requestedLayout: layoutHint }) : null), [dataset, layoutHint]);
   const chartType = chosen || rec?.type;
