@@ -394,9 +394,15 @@ export function resolveChartRequest(text, sheet, options = {}) {
         status: "none",
         reason: "complex-filter",
         message: `I understood your request, but a chart here can only narrow to a single exact value (like "for UTI"). ${match.lookedFor || ""} Ask that in Step 3 and use "Chart this", or pick columns by hand below.`.trim(),
+        // Item 7: even though the quick-chart pipeline declines (unchanged —
+        // it must never silently draw a chart that ignores part of the
+        // filter), the plan-echo panel can still pre-fill from these raw
+        // stages via stagesToFilterGroup, since its filter groups CAN
+        // express more than one AND-ed condition.
+        stages: match.stages || [],
       };
     }
-    if (mapped) return finishMatchedPlan(mapped, leadingFilter);
+    if (mapped) return finishMatchedPlan(mapped, leadingFilter, match.stages || []);
     // Confident, but not a shape one chart can draw (a plain number, a distinct
     // count, a Table 1, a whole-column describe/median, or a magnitude ranking):
     // fall through to the local parser, which may still find a plain column to
@@ -471,7 +477,7 @@ function stagesToFilter(stages) {
 // matchRequest as needs_confirm, not confident, so it never reaches here.
 // `leadingFilter` (parked item 1a) fills in only when the pipeline itself
 // found no cohort — a request that already resolved its own filter wins.
-function finishMatchedPlan({ labelCol, valueCol, aggMode, filter, rank }, leadingFilter = null) {
+function finishMatchedPlan({ labelCol, valueCol, aggMode, filter, rank }, leadingFilter = null, stages = []) {
   const resolvedFilter = (filter === UNSUPPORTED_FILTER ? null : filter) || leadingFilter;
   return {
     status: "resolved",
@@ -483,7 +489,32 @@ function finishMatchedPlan({ labelCol, valueCol, aggMode, filter, rank }, leadin
     ties: [],
     rank: rank || null,
     via: "step3",
+    // Item 7 (plan-echo builder): the raw cohort stages behind this resolved
+    // filter, so the plan-echo panel's pre-fill can turn EVERY plain-equality
+    // stage into a condition (stagesToFilterGroup) instead of the single
+    // filter above, which only ever carries one condition (or declines
+    // entirely) per stagesToFilter's UNSUPPORTED_FILTER rule.
+    stages,
   };
+}
+
+// Item 7 (plan-echo builder): every plain equality stage becomes one
+// condition in one AND-group, so an existing multi-condition cohort filter
+// pre-fills the panel's "Rows kept" slot instead of being collapsed to one
+// condition or declined outright (stagesToFilter's behavior for the
+// unchanged free-text quick-chart path). Anything that isn't a plain,
+// non-negated equality (a threshold, a negation, a set/"in", a blank check)
+// is left OUT of the group — never approximated as an equality — so the
+// owner sees it missing and adds it by hand rather than trusting a guess.
+export function stagesToFilterGroup(stages) {
+  const conditions = [];
+  for (const stage of stages || []) {
+    const c = stage?.condition;
+    if (c && c.kind === "value" && c.op === "=" && !c.negated) {
+      conditions.push({ column: c.column, value: c.value });
+    }
+  }
+  return conditions.length ? [conditions] : [[]];
 }
 
 // Local chart-specific parser (the pre-Phase-8 resolver, now the fallback for
