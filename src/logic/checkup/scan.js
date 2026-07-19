@@ -3,7 +3,7 @@
 // the offending values, and (when we can fix it) which normalizer would do it.
 // Nothing here changes data — fixes only run when the user picks them.
 
-import { coerceNumbers, censoredValues, foldKey, splitList, isValidCalendarDate } from "./normalizers.js";
+import { coerceNumbers, censoredValues, foldKey, splitList, isValidCalendarDate, dedupeEncounterRows } from "./normalizers.js";
 
 const DATE_CANDIDATE = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/;
 
@@ -72,9 +72,158 @@ function findDuplicateRows(sheet) {
   }];
 }
 
+// Parked item 3a: real clinical report ID columns, recognized BY NAME, not by
+// looks-unique statistics — a visits export where every patient has three rows
+// is nowhere near 90% unique, so the generic detector below stays silent
+// exactly when the recognition matters most. Tokenizes on separators and
+// camelCase so "PAT_ENC_CSN_ID", "Encounter ID", and "PatientID" all resolve.
+export function idColumnRole(name) {
+  const tokens = String(name == null ? "" : name)
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  const joined = tokens.join(" ");
+  const hasIdWord = /\b(id|ids|number|no|num)\b/.test(joined);
+  if (tokens.includes("csn")) return "encounter";
+  if (/\bencounter\b/.test(joined) && hasIdWord) return "encounter";
+  if (tokens.includes("mrn")) return "patient";
+  if (/\bmedical record\b/.test(joined)) return "patient";
+  if (/\bpatient\b/.test(joined) && hasIdWord) return "patient";
+  return null;
+}
+
+// Parked item 3b: duplicate ENCOUNTER IDs are a likely data error — each
+// visit should appear once. Repeated rows that are exact copies can go with
+// one click (keeping one of each); repeated IDs whose rows differ are shown
+// side by side for the user to judge — the app never picks a winner.
+function findDuplicateEncounterIds(sheet) {
+  const out = [];
+  const names = sheet.headers.map((x) => x.name);
+  for (const h of sheet.headers) {
+    if (idColumnRole(h.name) !== "encounter") continue;
+    const counts = new Map();
+    for (const r of sheet.rows) {
+      const v = r[h.name];
+      if (v == null || String(v).trim() === "") continue;
+      const k = String(v).trim();
+      counts.set(k, (counts.get(k) || 0) + 1);
+    }
+    const repeats = [...counts.entries()].filter(([, c]) => c > 1);
+    if (!repeats.length) continue;
+    const exactCopyCount = sheet.rows.length - dedupeEncounterRows(sheet.rows, names, h.name).length;
+    // Groups whose rows do NOT fully match — capped preview for the card.
+    const byId = new Map();
+    for (const r of sheet.rows) {
+      const v = r[h.name];
+      if (v == null || String(v).trim() === "") continue;
+      const k = String(v).trim();
+      if ((counts.get(k) || 0) < 2) continue;
+      if (!byId.has(k)) byId.set(k, []);
+      byId.get(k).push(r);
+    }
+    const differingGroups = [];
+    for (const [id, rows] of byId) {
+      const sigs = new Set(rows.map((r) => JSON.stringify(names.map((n) => r[n]))));
+      if (sigs.size > 1) differingGroups.push({ id, rows: rows.slice(0, 4) });
+      if (differingGroups.length >= 5) break;
+    }
+    const copyNote = exactCopyCount
+      ? ` ${exactCopyCount} of the repeated rows ${be(exactCopyCount)} an exact copy of an earlier row — the fix removes ${exactCopyCount === 1 ? "it" : "them"}, keeping one of each.`
+      : "";
+    const differNote = differingGroups.length
+      ? ` ${differingGroups.length} repeated ID${s(differingGroups.length)} ha${differingGroups.length === 1 ? "s" : "ve"} rows that do NOT fully match — compare them below and fix the right one in your file; the app will not pick a winner.`
+      : "";
+    out.push({
+      id: nextId(),
+      type: "duplicateEncounterIds",
+      sheet: sheet.name,
+      column: h.name,
+      letter: h.letter,
+      title: `Repeated encounter IDs in "${h.name}"`,
+      detail: `"${h.name}" looks like an encounter (visit) ID, and each visit should normally appear once — but ${repeats.length} ID${s(repeats.length)} appear${repeats.length === 1 ? "s" : ""} more than once. That usually means the same visit was exported twice.${copyNote}${differNote}`,
+      count: repeats.length,
+      samples: sample(repeats.map(([v, c]) => `${v} (${c}×)`)),
+      exactCopyCount,
+      differingGroups,
+      fixable: exactCopyCount > 0,
+      fix: exactCopyCount > 0 ? { normalizer: "dedupeEncounters" } : null,
+    });
+  }
+  return out;
+}
+
+// Parked item 3c: duplicate MRNs are often legitimate — one row per visit,
+// not per patient. Nothing is flagged as wrong; the card explains, and offers
+// an OPTIONAL collapse to one row per patient where the user chooses the
+// surviving row. The app never decides which duplicate situation to clear.
+function findDuplicatePatientIds(sheet) {
+  const out = [];
+  const names = sheet.headers.map((x) => x.name);
+  for (const h of sheet.headers) {
+    if (idColumnRole(h.name) !== "patient") continue;
+    // Count patients with two or more genuinely DISTINCT rows. A patient
+    // whose repeats are all exact copies is a duplicated export, not
+    // "multiple visits" — that case belongs to the duplicate-rows finding,
+    // and double-flagging it would make "remove the duplicates" ambiguous.
+    const sigsById = new Map();
+    for (const r of sheet.rows) {
+      const v = r[h.name];
+      if (v == null || String(v).trim() === "") continue;
+      const k = String(v).trim();
+      if (!sigsById.has(k)) sigsById.set(k, new Set());
+      sigsById.get(k).add(JSON.stringify(names.map((n) => r[n])));
+    }
+    const repeats = [...sigsById.entries()]
+      .filter(([, sigs]) => sigs.size > 1)
+      .map(([v, sigs]) => [v, sigs.size]);
+    if (!repeats.length) continue;
+    // Surviving-row choices: by each date-like column (capped at 3 so the
+    // question stays readable), by sheet order when there is none, and always
+    // "most complete".
+    const dateCols = sheet.headers
+      .filter((x) => x.type === "date" || /date/i.test(x.name))
+      .map((x) => x.name)
+      .slice(0, 3);
+    const policyOptions = [];
+    for (const d of dateCols) {
+      policyOptions.push({ value: `first::${d}`, label: `Keep each patient's earliest row by "${d}"`, detail: "a row with no date loses to a row with one" });
+      policyOptions.push({ value: `last::${d}`, label: `Keep each patient's most recent row by "${d}"`, detail: "a row with no date loses to a row with one" });
+    }
+    if (!dateCols.length) {
+      policyOptions.push({ value: "firstrow", label: "Keep each patient's first row in the sheet", detail: "sheet order decides" });
+      policyOptions.push({ value: "lastrow", label: "Keep each patient's last row in the sheet", detail: "sheet order decides" });
+    }
+    policyOptions.push({ value: "complete", label: "Keep each patient's most complete row", detail: "the row with the fewest empty cells" });
+    out.push({
+      id: nextId(),
+      type: "duplicatePatientIds",
+      sheet: sheet.name,
+      column: h.name,
+      letter: h.letter,
+      title: `The same patient appears on several rows ("${h.name}")`,
+      detail: `${repeats.length} patient${s(repeats.length)} in "${h.name}" appear${repeats.length === 1 ? "s" : ""} on more than one row. That is often legitimate — a visits export has one row per visit, so a patient with multiple visits repeats. If that's what this file is, nothing needs fixing. If you want ONE row per patient instead, tick this fix and choose which row survives; removed rows stay listed in the result and the apply can be undone.`,
+      count: repeats.length,
+      samples: sample(repeats.map(([v, c]) => `${v} (${c}×)`)),
+      fixable: true,
+      fix: {
+        normalizer: "keepOnePerPatient",
+        needsPolicy: true,
+        paramKey: "policy",
+        policyQuestion: `Which row should survive for each patient in "${h.name}"?`,
+        policyOptions,
+      },
+    });
+  }
+  return out;
+}
+
 function findDuplicateIds(sheet) {
   const out = [];
   for (const h of sheet.headers) {
+    // Parked item 3a: name-recognized ID columns get their own, richer
+    // findings above — don't double-flag them with the generic card.
+    if (idColumnRole(h.name)) continue;
     const vals = nonNull(sheet.rows, h.name);
     if (vals.length < 4) continue;
     const d = distinct(vals);
@@ -575,6 +724,8 @@ export function checkupSheet(sheet) {
   counter = 0;
   return [
     ...findDuplicateRows(sheet),
+    ...findDuplicateEncounterIds(sheet),
+    ...findDuplicatePatientIds(sheet),
     ...findDuplicateIds(sheet),
     ...findNotInPicklist(sheet),
     ...findMissing(sheet),

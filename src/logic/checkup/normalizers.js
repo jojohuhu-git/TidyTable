@@ -110,6 +110,83 @@ export function stripUnitSuffix(v) {
   return m ? Number(m[1]) : v;
 }
 
+/* ---- 11. Duplicate encounter rows (parked item 3b): remove a row only when
+   it is an exact copy of an earlier row AND its encounter-ID cell is
+   non-blank (an exact copy always shares its ID, so that ID is duplicated by
+   definition). Rows sharing an ID but differing in any cell are NEVER touched
+   — the app can't know which is right, so it shows them side by side instead.
+   Blank-ID exact copies are also left alone; removing those is the separate,
+   generic "duplicate rows" fix the user can tick on its own. ---- */
+export function dedupeEncounterRows(rows, headerNames, column) {
+  var seen = {};
+  var out = [];
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var idVal = r[column];
+    var hasId = !(idVal == null || String(idVal).trim() === "");
+    var sig = JSON.stringify(headerNames.map(function (k) { return r[k]; }));
+    if (hasId && seen[sig]) continue;
+    seen[sig] = 1;
+    out.push(r);
+  }
+  return out;
+}
+
+/* ---- 12. Keep one row per patient (parked item 3c). policy encodes the
+   surviving-row choice: "first::<dateCol>" / "last::<dateCol>" (earliest or
+   latest by that date column; a row with no readable date loses to any row
+   with one), "complete" (fewest empty cells), "firstrow" / "lastrow" (sheet
+   order). Ties always keep the earliest row in sheet order, so the result is
+   reproducible by a stable sort in Excel. Rows with a blank patient ID are
+   always kept — never silently dropped. ---- */
+export function keepOneRowPerPatient(rows, column, policy, headerNames) {
+  var parts = String(policy == null ? "firstrow" : policy).split("::");
+  var mode = parts[0];
+  var dateCol = parts[1] || null;
+  function rank(v) {
+    if (v == null || String(v).trim() === "") return null;
+    if (typeof v === "number") return v;
+    var t = Date.parse(String(v));
+    return isNaN(t) ? null : t;
+  }
+  function filled(r) {
+    var n = 0;
+    for (var i = 0; i < headerNames.length; i++) {
+      var v = r[headerNames[i]];
+      if (!(v == null || String(v).trim() === "")) n++;
+    }
+    return n;
+  }
+  var best = {}; // folded id -> { index, score }
+  for (var i = 0; i < rows.length; i++) {
+    var idVal = rows[i][column];
+    if (idVal == null || String(idVal).trim() === "") continue; // blank IDs: always kept below
+    var k = String(idVal).trim().toLowerCase();
+    var score = null;
+    if (mode === "first" || mode === "last") score = rank(rows[i][dateCol]);
+    else if (mode === "complete") score = filled(rows[i]);
+    var cur = best[k];
+    if (!cur) { best[k] = { index: i, score: score }; continue; }
+    var replace = false;
+    if (mode === "lastrow") replace = true;
+    else if (mode === "firstrow") replace = false;
+    else if (score != null && cur.score == null) replace = true;
+    else if (score != null && cur.score != null) {
+      if (mode === "first") replace = score < cur.score;
+      else replace = score > cur.score; // "last" and "complete": bigger wins
+    }
+    if (replace) best[k] = { index: i, score: score };
+  }
+  var out = [];
+  for (var j = 0; j < rows.length; j++) {
+    var v2 = rows[j][column];
+    if (v2 == null || String(v2).trim() === "") { out.push(rows[j]); continue; }
+    var kk = String(v2).trim().toLowerCase();
+    if (best[kk].index === j) out.push(rows[j]);
+  }
+  return out;
+}
+
 /* ---- 8. Multi-value cells: "red, blue" -> ["red","blue"] (row explode) ---- */
 export function splitList(v) {
   if (v == null) return [null];
@@ -128,6 +205,14 @@ export const NORMALIZERS = {
   splitList: { fn: splitList, needsParam: false },
   epochSerialToNumber: { fn: epochSerialToNumber, needsParam: false },
   stripUnitSuffix: { fn: stripUnitSuffix, needsParam: false },
+};
+
+// Row-level ops (whole-row keep/remove decisions, not per-cell rewrites).
+// Same inlining contract as NORMALIZERS: each is self-contained ES5 so
+// buildFixPlan can toString() its source into the worker transform.
+export const ROW_OPS = {
+  dedupeEncounters: { fn: dedupeEncounterRows },
+  keepOnePerPatient: { fn: keepOneRowPerPatient },
 };
 
 // ---------------------------------------------------------------------------

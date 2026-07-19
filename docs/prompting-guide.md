@@ -45,9 +45,28 @@ the "exact" lane, and knowing what to do when you don't.
 
 Mostly tick-boxes: the scan lists findings, you tick what to fix. Phrasing
 matters only in the small "describe a fix" box; keep it to one action on one
-column ("trim spaces in Diagnosis"). Repeated values in ID-like columns (CSN,
-MRN) are currently **warn-only** — the app tells you but can't fix them yet;
-handle duplicates in Excel or with Step 10's one-row-per-patient operation.
+column ("trim spaces in Diagnosis").
+
+**CSN and MRN columns are recognized by name** (CSN, PAT_ENC_CSN_ID,
+"encounter id", MRN, "medical record number", "patient id") — the app no
+longer needs the column to look statistically unique, so a visits export
+where every patient has several rows still gets the right card:
+
+- **Repeated encounter IDs (CSN)** are treated as a likely data error — each
+  visit should appear once. Repeated rows that are *exact copies* can be
+  removed with one tick (one of each is kept, and the removed rows stay
+  viewable on the result card; Undo restores them). Repeated IDs whose rows
+  *differ* are shown side by side for you to compare — the app never picks a
+  winner; fix the right one in your file.
+- **Repeated MRNs** are explained as often legitimate (one row per visit).
+  Nothing is flagged as wrong. If you *want* one row per patient, tick the
+  card and the app asks which row survives: earliest or most recent by a date
+  column, or the most complete row. You instruct; it never decides.
+
+Both fixes land in all three surfaces — the in-app result, the Excel steps
+(a sort + Remove Duplicates recipe that keeps the same rows), and a real R
+script that re-does the row removal on your original file so you can check
+the row counts match.
 
 **Dropdown-list check (automatic).** If a column in your .xlsx is filled from
 an Excel dropdown (a data-validation list), the app reads that list straight
@@ -145,11 +164,18 @@ up instead of guessing — read that report.
 - **AI "full" mode sends real rows to the Claude API. Never use it with
   identifiable patient data** — that is a disclosure to a third party with no
   BAA on a personal API key. De-identify first or stay in sample mode.
-- **One caveat:** the "results so far" list, session log, and recipe survive a
-  page refresh by being saved in the browser's local storage, unencrypted.
-  Results can contain real rows. Fine on your own encrypted machine; clear the
-  session on a shared one. (A "PHI mode" switch that turns this off is a
-  parked work item.)
+- **PHI mode (shipped 2026-07-18).** A tick-box next to the privacy choices in
+  Step 1, for files holding real patient data. While on: the "whole
+  spreadsheet" AI option is disabled (sample mode still works — it sends no
+  real values), and the "results so far" list is no longer saved in browser
+  storage — turning it on also wipes any results already saved there. The
+  toggle itself is remembered, so it stays on across visits until you untick
+  it. The session log and recipe still persist (they hold column names and
+  counts, not rows).
+- **Remaining caveat:** with PHI mode off, the "results so far" list survives
+  a page refresh by being saved in the browser's local storage, unencrypted —
+  and results can contain real rows. Fine on your own encrypted machine; tick
+  PHI mode or clear the session on a shared one.
 
 ## Current limitations — and the workaround for each
 
@@ -173,5 +199,8 @@ up instead of guessing — read that report.
    is a parked design item (item 7).
 4. **Two-column charts always count rows** — no averages/totals across a
    Split-by yet.
-5. **Duplicate CSN/MRN cleanup is warn-only in Step 2** (parked item 3); use
-   Step 10's one-row-per-patient operation meanwhile.
+5. **Duplicate CSN/MRN cleanup now has action buttons.** (Fixed 2026-07-18,
+   parked item 3.) Exact-copy encounter rows remove with one tick; repeated
+   MRNs offer an optional keep-one-row-per-patient with your choice of
+   surviving row. Repeated encounter IDs whose rows *differ* stay review-only
+   by design — the app shows them side by side and you fix the file.

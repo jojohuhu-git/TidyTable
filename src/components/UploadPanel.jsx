@@ -10,6 +10,8 @@ export default function UploadPanel({
   setExcluded,
   privacyMode,
   setPrivacyMode,
+  phiMode,
+  setPhiMode,
 }) {
   const inputRef = useRef(null);
   const [dragOver, setDragOver] = useState(false);
@@ -140,6 +142,22 @@ export default function UploadPanel({
 
           <fieldset className="privacy-modes">
             <legend>What gets sent to the AI?</legend>
+            {/* Parked item 3e: PHI mode, asked for after the HIPAA review.
+                While on, the whole-spreadsheet AI option is off and the
+                results list is not saved in browser storage between visits. */}
+            <label className="radio-row phi-mode-row">
+              <input
+                type="checkbox"
+                checked={Boolean(phiMode)}
+                onChange={(e) => setPhiMode(e.target.checked)}
+                aria-label="PHI mode — this file holds real patient data"
+              />
+              <span>
+                <strong>PHI mode</strong> — tick this when the file holds real patient data. It turns
+                off the "whole spreadsheet" AI option below, and stops saving your results list in
+                this browser between visits. Cleaning and charts already run only on this computer.
+              </span>
+            </label>
             <label className="radio-row">
               <input
                 type="radio"
@@ -157,6 +175,7 @@ export default function UploadPanel({
                 type="radio"
                 name="privacy"
                 checked={privacyMode === "full"}
+                disabled={Boolean(phiMode)}
                 onChange={() => {
                   // B8: full mode sends every cell value to Anthropic — a
                   // one-time confirm before switching to it, so it's never a
@@ -172,6 +191,7 @@ export default function UploadPanel({
                 <strong>The whole spreadsheet</strong> — lets the AI see every value (useful for
                 fixing typos or messy categories), but your data leaves your computer and large
                 files cost more.
+                {phiMode ? " Turned off while PHI mode is on." : ""}
               </span>
             </label>
           </fieldset>

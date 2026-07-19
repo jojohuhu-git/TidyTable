@@ -13,6 +13,7 @@
 
 import {
   coerceNumbers, sentinelBlanks, parseDates, trimCase, censoredValues, splitList, foldKey, epochSerialToNumber, stripUnitSuffix,
+  dedupeEncounterRows, keepOneRowPerPatient,
 } from "../checkup/normalizers.js";
 import { matchColumn } from "./recipe.js";
 import { applyCodesToColumn } from "./keyStore.js";
@@ -145,6 +146,40 @@ export function replayRecipe(recipe, sheet, keyStore) {
           message: `The step "${step.label}" could not run: this file has no column matching "${fix.column}". It may have been renamed or removed. Nothing was changed for this step.`,
         });
         record(step.label, before, before, { skipped: true, note: `column "${fix.column}" not found — step skipped` });
+        continue;
+      }
+
+      if (fix.normalizer === "dedupeEncounters") {
+        const names = headers.map((h) => h.name);
+        rows = dedupeEncounterRows(rows, names, col);
+        const removed = before - rows.length;
+        record(step.label, before, rows.length, { note: `${removed} exact-copy row${removed === 1 ? "" : "s"} removed` });
+        logEntries.push({ action: `Removed exact-copy rows sharing the same "${col}"`, column: col, cellsChanged: 0, rowsBefore: before, rowsAfter: rows.length, rowsRemoved: removed });
+        continue;
+      }
+
+      if (fix.normalizer === "keepOnePerPatient") {
+        // The surviving-row policy can name a date column — that column must
+        // be re-matched against THIS file's headers too, never assumed.
+        const parts = String(fix.params?.policy || "firstrow").split("::");
+        let policy = parts[0];
+        if (parts[1]) {
+          const dcol = matchColumn(parts[1], headers);
+          if (!dcol) {
+            surprises.push({
+              type: "missingColumn",
+              column: parts[1],
+              message: `The step "${step.label}" could not run: this file has no column matching "${parts[1]}", which the recorded rule uses to pick each patient's surviving row. Nothing was changed for this step.`,
+            });
+            record(step.label, before, before, { skipped: true, note: `column "${parts[1]}" not found — step skipped` });
+            continue;
+          }
+          policy = `${parts[0]}::${dcol}`;
+        }
+        rows = keepOneRowPerPatient(rows, col, policy, headers.map((h) => h.name));
+        const removed = before - rows.length;
+        record(step.label, before, rows.length, { note: `${removed} row${removed === 1 ? "" : "s"} removed — one row kept per patient` });
+        logEntries.push({ action: `Kept one row per patient in "${col}"`, column: col, cellsChanged: 0, rowsBefore: before, rowsAfter: rows.length, rowsRemoved: removed });
         continue;
       }
 

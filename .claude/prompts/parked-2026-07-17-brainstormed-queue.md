@@ -49,13 +49,32 @@ and the P6-2 histogram/box+dot which label both axes. A dormant `niceMax(0)→1`
 quirk in `BarChart` (~line 119) would surface if tick labels are ever added
 there. Flagged by the owner in the P6-2 session. Not scoped; no new brainstorm.
 
-## 3. Step-2 duplicate CSN/MRN handling ("the explicit optional button") + PHI mode
+## 3. Step-2 duplicate CSN/MRN handling + PHI mode — SHIPPED 2026-07-18 (do not redo)
 
-**Today:** Step 2's checkup flags "Repeated values in the ID-like column X"
-(`duplicateIds` in `src/logic/checkup/scan.js`) but the finding is
-`fixable: false` — it warns and offers no action. "Explicit optional button"
-means: put action buttons ON that warning card so the app can do the fix,
-offered never automatic.
+**Done, all five scope parts (a)–(e):** name-based CSN/MRN recognition
+(`idColumnRole` in scan.js — CSN/PAT_ENC_CSN_ID/encounter-id and
+MRN/medical-record-number/patient-id, tokenized so camelCase and underscores
+both resolve); encounter card with one-tick exact-copy removal + side-by-side
+preview of differing rows (never auto-picked); MRN card explaining repeats as
+often legitimate, with optional keep-one-row-per-patient (survivor: earliest/
+most-recent by date column, most complete, or sheet order — ClarifyBox
+question); both ops in all three surfaces (worker transform, Excel
+sort+Remove-Duplicates recipe with blank-ID caveats, real base-R script) and
+replayable in recipes with fuzzy re-matching of BOTH the ID and date columns;
+removed rows inspectable on the result card + Undo restores them; PHI-mode
+toggle in Step 1 (disables AI full mode, stops persisting + wipes the stored
+results list, flag itself remembered). 28 tests:
+`src/logic/checkup/parked3-csn-mrn.test.js` + `src/parked3-csn-mrn.dom.test.jsx`.
+Note: Step 10's long↔wide reshape was NOT literally reusable (it pivots
+measure name/value pairs; this is surviving-row selection), so the collapse is
+a new self-contained ES5 op in normalizers.js — required anyway for worker
+inlining. One deliberate scope call: a patient whose repeats are ALL exact
+copies is left to the duplicate-rows finding (double-flagging made "remove
+the duplicates" ambiguous).
+
+**Original problem (historical):** Step 2's checkup flagged "Repeated values
+in the ID-like column X" (`duplicateIds` in `src/logic/checkup/scan.js`) but
+the finding was `fixable: false` — it warned and offered no action.
 
 **Brainstormed scope (owner-reviewed 2026-07-17; this is her priority framing):**
 - (a) Recognize real report ID columns BY NAME, not just by looks-unique
@@ -148,7 +167,10 @@ for approval BEFORE building):**
 P5-4 (.docx/.pptx Office exports), P5-5 (ggplot2 figure code — must cover
 crosstab, distribution, Pareto, and small-multiples types when it lands).
 Shipped since this file was written: P6-5, P5-1/P5-2/P5-3/P5-6 (2026-07-17),
-P4-3 validation-list vocabularies (2026-07-18, owner pulled it forward).
+P4-3 validation-list vocabularies (2026-07-18, owner pulled it forward),
+item 4 (2026-07-18), item 3 CSN/MRN + PHI mode (2026-07-18). Owner's recorded
+order for what remains: **item 1 → item 7 (scoping only)**, then the spec's
+P5-4/P5-5.
 
 ---
 

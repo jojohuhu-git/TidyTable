@@ -9,7 +9,7 @@
 import { columnKey } from "../recipes/recipe.js";
 
 const INTENTS = [
-  { name: "duplicates", re: /\bduplicat/i, types: ["duplicateRows", "duplicateIds"] },
+  { name: "duplicates", re: /\bduplicat/i, types: ["duplicateRows", "duplicateIds", "duplicateEncounterIds", "duplicatePatientIds"] },
   { name: "dates", re: /\bdates?\b/i, types: ["textDates", "epochDates"] },
   { name: "missing", re: /\b(n\/?a|blanks?|missing)\b/i, types: ["missing"] },
   { name: "variants", re: /\b(spelling|variant)/i, types: ["categoryVariants"] },

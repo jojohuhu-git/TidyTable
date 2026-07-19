@@ -21,22 +21,38 @@ describe("matchCleanRequest — P2-3 plain-English cleaning box", () => {
   });
 
   it("recognizes 'duplicates' but reports not-fixable when only repeated IDs exist (no exact duplicate rows)", () => {
+    // "SampleID" is deliberately NOT a recognized patient/encounter name —
+    // parked item 3 gave CSN/MRN-style columns their own richer findings, so
+    // this pins the generic looks-unique path that still owns everything else.
     const findings = findingsFor([
-      { PatientID: "P1", Sex: "M" },
-      { PatientID: "P2", Sex: "F" },
-      { PatientID: "P3", Sex: "M" },
-      { PatientID: "P4", Sex: "F" },
-      { PatientID: "P5", Sex: "M" },
-      { PatientID: "P6", Sex: "F" },
-      { PatientID: "P7", Sex: "M" },
-      { PatientID: "P8", Sex: "F" },
-      { PatientID: "P9", Sex: "M" },
-      { PatientID: "P1", Sex: "F" }, // repeated ID, but Sex differs so the row isn't an exact duplicate
+      { SampleID: "P1", Sex: "M" },
+      { SampleID: "P2", Sex: "F" },
+      { SampleID: "P3", Sex: "M" },
+      { SampleID: "P4", Sex: "F" },
+      { SampleID: "P5", Sex: "M" },
+      { SampleID: "P6", Sex: "F" },
+      { SampleID: "P7", Sex: "M" },
+      { SampleID: "P8", Sex: "F" },
+      { SampleID: "P9", Sex: "M" },
+      { SampleID: "P1", Sex: "F" }, // repeated ID, but Sex differs so the row isn't an exact duplicate
     ]);
     const result = matchCleanRequest("remove the duplicates", findings);
     expect(result.kind).toBe("not-fixable");
     expect(result.finding.type).toBe("duplicateIds");
     expect(cleanRequestMessage(result)).toBe(result.finding.detail);
+  });
+
+  it("matches 'remove the duplicates' to the optional patient collapse when the column is MRN-like (parked item 3)", () => {
+    const findings = findingsFor([
+      { PatientID: "P1", Sex: "M" },
+      { PatientID: "P2", Sex: "F" },
+      { PatientID: "P3", Sex: "M" },
+      { PatientID: "P4", Sex: "F" },
+      { PatientID: "P1", Sex: "F" }, // same patient, second row
+    ]);
+    const result = matchCleanRequest("remove the duplicates", findings);
+    expect(result.kind).toBe("matched");
+    expect(result.finding.type).toBe("duplicatePatientIds");
   });
 
   it("says so honestly when no duplicates exist", () => {

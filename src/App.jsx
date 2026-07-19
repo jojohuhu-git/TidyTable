@@ -118,6 +118,18 @@ export default function App() {
   const [originalWorkbook, setOriginalWorkbook] = useState(null); // B4: "start over" target
   const [excluded, setExcluded] = useState(() => new Set()); // "sheet::column"
   const [privacyMode, setPrivacyMode] = useState("sample"); // "sample" | "full"
+  // Parked item 3e: PHI mode. While on, the AI "whole spreadsheet" option is
+  // off and the results list is not persisted to browser storage. The flag
+  // itself is remembered (it holds no data), so it stays on across visits —
+  // fail-closed for someone who always works with patient files.
+  const [phiMode, setPhiModeState] = useState(() => {
+    try { return localStorage.getItem("tidytable_phi_mode") === "1"; } catch { return false; }
+  });
+  function setPhiMode(on) {
+    setPhiModeState(on);
+    try { localStorage.setItem("tidytable_phi_mode", on ? "1" : "0"); } catch { /* storage may be disabled */ }
+    if (on && privacyMode === "full") setPrivacyMode("sample");
+  }
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
@@ -231,8 +243,10 @@ export default function App() {
 
   const dataContext = useMemo(() => {
     if (!workbook) return "";
-    return buildDataContext(workbook, { excluded, privacyMode });
-  }, [workbook, excluded, privacyMode]);
+    // Belt and braces: even if the "full" radio were somehow still set, PHI
+    // mode caps what leaves the browser at sample mode.
+    return buildDataContext(workbook, { excluded, privacyMode: phiMode ? "sample" : privacyMode });
+  }, [workbook, excluded, privacyMode, phiMode]);
 
   // Phase 3: the current file's shape (its folded column set) and the column
   // aliases learned for that shape (and near-matching shapes, P4-1), so a
@@ -261,9 +275,14 @@ export default function App() {
   // stripped of plan/resultRows first, see recordResult) so an accidental
   // refresh doesn't erase the record of what happened this session.
   useEffect(() => {
-    const persistableResults = results.map(({ plan: _plan, resultRows: _resultRows, ...rest }) => rest);
+    // Parked item 3e: in PHI mode the results list (answers derived from real
+    // data) never lands in browser storage — turning the toggle on also
+    // rewrites the stored session without it.
+    const persistableResults = phiMode
+      ? []
+      : results.map(({ plan: _plan, resultRows: _resultRows, removedRows: _removedRows, ...rest }) => rest);
     saveSession({ sessionLog, recipe, results: persistableResults });
-  }, [sessionLog, recipe, results]);
+  }, [sessionLog, recipe, results, phiMode]);
 
   // B5: warn before an accidental refresh/close loses the loaded workbook.
   useEffect(() => {
@@ -280,7 +299,7 @@ export default function App() {
   // folded into this one list). `kind` is "checkup" or "question"; a question
   // answered by the offline engine is also recorded into the routine
   // (`savedToRoutine: true`) by the caller.
-  function recordResult({ label, answer, plan: newPlan, resultRows: newResultRows, kind, savedToRoutine, chartRequest }) {
+  function recordResult({ label, answer, plan: newPlan, resultRows: newResultRows, removedRows, kind, savedToRoutine, chartRequest }) {
     const id = `${Date.now()}-${Math.random()}`;
     setPlan(newPlan);
     setResultRows(newResultRows);
@@ -288,7 +307,10 @@ export default function App() {
       // Phase 8.4: `chartRequest` is set only when this answer's own wording
       // resolves to a chart through the shared pipeline — so the card can offer
       // a one-click "Chart this" that seeds Step 9 without re-typing.
-      { id, kind, label, answer, timestamp: Date.now(), plan: newPlan, resultRows: newResultRows, savedToRoutine: Boolean(savedToRoutine), chartRequest: chartRequest || null },
+      // Parked item 3d: `removedRows` (rows a dedupe fix dropped) rides along
+      // so the card can show exactly what was removed — like plan/resultRows
+      // it is never persisted to browser storage.
+      { id, kind, label, answer, timestamp: Date.now(), plan: newPlan, resultRows: newResultRows, removedRows: removedRows?.length ? removedRows : null, savedToRoutine: Boolean(savedToRoutine), chartRequest: chartRequest || null },
       ...r,
     ].slice(0, MAX_RESULTS));
     setExpandedResultId(id);
@@ -926,7 +948,7 @@ export default function App() {
       for (const [sheetName, sheetFixes] of bySheetName) {
         const idx = nextSheets.findIndex((s) => s.name === sheetName);
         const sheet = nextSheets[idx];
-        const { plan: fixPlan, log } = buildFixPlan(sheet, sheetFixes);
+        const { plan: fixPlan, log, removedRows } = buildFixPlan(sheet, sheetFixes);
         const rows = await runTransform(fixPlan.transform_code, { [sheet.name]: sheet.rows });
         const cleaned = deriveSheet(sheet.name, rows, sheet);
         nextSheets = nextSheets.map((s, i) => (i === idx ? cleaned : s));
@@ -934,9 +956,10 @@ export default function App() {
         nextRecipe = sheetFixes.reduce((acc, fix) => addStep(acc, checkupStep(fix)), nextRecipe);
         recordResult({
           label: `Result of: ${sheetFixes.length} checkup fix${sheetFixes.length === 1 ? "" : "es"}${bySheetName.size > 1 ? ` — sheet "${sheet.name}"` : ""}`,
-          answer: `${rows.length} row${rows.length === 1 ? "" : "s"} cleaned`,
+          answer: `${rows.length} row${rows.length === 1 ? "" : "s"} cleaned${removedRows.length ? ` — ${removedRows.length} removed` : ""}`,
           plan: fixPlan,
           resultRows: rows,
+          removedRows,
           kind: "checkup",
           savedToRoutine: true,
         });
@@ -998,6 +1021,8 @@ export default function App() {
             setExcluded={setExcluded}
             privacyMode={privacyMode}
             setPrivacyMode={setPrivacyMode}
+            phiMode={phiMode}
+            setPhiMode={setPhiMode}
           />
           {!workbook && (
             <p className="try-example-row">

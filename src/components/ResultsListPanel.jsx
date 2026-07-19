@@ -1,3 +1,4 @@
+import DataTable from "./DataTable.jsx";
 import ResultsPanel from "./ResultsPanel.jsx";
 
 // W3 (Step 4 — "Your results so far"): every checkup-fix apply and every
@@ -69,6 +70,16 @@ export default function ResultsListPanel({ results, expandedId, onToggle, onRemo
             {open && (
               r.plan && r.resultRows ? (
                 <div className="result-card-body">
+                  {/* Parked item 3d: rows a dedupe fix removed stay inspectable
+                      here — never silently gone. Undo last apply restores them. */}
+                  {r.removedRows?.length > 0 && (
+                    <details className="removed-rows">
+                      <summary>
+                        See the {r.removedRows.length} removed row{r.removedRows.length === 1 ? "" : "s"} (undo restores them)
+                      </summary>
+                      <DataTable rows={r.removedRows} maxRows={50} />
+                    </details>
+                  )}
                   <ResultsPanel plan={r.plan} rows={r.resultRows} />
                 </div>
               ) : (

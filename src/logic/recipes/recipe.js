@@ -65,6 +65,8 @@ export function labelForFix(fix) {
     case "trimCase": return `Merge different spellings in "${fix.column}"`;
     case "censoredValues": return `Handle below/above-limit results in "${fix.column}"`;
     case "splitList": return `Split multi-value cells in "${fix.column}" into separate rows`;
+    case "dedupeEncounters": return `Remove exact-copy rows sharing the same "${fix.column}"`;
+    case "keepOnePerPatient": return `Keep one row per patient in "${fix.column}"`;
     default: return `Clean "${fix.column}"`;
   }
 }

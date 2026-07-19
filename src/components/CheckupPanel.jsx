@@ -2,7 +2,29 @@ import { useMemo, useState } from "react";
 import { checkupWorkbook } from "../logic/checkup/scan.js";
 import { matchCleanRequest, cleanRequestMessage } from "../logic/checkup/cleanRequestMatcher.js";
 import ClarifyBox from "./ClarifyBox.jsx";
+import DataTable from "./DataTable.jsx";
 import StepHelpPanel from "./StepHelpPanel.jsx";
+
+// Parked item 3b: repeated encounter IDs whose rows do NOT fully match are
+// shown side by side before anything is applied — the user compares and fixes
+// the right one in the file; the app never picks a winner.
+function DifferingGroups({ finding }) {
+  if (!finding.differingGroups?.length) return null;
+  return (
+    <div className="differing-groups">
+      <p className="dim">
+        Rows sharing a repeated "{finding.column}" that do <strong>not</strong> fully match — compare them
+        side by side (the one-click fix leaves these alone):
+      </p>
+      {finding.differingGroups.map((g) => (
+        <div key={g.id} className="differing-group" data-testid={`differing-group-${g.id}`}>
+          <span className="dim">{finding.column} {g.id}:</span>
+          <DataTable rows={g.rows} maxRows={4} />
+        </div>
+      ))}
+    </div>
+  );
+}
 
 const CENSORED_OPTIONS = [
   { value: "boundary", label: "Use the limit number", detail: "treat \"<0.5\" as 0.5" },
@@ -210,6 +232,7 @@ export default function CheckupPanel({ sheets, busy, onApply }) {
               </div>
             )
           )}
+          <DifferingGroups finding={f} />
         </details>
         {askingPolicy === f.id && (
           <ClarifyBox
@@ -314,6 +337,7 @@ export default function CheckupPanel({ sheets, busy, onApply }) {
                       {f.samples.map((s, i) => <span key={i} className="sample-chip">{String(s)}</span>)}
                     </div>
                   )}
+                  <DifferingGroups finding={f} />
                 </details>
               </li>
             ))}

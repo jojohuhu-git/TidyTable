@@ -544,3 +544,12 @@ body {
 /* Phase 7.9: teach-it form on decline. */
 .teach-it-form { margin-top: 0.6rem; padding: 0.75rem; border: 1px dashed var(--line); border-radius: var(--rad); display: grid; gap: 0.35rem; }
 .teach-mode { border: none; padding: 0; margin: 0.2rem 0; display: flex; gap: 1rem; flex-wrap: wrap; }
+
+/* Parked item 3: side-by-side preview of repeated-ID rows that differ, and
+   the "see the removed rows" fold on a result card. */
+.differing-groups { margin-top: 0.5rem; display: grid; gap: 0.5rem; }
+.differing-group { border: 1px solid var(--line); border-radius: var(--rad); padding: 0.5rem; overflow-x: auto; }
+.removed-rows { margin-bottom: 0.6rem; }
+.removed-rows > summary { cursor: pointer; font-weight: 600; color: var(--ink-soft); font-size: 0.92rem; padding: 0.2rem 0; }
+.removed-rows[open] > summary { margin-bottom: 0.4rem; }
+.phi-mode-row { border-bottom: 1px dashed var(--line); padding-bottom: 0.5rem; margin-bottom: 0.5rem; }
