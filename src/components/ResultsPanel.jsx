@@ -3,6 +3,7 @@ import DataTable from "./DataTable.jsx";
 import RstudioGuide from "./RstudioGuide.jsx";
 import { downloadRowsAsXlsx, downloadRowsAsCsv, downloadText } from "../logic/workbook.js";
 import { copyTableForWord } from "../logic/offline/tableHtml.js";
+import { exportResultToWord } from "../logic/export/exportDocx.js";
 import { nextTabIndex } from "../logic/a11y/tabsKeyboard.js";
 
 export function CopyButton({ text, label = "Copy" }) {
@@ -42,6 +43,33 @@ function CopyTableButton({ rows }) {
         Copy table for Word
       </button>
       {note && <span className="dim" role="status">{note}</span>}
+    </>
+  );
+}
+
+// P5-4: "Send to Word" downloads a real .docx — one journal-style table
+// (three horizontal rules, no vertical lines), same row-level data as
+// the on-screen table / Excel / CSV. Covers "Table 1 -> manuscript
+// directly."
+function SendToWordButton({ rows, title, note }) {
+  const [note_, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  return (
+    <>
+      <button
+        className="btn btn-ghost"
+        disabled={rows.length === 0 || busy}
+        onClick={async () => {
+          setBusy(true);
+          const res = await exportResultToWord({ title, note, rows, fileName: title });
+          setBusy(false);
+          setNote(res.message);
+          if (res.ok) setTimeout(() => setNote(""), 2500);
+        }}
+      >
+        {busy ? "Building…" : "Send to Word"}
+      </button>
+      {note_ && <span className="dim" role="status">{note_}</span>}
     </>
   );
 }
@@ -160,6 +188,7 @@ export default function ResultsPanel({ plan, rows }) {
               Download CSV
             </button>
             <CopyTableButton rows={rows} />
+            <SendToWordButton rows={rows} title={plan.looked_for || "TidyTable result"} note={plan.summary} />
           </div>
           {rows.length === 0 ? (
             <p className="hint">No rows matched. Read "What the AI did" above — it may explain why.</p>
