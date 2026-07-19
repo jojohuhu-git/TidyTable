@@ -191,6 +191,36 @@ resolved to — glance at them to verify the app read you correctly. "Other
 options" lists the sensible alternative layouts; the recommendation states its
 reason.
 
+**Build a surefire plan (shipped 2026-07-19, parked item 7).** For a request
+too specific for one sentence to reliably parse — "UTI treatment durations
+for levofloxacin ranked by prescriber" — open this collapsible panel under
+Step 9 instead of typing it. Four slots, each editable by hand:
+- **Rows kept** — add one or more `column = value` conditions (equality
+  only); "+ Add condition (AND)" ANDs conditions within a group, "+ Add
+  another group (OR)" ORs a whole second group in — e.g. `(Drug=cephalexin
+  AND Diagnosis=cystitis) OR (Drug=amoxicillin AND Diagnosis=UTI)`. A live
+  "N rows match" line updates as you build it.
+- **Measure** — count, total, average, or **median** (new) of a numeric
+  column.
+- **Grouped by** — one or two columns. Two columns now supports a real
+  measure too, not just a count — "average Duration_days by Ward and
+  Diagnosis" is exactly the case this unlocks. A per-group n list shows
+  before you run it, so a ranking built on a tiny group (n=1 or 2)
+  announces itself rather than looking as solid as the rest.
+- **Sorted** — becomes part of the plan itself (saved into the Excel and R
+  output too), not a separate after-the-fact toggle.
+
+A plain-English summary line above Run states exactly what will execute —
+built only from real column names and real values, never invented wording.
+Typing a request in the box above first pre-fills whatever the parser
+confidently resolved (including every condition of a multi-condition cohort
+the quick-chart box itself declines to auto-draw) — anything it isn't sure
+of is left blank for you to fill by hand, never guessed. Running a plan
+drives all three output surfaces: the in-app chart, the numbered Excel
+steps (including the one-array-formula-per-group recipe for a median, since
+Excel has no built-in median-per-group function), and a new "Check it in R"
+script alongside them.
+
 **Getting a chart out of the app** (below every chart):
 - **Copy chart** puts it on the clipboard — paste straight into PowerPoint or
   Word. If your browser can't, the app says so and the downloads still work.
@@ -256,13 +286,19 @@ up instead of guessing — read that report.
    ("drug mix by prescriber" with no such column) now declines by name and
    offers 2-3 clickable, already-resolved alternatives instead of guessing or
    silently drawing the wrong thing.
-3. **Three-part requests (two filters + a measure + a grouping) aren't
-   supported in one sentence** — e.g. "UTI treatment durations for
-   levofloxacin ranked by prescriber". Do it in stages: filter in Step 3 or the
-   cohort phrase, then group. A confirm-a-visible-plan builder for exactly this
-   is a parked design item (item 7).
-4. **Two-column charts always count rows** — no averages/totals across a
-   Split-by yet.
+3. **Three-part requests (two filters + a measure + a grouping) in one
+   sentence.** (Fixed 2026-07-19, parked item 7.) "UTI treatment durations
+   for levofloxacin ranked by prescriber" still won't parse as free text —
+   but Step 9's "Build a surefire plan" panel now expresses exactly this:
+   multiple AND/OR filter conditions, a measure (including median), one or
+   two group columns, and a saved sort, all confirmed before running and
+   reproduced in the chart, the Excel steps, and a new R script.
+4. **Two-column charts always count rows.** (Fixed 2026-07-19, parked item
+   7.) The plan-echo panel's "Grouped by" now supports a real average/total/
+   median measure across two columns, not just a count — the panel also
+   refuses to *stack* that measure (only grouped/side-by-side bars), since
+   stacking an average or median across subgroups isn't a real number the
+   way stacking counts is.
 5. **Duplicate CSN/MRN cleanup now has action buttons.** (Fixed 2026-07-18,
    parked item 3.) Exact-copy encounter rows remove with one tick; repeated
    MRNs offer an optional keep-one-row-per-patient with your choice of

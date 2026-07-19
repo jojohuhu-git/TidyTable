@@ -152,39 +152,48 @@ chip pattern, this becomes a small follow-on using the same component.
 materially different engine change. Deferred; previously recommended (not
 approved) to bundle with P6. Unchanged, no new brainstorm.
 
-## 7. Plan-echo builder (the "surefire accuracy" path) — DESIGN APPROVED 2026-07-18, ready to build
+## 7. Plan-echo builder (the "surefire accuracy" path) — SHIPPED 2026-07-19 (do not redo)
 
-**Design finalized, all open questions resolved.** See
-`.claude/prompts/plan-2026-07-18-item7-plan-echo-builder.md` for the full
-approved design and paste-ready build prompt — read that file, not the
-brainstormed scope below, before starting work. Key resolved decisions:
-equality-only filter conditions organized into AND-groups combined with OR
-(not free nested parens); crosstab Grouped-by now supports a real Measure
-(was count-only); Measure gains median; Sorted becomes part of the saved
-plan (not a post-hoc toggle); the plain-English summary line uses a
-generic, literal column/value template — a clinical-vocabulary
-natural-language version was proposed and explicitly rejected in favor of
-staying honest across arbitrary datasets.
+**Done, per the approved design in
+`.claude/prompts/plan-2026-07-18-item7-plan-echo-builder.md`:** a new "Build
+a surefire plan" collapsible panel under Step 9 (`ChartsPanel.jsx`). Four
+editable slots — Rows kept (equality conditions in AND-groups, combined with
+OR across groups; new `src/logic/charts/filterGroups.js`), Measure (count/
+sum/average/**median**, new in `aggregate.js`), Grouped by (one or two
+columns — crosstab now supports a real measure, not just count), Sorted
+(now part of the saved/confirmed plan, not a post-hoc toggle). A live
+matching-row count and per-group n (`previewFilterCount`/
+`previewGroupCounts`) update before running, and a generic literal
+plain-English summary line (`src/logic/charts/planSummary.js`) states
+exactly what will run — no clinical-vocabulary natural-language generator,
+per the owner's 2026-07-18 decision. Free text pre-fills the panel from
+`resolveChartRequest`'s stages, including a multi-condition cohort the
+quick-chart pipeline still honestly declines to auto-draw.
 
-**Why (owner's example, historical):** "UTI treatment durations for levofloxacin ranked by
-prescriber" = two ANDed filters (Diagnosis contains "UTI" AND Drug =
-"levofloxacin") + measure (average Duration) + group (Prescriber) + sort. Free
-text alone will never be surefire for this — parser coverage grows
-combinatorially and each new pattern adds silent-failure surface (R7 and item 4
-are both exactly that). The surefire mechanism is **never letting the parse be
-invisible**: translate the sentence into a visible, editable plan the owner
-confirms before it runs.
+**All three output surfaces**, per the owner's explicit go-ahead when asked
+during scoping: the in-app chart; the Excel-recipe steps (`excelChart.js`,
+including a `MEDIAN(IF(...))` array-formula step per group, since Excel has
+no built-in median-per-group function); and a new R script
+(`src/logic/rscripts/chartPlan.js`, a dplyr filter/group_by/summarise/
+arrange pipeline — R-script generation for charts didn't exist before this).
 
-**Brainstormed scope (owner-reviewed; big item — scoping pass + design proposal
-for approval BEFORE building):**
-- Four editable slots: Rows kept (multiple ANDed conditions), Measure, Grouped
-  by, Sorted — each a dropdown of real columns/values.
-- Show matching-row count and per-group n before running (a ranking built on
-  n=2 must announce itself).
-- Free text pre-fills the form; the confirmed form is what executes, in all
-  output surfaces.
-- This, not more parser patterns, is the intended long-term answer to
-  multi-column requests; item 4's guardrail stays as the safety net regardless.
+**Honesty guard added along the way:** `advisor.js` now refuses to
+recommend a *stacked* layout for a crosstab with a non-additive measure
+(average/median) — only grouped/side-by-side bars are offered, since
+stacking would sum values into a number that isn't real (a sum measure can
+still stack).
+
+56 new/updated tests across `aggregate.js`, `filterGroups.js`,
+`planSummary.js`, `textToChart.js`, `excelChart.js`, `chartPlan.js`,
+`advisor.js`, `chartTitle.js`, and the new panel's DOM tests. Live-verified
+in the running app against the bundled example data: AND-group and OR-group
+filtering, grouped median (hand-checked against the raw values), crosstab +
+median (the headline previously-impossible combination), the Excel and R
+output surfaces. Two bugs were caught only by live-verification (not the
+automated suite) and fixed: `buildChartTitle` read the old single-condition
+filter shape and printed "undefined only" for a plan-echo filter; the
+"nothing to average" honesty note said "average" even when the measure was
+median.
 
 ## Also still queued from the spec (unchanged, not "parked")
 
