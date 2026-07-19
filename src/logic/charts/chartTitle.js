@@ -58,5 +58,16 @@ export function buildCohortCaption(dataset, filter) {
   if (!filter) return "";
   const n = datasetN(dataset);
   const nPart = n != null ? `, n=${n}` : "";
+  // Item 7: a plan-echo confirmed plan's filter can carry more than one
+  // AND-group (OR'd together) instead of the single {column,value} shape
+  // every other caller of this function still uses.
+  if (filter.groups) {
+    const real = filter.groups.filter((g) => g.length > 0);
+    if (!real.length) return "";
+    const groupText = real
+      .map((g) => g.map((c) => `"${c.column}" is "${c.value}"`).join(" and "))
+      .join(", or ");
+    return `Only counting rows where ${groupText}${nPart}.`;
+  }
   return `Only counting rows where "${filter.column}" is "${filter.value}"${nPart}.`;
 }

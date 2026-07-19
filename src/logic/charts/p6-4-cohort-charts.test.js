@@ -110,3 +110,25 @@ describe("P6-4 — buildChartTitle / buildCohortCaption stay unchanged when ther
     expect(buildCohortCaption(ds, null)).toBe("");
   });
 });
+
+describe("Item 7 — buildCohortCaption widened to a plan-echo filter-group structure", () => {
+  it("describes a single AND-group", () => {
+    const ds = { kind: "categorical", points: [{ label: "A", value: 4 }], countTotal: 4 };
+    const filter = { groups: [[{ column: "Drug", value: "cephalexin" }, { column: "Diagnosis", value: "cystitis" }]] };
+    expect(buildCohortCaption(ds, filter)).toBe('Only counting rows where "Drug" is "cephalexin" and "Diagnosis" is "cystitis", n=4.');
+  });
+
+  it("joins multiple OR-groups with 'or'", () => {
+    const ds = { kind: "categorical", points: [] };
+    const filter = { groups: [
+      [{ column: "Drug", value: "cephalexin" }],
+      [{ column: "Drug", value: "amoxicillin" }],
+    ] };
+    expect(buildCohortCaption(ds, filter)).toBe('Only counting rows where "Drug" is "cephalexin", or "Drug" is "amoxicillin".');
+  });
+
+  it("returns empty string for a filter with no real groups", () => {
+    const ds = { kind: "categorical", points: [] };
+    expect(buildCohortCaption(ds, { groups: [[]] })).toBe("");
+  });
+});

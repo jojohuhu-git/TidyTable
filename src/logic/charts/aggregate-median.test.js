@@ -81,3 +81,27 @@ describe("item 7: median measure", () => {
     expect(a.total).toBe(14);
   });
 });
+
+describe("item 7: crosstab measure can't dishonestly stack", () => {
+  it("only offers a grouped layout (never stacked/100%-stacked) for an average measure", async () => {
+    const { recommendChart } = await import("./advisor.js");
+    const rows = [
+      { Ward: "A", Drug: "X", Duration: 4 }, { Ward: "A", Drug: "Y", Duration: 10 },
+      { Ward: "B", Drug: "X", Duration: 2 },
+    ];
+    const ds = buildCrosstabDataset(sheet(rows), "Ward", "Drug", { valueCol: "Duration", aggMode: "average" });
+    const rec = recommendChart(ds, { requestedLayout: "stacked" });
+    expect(rec.layout).toBe("grouped");
+    expect(rec.alternatives).toEqual([]);
+  });
+
+  it("a sum measure can still stack (a sum of sums is a real total)", async () => {
+    const { recommendChart } = await import("./advisor.js");
+    const rows = [
+      { Ward: "A", Drug: "X", Duration: 4 }, { Ward: "A", Drug: "Y", Duration: 10 },
+    ];
+    const ds = buildCrosstabDataset(sheet(rows), "Ward", "Drug", { valueCol: "Duration", aggMode: "sum" });
+    const rec = recommendChart(ds, { requestedLayout: "stacked" });
+    expect(rec.layout).toBe("stacked");
+  });
+});

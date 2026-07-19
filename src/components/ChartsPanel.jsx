@@ -7,7 +7,9 @@ import { buildChartTitle, buildCohortCaption, buildFigureCaption } from "../logi
 import { downloadChartPng } from "../logic/charts/downloadChartPng.js";
 import { copyChartPng, downloadChartSvg } from "../logic/charts/exportChart.js";
 import { EXPORT_PRESETS, computePresetExport } from "../logic/charts/exportPresets.js";
-import { resolveChartRequest } from "../logic/charts/textToChart.js";
+import { resolveChartRequest, stagesToFilterGroup } from "../logic/charts/textToChart.js";
+import { previewFilterCount, previewGroupCounts } from "../logic/charts/filterGroups.js";
+import { summarizePlan } from "../logic/charts/planSummary.js";
 import { isQualitative } from "../logic/charts/palette.js";
 import { buildChartExamplePrompts, buildCrosstabExamplePrompts } from "../logic/offline/examplePrompts.js";
 import ChartPreview from "./ChartPreview.jsx";
@@ -62,6 +64,19 @@ export default function ChartsPanel({ sheet, seed }) {
   const [figFootnote, setFigFootnote] = useState(""); // P5-3: footnote drawn on the chart itself
   const [grayscale, setGrayscale] = useState(false); // P5-3: print-safe single-hue palette
   const svgRef = useRef(null);
+
+  // Item 7 (plan-echo builder): a separate draft/confirm layer, not a
+  // replacement for the pickers above — the picker state above still drives
+  // baseDataset exactly as before; this panel only fans its confirmed plan
+  // into that same state on Run (see runConfirmedPlan), the same way
+  // free-text applyPlan already does.
+  const [planOpen, setPlanOpen] = useState(false);
+  const [planFilterGroups, setPlanFilterGroups] = useState([[]]); // AND-within-group, OR-across-groups; [[]] = no filter
+  const [planMeasureCol, setPlanMeasureCol] = useState("");
+  const [planAggMode, setPlanAggMode] = useState("count"); // "count" | "sum" | "average" | "median"
+  const [planGroupCols, setPlanGroupCols] = useState([]); // 0, 1, or 2 column names
+  const [planSortChoice, setPlanSortChoice] = useState(""); // "" | "label-asc" | "value-desc"
+  const [confirmedPlan, setConfirmedPlan] = useState(null); // the un-flattened plan object, for the Excel/R generators
 
   // Apply a resolved (or confirmed) plan to the pickers below, so the dropdowns
   // always reflect what the text meant and the user learns the mapping.
@@ -156,6 +171,11 @@ export default function ChartsPanel({ sheet, seed }) {
       // already-resolved alternatives — offer them as clickable chips rather
       // than leaving the owner to guess the real column name.
       if (res.alternatives?.length) setDeclineAlternatives(res.alternatives);
+      // Item 7: a cohort the quick-chart pipeline declines as too complex
+      // (more than one condition) is exactly what the plan-echo panel CAN
+      // express — pre-fill it from the same stages and open it, instead of
+      // the request just being lost to a decline message.
+      if (res.reason === "complex-filter" && res.stages?.length) prefillPlanFromResolved(res, { open: true });
       return;
     }
     if (res.confidence === "stretched") {
@@ -164,6 +184,129 @@ export default function ChartsPanel({ sheet, seed }) {
     }
     applyPlan(res);
     if (res.ignored) setTextNote(`Charting ${res.lookedFor} I couldn't place "${res.ignored}", so it was left out — add it with the pickers below if it matters.`);
+    // Item 7: quietly keep the plan-echo panel in sync too (not force-opened
+    // — the quick chart already drew), so it's ready to edit/confirm if the
+    // owner opens it.
+    if (res.stages) prefillPlanFromResolved(res, { open: false });
+  }
+
+  // Item 7: turn a resolved (or too-complex-to-quick-chart) free-text result
+  // into the plan-echo panel's draft state. Anything the parser can't
+  // confidently place is left empty for the owner to fill by hand — never
+  // guessed (stagesToFilterGroup already drops non-equality stages; a
+  // crosstab/histogram/no-groupColumn result simply leaves the matching slot
+  // untouched below).
+  function prefillPlanFromResolved(res, { open } = {}) {
+    setPlanFilterGroups(stagesToFilterGroup(res.stages || []));
+    if (res.valueCol && (res.aggMode === "sum" || res.aggMode === "average")) {
+      setPlanMeasureCol(res.valueCol);
+      setPlanAggMode(res.aggMode);
+    } else {
+      setPlanMeasureCol("");
+      setPlanAggMode("count");
+    }
+    const cols = [];
+    if (res.labelCol) cols.push(res.labelCol);
+    if (res.subgroupCol) cols.push(res.subgroupCol);
+    setPlanGroupCols(cols);
+    setPlanSortChoice("");
+    setConfirmedPlan(null);
+    if (open) setPlanOpen(true);
+  }
+
+  // Item 7: fold the draft picker state above into the one plan object
+  // summarizePlan/the Run action/the Excel+R generators all read.
+  const draftPlan = useMemo(() => ({
+    filterGroups: planFilterGroups,
+    measure: { col: planMeasureCol || null, aggMode: planAggMode },
+    groupCols: planGroupCols,
+    sort: planSortChoice ? {
+      by: planSortChoice.startsWith("label") ? (planGroupCols[0] || "") : (planMeasureCol || (planAggMode === "count" ? "count" : planAggMode)),
+      direction: planSortChoice.endsWith("asc") ? "asc" : "desc",
+    } : null,
+  }), [planFilterGroups, planMeasureCol, planAggMode, planGroupCols, planSortChoice]);
+
+  const planSummaryLine = useMemo(() => summarizePlan(draftPlan), [draftPlan]);
+  const planMatchCount = useMemo(() => previewFilterCount(sheet, planFilterGroups), [sheet, planFilterGroups]);
+  const planGroupPreview = useMemo(
+    () => (planGroupCols.length ? previewGroupCounts(sheet, planFilterGroups, planGroupCols) : []),
+    [sheet, planFilterGroups, planGroupCols],
+  );
+
+  function updateCondition(gi, ci, patch) {
+    setPlanFilterGroups((groups) => groups.map((g, i) => (i !== gi ? g : g.map((c, j) => (j !== ci ? c : { ...c, ...patch })))));
+  }
+  function addCondition(gi) {
+    setPlanFilterGroups((groups) => groups.map((g, i) => (i !== gi ? g : [...g, { column: "", value: "" }])));
+  }
+  function removeCondition(gi, ci) {
+    setPlanFilterGroups((groups) => groups.map((g, i) => (i !== gi ? g : g.filter((_, j) => j !== ci))));
+  }
+  function addGroup() {
+    setPlanFilterGroups((groups) => [...groups, []]);
+  }
+  function removeGroup(gi) {
+    setPlanFilterGroups((groups) => (groups.length <= 1 ? groups : groups.filter((_, i) => i !== gi)));
+  }
+  function distinctValuesFor(col) {
+    if (!col) return [];
+    const seen = new Set();
+    const out = [];
+    for (const r of sheet.rows) {
+      const v = r[col];
+      if (v == null || String(v).trim() === "") continue;
+      const s = String(v);
+      if (!seen.has(s)) { seen.add(s); out.push(s); }
+    }
+    return out.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  }
+  function setGroupCol1(v) {
+    setPlanGroupCols((cols) => {
+      if (!v) return [];
+      return cols[1] && cols[1] !== v ? [v, cols[1]] : [v];
+    });
+  }
+  function setGroupCol2(v) {
+    setPlanGroupCols((cols) => (v ? [cols[0], v] : cols[0] ? [cols[0]] : []));
+  }
+
+  // Item 7 Run: the confirmed plan drives the SAME picker state/dispatch
+  // baseDataset already uses (see below) — filter.groups is understood by
+  // aggregate.js's applyFilter automatically. Also keeps the un-flattened
+  // plan object (confirmedPlan) for the Excel/R generators, since the OR-
+  // group structure and the sort spec are lossy once flattened into the
+  // legacy single-filter/sortMode shape.
+  function runConfirmedPlan() {
+    const groupsReal = planFilterGroups.filter((g) => g.length > 0);
+    setConfirmedPlan(draftPlan);
+    setLabelCol(planGroupCols[0] || "");
+    setSubgroupCol(planGroupCols[1] || "");
+    setLayoutHint(planGroupCols[1] ? "grouped" : null);
+    setValueCol(planMeasureCol || "");
+    setAggMode(planAggMode);
+    setDistMode(null);
+    setFilter(groupsReal.length ? { groups: planFilterGroups } : null);
+    setDeclineAlternatives([]);
+    setChosen(null);
+    setGroupOther(false);
+    setChartRank(null);
+    // Item 7: sort is now part of the saved/confirmed plan, not a separate
+    // post-hoc toggle — reuses the existing sortMode/sortDataset machinery
+    // (only "alpha"/"value" exist today) rather than building a second sort
+    // implementation; a crosstab (2 group columns) doesn't reorder visually
+    // yet (sortDataset only handles the categorical shape) but the sort is
+    // still saved into confirmedPlan for the Excel/R surfaces.
+    setSortMode(planSortChoice === "label-asc" ? "alpha" : planSortChoice === "value-desc" ? "value" : null);
+    setTweakLog([]);
+    setHighlightLabel(null);
+    setReferenceLine(null);
+    setBucket(null);
+    setParetoOn(false);
+    setFigTitle("");
+    setFigFootnote("");
+    setText("");
+    setTextNote("");
+    setPendingConfirm(null);
   }
 
   // Phase 8.4: a "Chart this" click from a Step 3 answer seeds the request and
@@ -183,7 +326,12 @@ export default function ChartsPanel({ sheet, seed }) {
     if (!labelCol) return valueCol ? buildHistogramDataset(sheet, valueCol, { filter }) : null;
     // P6-1: a "split by" column picked (by hand or from text) makes this a
     // crosstab — always a count, never sum/average (see buildCrosstabDataset).
-    if (subgroupCol) return buildCrosstabDataset(sheet, labelCol, subgroupCol, { filter });
+    // Item 7: a crosstab can now carry a real measure (valueCol/aggMode) from
+    // a confirmed plan-echo plan instead of always counting rows — passing
+    // an empty valueCol/"count" aggMode (the quick-chart/example-chip
+    // default) is a no-op in buildCrosstabDataset, so nothing here changes
+    // for any existing count-only crosstab caller.
+    if (subgroupCol) return buildCrosstabDataset(sheet, labelCol, subgroupCol, { filter, valueCol: valueCol || null, aggMode });
     // P6-2: "see the spread instead" was chosen for this exact label/value
     // pair — box+dot needs the SAME two columns buildDataset below would use,
     // just kept as raw per-group values instead of one aggregated number.
@@ -344,6 +492,133 @@ export default function ChartsPanel({ sheet, seed }) {
           </label>
         </div>
       </details>
+
+      {/* Item 7: the plan-echo builder — "surefire accuracy" for
+          multi-condition requests a single sentence can't reliably parse.
+          Reuses the same select markup as the pickers above; the new pieces
+          are the AND/OR condition groups, the median measure option,
+          two-column grouped measures, the saved sort, and the live preview
+          + literal summary line shown before Run. */}
+      <details className="plan-echo-panel" open={planOpen} onToggle={(e) => setPlanOpen(e.target.open)}>
+        <summary>Build a surefire plan (multiple conditions, median, two-column grouping)</summary>
+
+        <div className="plan-echo-section">
+          <h4>Rows kept</h4>
+          {planFilterGroups.map((group, gi) => (
+            <div key={gi} className="plan-echo-group">
+              {group.map((cond, ci) => (
+                <div key={ci} className="plan-echo-condition">
+                  <label>
+                    Column
+                    <select
+                      value={cond.column}
+                      onChange={(e) => updateCondition(gi, ci, { column: e.target.value, value: "" })}
+                    >
+                      <option value="">choose a column…</option>
+                      {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    is
+                    <select
+                      value={cond.value}
+                      disabled={!cond.column}
+                      onChange={(e) => updateCondition(gi, ci, { value: e.target.value })}
+                    >
+                      <option value="">choose a value…</option>
+                      {distinctValuesFor(cond.column).map((v) => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                  </label>
+                  <button type="button" className="btn btn-ghost" onClick={() => removeCondition(gi, ci)}>
+                    Remove condition
+                  </button>
+                </div>
+              ))}
+              <button type="button" className="btn btn-ghost" onClick={() => addCondition(gi)}>
+                + Add condition (AND)
+              </button>
+              {planFilterGroups.length > 1 && (
+                <button type="button" className="btn btn-ghost" onClick={() => removeGroup(gi)}>
+                  Remove this group
+                </button>
+              )}
+              {gi < planFilterGroups.length - 1 && <p className="dim plan-echo-or">— or —</p>}
+            </div>
+          ))}
+          <button type="button" className="btn btn-ghost" onClick={addGroup}>
+            + Add another group (OR)
+          </button>
+          <p className="hint">{planMatchCount} row{planMatchCount === 1 ? "" : "s"} match.</p>
+        </div>
+
+        <div className="plan-echo-section">
+          <label>
+            Measure
+            <select
+              value={
+                planAggMode === "count" ? ""
+                  : planAggMode === "average" ? `avg::${planMeasureCol}`
+                    : planAggMode === "median" ? `median::${planMeasureCol}`
+                      : planMeasureCol
+              }
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v.startsWith("avg::")) { setPlanMeasureCol(v.slice(5)); setPlanAggMode("average"); }
+                else if (v.startsWith("median::")) { setPlanMeasureCol(v.slice(8)); setPlanAggMode("median"); }
+                else if (v) { setPlanMeasureCol(v); setPlanAggMode("sum"); }
+                else { setPlanMeasureCol(""); setPlanAggMode("count"); }
+              }}
+            >
+              <option value="">how many of each (count)</option>
+              {numericColumns.map((c) => <option key={`p-sum-${c}`} value={c}>total {c}</option>)}
+              {numericColumns.map((c) => <option key={`p-avg-${c}`} value={`avg::${c}`}>average {c}</option>)}
+              {numericColumns.map((c) => <option key={`p-median-${c}`} value={`median::${c}`}>median {c}</option>)}
+            </select>
+          </label>
+        </div>
+
+        <div className="plan-echo-section">
+          <label>
+            Grouped by
+            <select value={planGroupCols[0] || ""} onChange={(e) => setGroupCol1(e.target.value)}>
+              <option value="">choose a column…</option>
+              {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+          <label>
+            and (optional second column — a real measure now works here too)
+            <select value={planGroupCols[1] || ""} disabled={!planGroupCols[0]} onChange={(e) => setGroupCol2(e.target.value)}>
+              <option value="">none — one column</option>
+              {columns.filter((c) => c !== planGroupCols[0]).map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+          {planGroupCols.length > 0 && planGroupPreview.length > 0 && (
+            <ul className="plan-echo-preview-list">
+              {planGroupPreview.map((g) => <li key={g.label}>{g.label}: n={g.n}</li>)}
+            </ul>
+          )}
+        </div>
+
+        <div className="plan-echo-section">
+          <label>
+            Sorted
+            <select value={planSortChoice} onChange={(e) => setPlanSortChoice(e.target.value)}>
+              <option value="">app default (largest first)</option>
+              <option value="label-asc">Group label (A→Z)</option>
+              <option value="value-desc">Measure value (largest→smallest)</option>
+            </select>
+          </label>
+          {planGroupCols.length === 2 && planSortChoice && (
+            <p className="hint">A two-column grouping doesn't reorder the in-app table yet, but this sort is still saved into the Excel/R output.</p>
+          )}
+        </div>
+
+        <p className="plan-echo-summary">{planSummaryLine}</p>
+        <button type="button" className="btn btn-primary" onClick={runConfirmedPlan}>
+          Run
+        </button>
+      </details>
+
       {filter && (
         <p className="hint">{buildCohortCaption(dataset, filter)} Clear the label picker to remove this.</p>
       )}

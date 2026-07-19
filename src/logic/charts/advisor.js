@@ -32,7 +32,14 @@ function recommendCrosstabLayout(dataset, opts) {
   if (!dataset.categories || dataset.categories.length === 0) {
     return { type: "none", reason: "There is nothing to chart yet." };
   }
-  const explicitLayout = CROSSTAB_LAYOUTS.includes(opts.requestedLayout);
+  // Item 7: a crosstab with a real average/median measure can't honestly
+  // stack — stacking sums the subgroup bars into one tall bar, and summing
+  // averages/medians across subgroups isn't a meaningful number (unlike
+  // stacking counts, where the sum is a real total). Only "grouped" (bars
+  // side by side, never combined) stays offered; a "sum" measure CAN stack
+  // (a sum of sums is still a real total), same as a plain count.
+  const nonAdditive = dataset.valueName && !dataset.valueName.startsWith("sum ");
+  const explicitLayout = !nonAdditive && CROSSTAB_LAYOUTS.includes(opts.requestedLayout);
   const layout = explicitLayout ? opts.requestedLayout : "grouped";
   const label = `"${dataset.labelName}"`;
   const sub = `"${dataset.subgroupName}"`;
@@ -59,7 +66,7 @@ function recommendCrosstabLayout(dataset, opts) {
     stacked: `Stacked bar chart because this asks what makes up each ${label} — the ${sub} counts stack into one bar per category.`,
     stacked100: `100% stacked bar chart because this asks for the share or mix of ${sub} within each ${label} — bars scale to 100% so you compare proportions, not raw counts.`,
   }[layout];
-  const alternatives = CROSSTAB_LAYOUTS
+  const alternatives = nonAdditive ? [] : CROSSTAB_LAYOUTS
     .filter((l) => l !== layout)
     .map((l) => ({ type: "bar", layout: l, reason: `${CROSSTAB_LAYOUT_NAME[l]} instead.` }));
   if (crowded) {
@@ -68,7 +75,9 @@ function recommendCrosstabLayout(dataset, opts) {
   return {
     type: "bar",
     layout,
-    reason,
+    reason: nonAdditive
+      ? `Grouped bar chart because you're comparing ${dataset.valueName} across ${label} and ${sub} — bars are shown side by side, never stacked, since stacking would sum ${dataset.valueName} into a number that isn't real.`
+      : reason,
     alternatives,
     legend: true,
     ...(dataset.otherGrouped ? { otherGroupedNote: `The smallest ${dataset.otherGrouped} ${dataset.subgroupName} values are folded into "Other" so the legend stays readable.` } : {}),
