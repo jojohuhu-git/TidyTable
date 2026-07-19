@@ -1,5 +1,10 @@
 # TidyTable — Handoff after P4-3 (picklist vocabularies) + parked item 4 (2026-07-18)
 
+> **SUPERSEDED** by
+> [handoff-2026-07-18-parked3-csn-mrn-phi-done.md](handoff-2026-07-18-parked3-csn-mrn-phi-done.md)
+> — parked item 3 (the "NEXT" item below) shipped later the same day at
+> commit `a236572` (1098 tests). Resume from that file, not this one.
+
 > **SUPERSEDES** [handoff-2026-07-17-p5-zero-dep-exports-done.md](handoff-2026-07-17-p5-zero-dep-exports-done.md)
 > — the owner pulled P4-3 forward ahead of P5-4/P5-5 (explicit instruction
 > 2026-07-18: "start with P4-3, then the parked list"), so the spec order in
