@@ -1,5 +1,9 @@
 # TidyTable — Handoff after parked item 3 (CSN/MRN duplicates + PHI mode) (2026-07-18)
 
+> **SUPERSEDED** by
+> [handoff-2026-07-18-parked1-crosstab-cohort-done.md](handoff-2026-07-18-parked1-crosstab-cohort-done.md).
+> Read that one instead — it has the current baseline and next item.
+
 > **SUPERSEDES** [handoff-2026-07-18-p4-3-and-parked4-done.md](handoff-2026-07-18-p4-3-and-parked4-done.md).
 > The canonical parked-items list is still
 > `.claude/prompts/parked-2026-07-17-brainstormed-queue.md` (item 3 marked
