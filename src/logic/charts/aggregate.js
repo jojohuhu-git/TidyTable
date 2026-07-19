@@ -6,6 +6,7 @@
 
 import { foldKey } from "../checkup/normalizers.js";
 import { toNumber, topNWithTies, computeNumericStats } from "../offline/cohort.js";
+import { applyFilterGroups } from "./filterGroups.js";
 
 const MONTHS = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i;
 const MONTH_INDEX = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
@@ -122,8 +123,16 @@ const num = (v) => {
 // scoped-down "escherichia coli by ward" reading of a free-text chart request
 // (see textToChart.js). foldKey-matched, same as everywhere else values are
 // compared loosely by spelling/case/spacing.
+//
+// Item 7: `filter` is now a discriminated union — the plain {column,value}
+// shape above (still used by free text and the manual pickers, unchanged),
+// or { groups: [[{column,value},...],...] } from a confirmed plan-echo plan
+// (AND-within-group, OR-across-groups — see filterGroups.js). Every caller
+// of applyFilter picks this up automatically, no separate dispatch needed
+// per builder.
 function applyFilter(rows, filter) {
   if (!filter) return rows;
+  if (filter.groups) return applyFilterGroups(rows, filter.groups);
   const want = foldKey(filter.value);
   return rows.filter((r) => r[filter.column] != null && foldKey(r[filter.column]) === want);
 }
