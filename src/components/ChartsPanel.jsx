@@ -5,7 +5,8 @@ import { recommendChart } from "../logic/charts/advisor.js";
 import { excelChartSteps } from "../logic/charts/excelChart.js";
 import { buildChartTitle, buildCohortCaption, buildFigureCaption } from "../logic/charts/chartTitle.js";
 import { downloadChartPng } from "../logic/charts/downloadChartPng.js";
-import { copyChartPng, downloadChartSvg } from "../logic/charts/exportChart.js";
+import { copyChartPng, downloadChartSvg, svgToPngBlob } from "../logic/charts/exportChart.js";
+import { exportChartToPptx } from "../logic/export/exportPptx.js";
 import { EXPORT_PRESETS, computePresetExport } from "../logic/charts/exportPresets.js";
 import { resolveChartRequest, stagesToFilterGroup } from "../logic/charts/textToChart.js";
 import { previewFilterCount, previewGroupCounts } from "../logic/charts/filterGroups.js";
@@ -60,6 +61,7 @@ export default function ChartsPanel({ sheet, seed }) {
   const [bucket, setBucket] = useState(null); // P4-2: "month" | "quarter" | null — trend-request grouping
   const [paretoOn, setParetoOn] = useState(false); // P6-3: "add cumulative % line" — off by default
   const [exportNote, setExportNote] = useState(""); // P5-1: honest result of the last copy/download action
+  const [pptxBusy, setPptxBusy] = useState(false); // P5-4: "Send to PowerPoint" in flight
   const [exportPreset, setExportPreset] = useState("slide"); // P5-2: what the PNG download is sized for
   const [posterInches, setPosterInches] = useState(8); // P5-2: poster width, in inches
   const [figTitle, setFigTitle] = useState(""); // P5-3: editable figure title (empty = the automatic one)
@@ -863,6 +865,23 @@ export default function ChartsPanel({ sheet, seed }) {
                     onClick={() => downloadChartSvg(svgRef.current, `${chartFileBase(effectiveTitle)}.svg`)}
                   >
                     Download SVG (scales to any size)
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    disabled={pptxBusy}
+                    onClick={async () => {
+                      setPptxBusy(true);
+                      const pngBlob = await svgToPngBlob(svgRef.current, 2);
+                      const res = await exportChartToPptx({
+                        pngBlob, title: effectiveTitle, footnote: figureCaption,
+                        fileName: chartFileBase(effectiveTitle),
+                      });
+                      setPptxBusy(false);
+                      setExportNote(res.message);
+                    }}
+                  >
+                    {pptxBusy ? "Building…" : "Send to PowerPoint"}
                   </button>
                 </div>
                 {preset?.warning && <p className="hint" role="status">{preset.warning}</p>}
