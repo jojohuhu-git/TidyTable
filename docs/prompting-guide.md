@@ -233,8 +233,19 @@ script alongside them.
   ready to copy into a manuscript figure legend.
 - **Grayscale-safe colors** switches to one dark-to-light family for journals
   that print black-and-white.
+- **Send to PowerPoint** (shipped 2026-07-19) downloads a real .pptx — one
+  16:9 slide with the figure title, the chart image, and the n= footnote if
+  you set one. Nothing leaves your browser; the file is built locally.
 - On result cards, **Copy table for Word** pastes as a real table (rows and
-  columns), not a blob of text.
+  columns), not a blob of text. **Send to Word** (shipped 2026-07-19)
+  downloads that same table as a real .docx — one journal-style table
+  (three plain horizontal rules, no vertical lines, bold header) with the
+  card's plain-English summary above it.
+- **Export all results to Word** (shipped 2026-07-19, above "Your results so
+  far") builds one Word document from every result card at once — a
+  committee report, oldest question first, a page break between each
+  table. Cards whose data got dropped after a page refresh, or that have no
+  rows, are skipped rather than shown empty.
 
 ## Step 10 — Combine and reshape
 
@@ -308,3 +319,14 @@ up instead of guessing — read that report.
    2026-01-06" all decline or ask for a definition (verified 2026-07-18).
    Workaround: filter to the date range in Excel first, or use the AI. (Date
    support was an explicitly deferred sub-item of the offline-smarts plan.)
+7. **The Word export is the row-level result table, not a real manuscript
+   "Table 1."** (P5-4, shipped 2026-07-19.) "Send to Word" and "Export all
+   results" export exactly what's on screen — the same rows as the Excel/CSV
+   download — as a clean three-rule table. A true baseline-characteristics
+   table (one row per variable, n (%) for categories, mean (SD) for numbers,
+   aggregated across the whole dataset) is a different, unbuilt feature —
+   ask if you need that. Also, "Export all results" only exists for Word;
+   there's no PowerPoint deck of every result yet (each chart still has to
+   be sent individually via "Send to PowerPoint") — deferred by the owner
+   2026-07-19 pending a chart-rendering engine that can build a chart for a
+   card that was never drawn on screen.

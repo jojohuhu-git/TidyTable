@@ -195,15 +195,55 @@ filter shape and printed "undefined only" for a plan-echo filter; the
 "nothing to average" honesty note said "average" even when the measure was
 median.
 
+## P5-4. Office exports — SHIPPED 2026-07-19, PARTIAL (do not redo the parts below)
+
+**Done:** docx-first per the spec's execution order. "Send to Word" on a
+result card downloads a real .docx — one journal-style table (three plain
+horizontal rules, no vertical lines, bold header; `src/logic/export/
+docxTable.js`) built from the exact row-level data already on screen (same
+rows as the Excel/CSV download) — NOT an aggregated mean(SD)/n(%)-per-
+variable "Table 1"; the owner decided 2026-07-19 to ship the row-level table
+now and treat a real aggregated Table 1 as a separate, unscoped future item.
+This also delivers P4-5 (the committee report): "Export all results to
+Word" (above "Your results so far" in App.jsx) builds one Word doc from
+every result card, oldest first, a page break between tables
+(`buildReportChildren` in `src/logic/export/exportDocx.js`); a compound
+"and" question expands into one section per part. "Send to PowerPoint" on a
+chart (`src/logic/export/exportPptx.js`, wired into ChartsPanel.jsx) builds
+a real .pptx — one 16:9 slide with title, the chart image (reuses P5-1's
+`svgToPngBlob` raster pipeline), and the n= footnote. `docx` and
+`pptxgenjs` are both dynamically imported only inside their export
+functions, never at a module's top level, so neither enters the main
+bundle until an export actually runs. 27 new/updated tests across
+`docxTable.js`, `exportDocx.js`, `exportPptx.js`, `ResultsPanel.jsx`, and
+`App.jsx`; every OOXML/pptx assertion inspects the real generated zip via
+JSZip rather than trusting the JS builder's object shape. Live-verified in
+the running app: a Send-to-Word download, a two-table Export-all-results
+report, and a Send-to-PowerPoint download all produced real files with the
+correct MIME types and no console errors.
+
+**Deferred by the owner 2026-07-19, do NOT build without asking again:**
+- An **aggregated summary-statistics "Table 1"** (one row per variable,
+  n (%) for categorical columns, mean (SD) for continuous ones, computed
+  across the whole dataset) — a materially different, unbuilt aggregation
+  feature, not a export-format tweak.
+- An **"Export all results" PowerPoint deck** (one slide per result card).
+  Unlike the Word committee report, a result card has no rendered chart to
+  put on a slide — only Step 9 renders one chart at a time. Building this
+  needs a new off-screen chart-rendering pipeline (resolve each card's data
+  into a dataset, draw it, rasterize it) that doesn't exist today; the
+  owner chose to skip it rather than scope that engine as a P5-4 side
+  effect. Ask before starting it.
+
 ## Also still queued from the spec (unchanged, not "parked")
 
-P5-4 (.docx/.pptx Office exports), P5-5 (ggplot2 figure code — must cover
-crosstab, distribution, Pareto, and small-multiples types when it lands).
-Shipped since this file was written: P6-5, P5-1/P5-2/P5-3/P5-6 (2026-07-17),
-P4-3 validation-list vocabularies (2026-07-18, owner pulled it forward),
-item 4 (2026-07-18), item 3 CSN/MRN + PHI mode (2026-07-18), item 1 crosstab
-cohort + partial-parse + chips (2026-07-18). Owner's recorded order for what
-remains: **item 7 (scoping only)**, then the spec's P5-4/P5-5.
+P5-5 (ggplot2 figure code — must cover crosstab, distribution, Pareto, and
+small-multiples types when it lands). Shipped since this file was written:
+P6-5, P5-1/P5-2/P5-3/P5-6 (2026-07-17), P4-3 validation-list vocabularies
+(2026-07-18, owner pulled it forward), item 4 (2026-07-18), item 3 CSN/MRN
++ PHI mode (2026-07-18), item 1 crosstab cohort + partial-parse + chips
+(2026-07-18), item 7 (2026-07-19), P5-4 partial (2026-07-19, see above).
+Owner's recorded order for what remains: **P5-5**.
 
 ---
 
