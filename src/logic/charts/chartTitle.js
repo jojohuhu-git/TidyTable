@@ -20,7 +20,21 @@ function baseChartTitle(dataset) {
 export function buildChartTitle(dataset) {
   if (!dataset) return "";
   const base = baseChartTitle(dataset);
-  return dataset.filter ? `${base} — ${dataset.filter.value} only` : base;
+  const f = dataset.filter;
+  if (!f) return base;
+  // Item 7: a plan-echo filter can be a group structure instead of the old
+  // single {column,value} shape. A single AND-group with one condition
+  // reads exactly like the old title ("X only"); anything with more than
+  // one condition or group can't be squeezed into that phrase honestly, so
+  // it says "filtered" rather than picking one value and implying the rest
+  // don't matter (or, before this fix, printing "undefined only").
+  if (f.groups) {
+    const real = f.groups.filter((g) => g.length > 0);
+    if (!real.length) return base;
+    if (real.length === 1 && real[0].length === 1) return `${base} — ${real[0][0].value} only`;
+    return `${base} — filtered`;
+  }
+  return `${base} — ${f.value} only`;
 }
 
 // P6-4: the honest row count behind a cohort-filtered chart — "n" in the

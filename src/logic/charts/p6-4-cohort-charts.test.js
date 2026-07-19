@@ -132,3 +132,23 @@ describe("Item 7 — buildCohortCaption widened to a plan-echo filter-group stru
     expect(buildCohortCaption(ds, { groups: [[]] })).toBe("");
   });
 });
+
+describe("Item 7 (live-verification catch) — buildChartTitle handles a plan-echo filter-group structure", () => {
+  it("a single AND-group with one condition reads exactly like the old single-filter title", () => {
+    const ds = { kind: "distribution", shape: "histogram", valueName: "Duration_days", filter: { groups: [[{ column: "Drug", value: "cephalexin" }]] } };
+    expect(buildChartTitle(ds)).toBe("Distribution of Duration_days — cephalexin only");
+  });
+
+  it("a multi-condition or multi-group filter says 'filtered' instead of inventing a value (regression: this used to print 'undefined only')", () => {
+    const ds1 = { kind: "distribution", shape: "histogram", valueName: "Duration_days", filter: { groups: [[{ column: "Drug", value: "cephalexin" }, { column: "Diagnosis", value: "cystitis" }]] } };
+    expect(buildChartTitle(ds1)).toBe("Distribution of Duration_days — filtered");
+
+    const ds2 = { kind: "distribution", shape: "histogram", valueName: "Duration_days", filter: { groups: [[{ column: "Drug", value: "cephalexin" }], [{ column: "Drug", value: "amoxicillin" }]] } };
+    expect(buildChartTitle(ds2)).toBe("Distribution of Duration_days — filtered");
+  });
+
+  it("a filter with no real groups is the same as no filter", () => {
+    const ds = { kind: "distribution", shape: "histogram", valueName: "Duration_days", filter: { groups: [[]] } };
+    expect(buildChartTitle(ds)).toBe("Distribution of Duration_days");
+  });
+});
