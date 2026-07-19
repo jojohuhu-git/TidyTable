@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "latest",
+    "docx": "^9.7.1",
+    "pptxgenjs": "^4.0.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "xlsx": "^0.18.5"
@@ -22,6 +24,7 @@
     "@testing-library/react": "^16.3.2",
     "@vitejs/plugin-react": "^4.3.4",
     "happy-dom": "^20.10.6",
+    "jszip": "^3.10.1",
     "vite": "^5.4.11",
     "vitest": "^4.1.9"
   }
